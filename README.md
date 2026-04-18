@@ -87,27 +87,38 @@ Section 1 performance steers Section 2 difficulty:
 
 - **Python 3.9+** (uses `Optional[X]` rather than `X | Y` to stay 3.9-compatible)
 - **macOS** primary; Linux/Windows supported (wxPython 4.2.4)
-- **LLM access** — defaults to LLM gateway (Opus 4.7); can be
-  swapped for any OpenAI-compatible API (OpenRouter, direct Anthropic, etc.)
+- **Git LFS** — the question/vocab/lessons database (`data/gre_mock.db`) ships
+  via LFS so a fresh clone gets the full content. Install with
+  `brew install git-lfs` (macOS) or your distro's package manager, then run
+  `git lfs install` once.
+- **OpenRouter API key** — required for runtime AI features (AWA scoring,
+  per-question tutor chat, mistake coach, study plan generator). Get one at
+  [openrouter.ai/keys](https://openrouter.ai/keys); paste into Settings.
 
 ---
 
 ## Quick Start
 
 ```bash
+# Clone with the database (LFS-tracked)
+brew install git-lfs   # one-time, if you haven't
+git lfs install        # one-time
 git clone https://github.com/badalpardhi12/gre_with_ai.git
 cd gre_with_ai
+
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+
 python app.py
 ```
 
-The database (`data/gre_mock.db`) is auto-created and seeded on first run.
+On first launch, open **Settings** and paste your OpenRouter key. The default
+model is `anthropic/claude-opus-4` for high-quality tutoring; you can swap to
+any OpenRouter-supported model (Sonnet, GPT-4o, Gemini, etc.).
 
-For LLM-backed features (AWA scoring, study plans, AI tutor), configure access
-via Settings inside the app, or set environment variables (see
-[Configuration](#configuration)).
+The shipped database includes ~2,200 questions, 49 lessons + 8 strategy
+guides, and 3,007 curated vocabulary words — everything works immediately.
 
 ---
 
@@ -217,31 +228,41 @@ previously-wrong questions.
 
 ## Configuration
 
-### LLM backend
+### Runtime LLM (OpenRouter)
 
-The app defaults to LLM gateway gateway for Opus 4.7. To use a
-different backend, set environment variables before launch:
+All in-app AI features go through OpenRouter via `services/llm_service.py`:
 
-| Variable | Purpose |
-|----------|---------|
-| `ANTHROPIC_BASE_URL` | Anthropic-compatible base URL |
-| `ANTHROPIC_AUTH_TOKEN` | Bearer token (LLM gateway id-token, or Anthropic API key) |
-| `OPENROUTER_API_KEY` | Falls back to OpenRouter if LLM gateway is unavailable |
+| Feature | Where |
+|---------|-------|
+| AWA essay scoring | `services/awa_scorer.py` |
+| Per-question AI tutor (AnswerChat) | `services/mistake_coach.py` |
+| Mistake-pattern coach | `services/mistake_coach.py` |
+| AI study plan generator | `services/study_plan.py` |
+| Question explanations on demand | `services/explanation.py` |
 
-For the LLM gateway, refresh the token before each long-running script:
+Configure via the in-app **Settings** dialog (persisted to
+`data/llm_config.json`) or environment variables:
 
-```bash
-ID_TOKEN=$(/usr/local/bin/auth-helper getToken \
-  -C hvys3fcwcteqrvw3qzkvtk86viuoqv \
-  --token-type=oauth --interactivity-type=none -E prod -G pkce \
-  -o openid,dsid,accountname,profile,groups 2>/dev/null \
-  | tr -s ' \n' '\n' | tail -1)
-ANTHROPIC_BASE_URL="https://llm.gateway.example/api/anthropic" \
-ANTHROPIC_AUTH_TOKEN="$ID_TOKEN" \
-venv/bin/python <SCRIPT>
-```
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `OPENROUTER_API_KEY` | — | Your OpenRouter key |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | API base URL |
+| `LLM_MODEL` | `anthropic/claude-opus-4` | Model id |
+| `LLM_MAX_TOKENS` | `4096` | Response cap |
 
-In-app **Settings** persist runtime LLM config to `data/llm_config.json`.
+### Build-time data generation (Apple internal only)
+
+The scripts in `scripts/` that generate or curate the question bank
+(`generate_questions.py`, `generate_lessons.py`, `curate_vocab.py`,
+`enrich_vocab.py`, `fix_di_charts.py`, `reconstruct_di_charts.py`,
+`retag_questions.py`, `extract_kaplan_appendices.py`, `rate_difficulty.py`)
+use LLM gateway gateway (`services/llm_client.py`).
+These are NOT invoked from the running app — they were used once to build
+the database that ships in this repo. End users do not need LLM gateway access.
+
+If you want to regenerate or extend the bank yourself outside Apple, port
+those scripts to `services/llm_service.py` (or any OpenRouter / Anthropic
+endpoint of your choice).
 
 ---
 
@@ -251,9 +272,13 @@ In-app **Settings** persist runtime LLM config to `data/llm_config.json`.
 1. **Deterministic core** — section engine, timer, scoring, adaptive routing.
    Never depends on the LLM. The user's score is always computed from the
    answer key, never from a model output.
-2. **LLM layer** — AWA scoring, explanations, study-plan generation, the
-   tutoring chat, mistake-pattern coach. May be offline; the rest of the app
-   degrades gracefully.
+2. **Runtime LLM layer (OpenRouter)** — AWA scoring, explanations, study-plan
+   generation, AI tutor chat, mistake-pattern coach. Calls go through
+   `services/llm_service.py`. May be offline; the rest of the app degrades
+   gracefully (drills, mock tests, vocab review all work without an API key).
+3. **Build-time data generation (the LLM gateway)** — only used by scripts
+   in `scripts/` to build the shipped database. End users never invoke
+   LLM gateway; the database is committed via Git LFS.
 
 ### Data flow
 
@@ -316,14 +341,16 @@ scatter, table.
 **wxPython on Linux**: needs GTK + WebKit dev headers
 (`sudo apt install libgtk-3-dev libwebkit2gtk-4.0-dev`).
 
-**"No questions available"**: run `venv/bin/python scripts/seed_data.py` then
-the import scripts in `scripts/`.
+**Empty dashboard / "no questions"**: the database ships via Git LFS. If you
+cloned without LFS, run `git lfs install && git lfs pull` to fetch
+`data/gre_mock.db`.
 
-**AWA scoring shows N/A**: configure LLM settings in the app or set the
-environment variables above.
+**AWA scoring shows N/A / AI tutor doesn't open**: configure your OpenRouter
+key via the Settings dialog (or `OPENROUTER_API_KEY` env var).
 
-**Database reset**: `rm data/gre_mock.db*` then re-launch — the app will
-recreate and reseed.
+**Database reset**: `rm data/gre_mock.db*` then `git lfs pull` to restore the
+shipped database, or re-launch to start with an empty DB and re-import from
+the CSVs in `data/external/`.
 
 ---
 

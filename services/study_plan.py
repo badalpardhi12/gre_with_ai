@@ -1,5 +1,5 @@
 """
-AI study plan generator using Opus 4.7.
+AI study plan generator (runtime; uses OpenRouter via llm_service).
 
 Given diagnostic results + target score + test date + hours/week, produces
 a week-by-week schedule of lessons, drills, vocab review, and practice tests.
@@ -17,7 +17,7 @@ from typing import Optional
 
 from models.database import db, StudyPlan, DiagnosticResult, Question, MasteryRecord
 from models.taxonomy import get_taxonomy_summary
-from services.llm_client import get_client, MODEL_OPUS
+from services.llm_service import llm_service
 from services.mastery import weakness_ranking, get_all_mastery
 from services.srs import stats as vocab_stats
 
@@ -124,9 +124,12 @@ def generate_plan(
     hours_per_week: int,
     diagnostic: Optional[DiagnosticResult] = None,
     user_id: str = "local",
-    model: str = MODEL_OPUS,
+    model: Optional[str] = None,
 ) -> StudyPlan:
-    """Generate and persist a new personalized study plan."""
+    """Generate and persist a new personalized study plan.
+
+    Uses the configured OpenRouter model (default: Opus 4) unless overridden.
+    """
     weeks_until_test = max(1, (test_date - datetime.now()).days // 7)
     context = _build_context(diagnostic, user_id)
 
@@ -142,12 +145,11 @@ Build a {weeks_until_test}-week PERSONALIZED plan starting today.
 Heavily focus the first half of the plan on the WEAKEST subtopics from diagnostic+mastery.
 Output the JSON plan now."""
 
-    client = get_client()
-    plan_dict = client.call_anthropic_json(
-        model=model,
-        messages=[{"role": "user", "content": user_prompt}],
-        system=PLANNER_SYSTEM,
+    plan_dict = llm_service.generate_json(
+        system_prompt=PLANNER_SYSTEM,
+        user_prompt=user_prompt,
         max_tokens=8192,
+        model=model,
     )
 
     # Deactivate any existing active plans for this user

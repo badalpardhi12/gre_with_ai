@@ -88,6 +88,19 @@ class LLMSettingsDialog(wx.Dialog):
         test_sizer.Add(self.test_status, 1, wx.ALIGN_CENTER_VERTICAL)
         main_sizer.Add(test_sizer, 0, wx.ALL, 12)
 
+        # Validate question bank — runs the data-corruption audit and
+        # surfaces a counts-only summary in a modal. Power-user tool;
+        # the same script runs at install + launch already.
+        validate_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.validate_btn = wx.Button(self, label="Validate Question Bank")
+        self.validate_btn.Bind(wx.EVT_BUTTON, self._on_validate_bank)
+        validate_sizer.Add(self.validate_btn, 0, wx.RIGHT, 8)
+        validate_sizer.Add(
+            wx.StaticText(self, label="Runs the corruption audit on the live bank."),
+            1, wx.ALIGN_CENTER_VERTICAL,
+        )
+        main_sizer.Add(validate_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
+
         # OK / Cancel
         btn_sizer = self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL)
         main_sizer.Add(btn_sizer, 0, wx.EXPAND | wx.ALL, 12)
@@ -153,3 +166,45 @@ class LLMSettingsDialog(wx.Dialog):
         else:
             self.test_status.SetForegroundColour(wx.Colour(200, 0, 0))
             self.test_status.SetLabel(f"✗ {message}")
+
+    def _on_validate_bank(self, _):
+        """Run the data-corruption audit and show the result in a dialog."""
+        self.validate_btn.Disable()
+        try:
+            from scripts.audit_data_corruption import audit_database
+            corruption, report = audit_database(include_retired=False)
+            lines = [
+                f"Total live questions: {report.get('total_questions', 0)}",
+                f"  Verbal: {report.get('verbal_count', 0)}",
+                f"  Quant:  {report.get('quant_count', 0)}",
+                "",
+                "Verbal classifications:",
+            ]
+            for cat, n in sorted(report.get("verbal_classifications", {}).items()):
+                lines.append(f"  {cat}: {n}")
+            quant_issues = report.get("quant_issues", {})
+            if quant_issues:
+                lines.append("")
+                lines.append("Quant issues:")
+                for k, n in sorted(quant_issues.items()):
+                    lines.append(f"  {k}: {n}")
+            if report.get("llm_artifacts"):
+                lines.append("")
+                lines.append(
+                    f"LLM self-correction artifacts: {len(report['llm_artifacts'])}")
+            verdict = "⚠️ Critical corruption detected." if corruption else "✅ Bank is clean."
+            wx.MessageBox(
+                verdict + "\n\n" + "\n".join(lines),
+                "Question-bank validation",
+                wx.OK | (wx.ICON_WARNING if corruption else wx.ICON_INFORMATION),
+                parent=self,
+            )
+        except Exception as exc:
+            wx.MessageBox(
+                f"Audit failed: {exc}",
+                "Validation error",
+                wx.OK | wx.ICON_ERROR,
+                parent=self,
+            )
+        finally:
+            self.validate_btn.Enable()

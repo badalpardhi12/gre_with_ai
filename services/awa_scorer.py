@@ -83,8 +83,13 @@ class AWAPrecheck:
         """
         Run all prechecks. Returns (passed: bool, issues: list[str]).
         If not passed, the essay should get a score of 0.
+
+        Going OVER the word cap is a soft warning, not a fail (the real GRE
+        does not penalize length); going UNDER the minimum still fails because
+        a 10-word essay can't realistically score above 0.
         """
         issues = []
+        warnings = []
 
         # Word count
         words = essay_text.split()
@@ -92,7 +97,8 @@ class AWAPrecheck:
         if word_count < AWA_MIN_WORDS:
             issues.append(f"Essay too short ({word_count} words, minimum {AWA_MIN_WORDS})")
         if word_count > AWA_MAX_WORDS:
-            issues.append(f"Essay too long ({word_count} words, maximum {AWA_MAX_WORDS})")
+            warnings.append(f"Essay over recommended length ({word_count} words, "
+                            f"recommended max {AWA_MAX_WORDS})")
 
         # Empty or whitespace only
         if not essay_text.strip():
@@ -108,7 +114,11 @@ class AWAPrecheck:
             issues.append("Essay contains excessive repetition")
 
         passed = len(issues) == 0
-        return passed, issues
+        # Surface warnings to the caller via the issues list, but don't block
+        # scoring on them.
+        if passed:
+            return True, warnings
+        return False, issues + warnings
 
     @staticmethod
     def _is_prompt_copy(essay_text, prompt_text):

@@ -7,14 +7,18 @@ from pathlib import Path
 import wx
 import wx.html2
 
-from config import RESOURCES_DIR
+from config import RESOURCES_DIR, DATA_DIR
 from widgets import ui_scale
+from widgets.html_sanitizer import safe_html
+from widgets.theme import Color, hex_str
 
 
-# Base URL for the WebView so file:// images (e.g. DI charts in data/images/)
-# resolve when SetPage loads inline HTML.
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-PROJECT_BASE_URL = PROJECT_ROOT.as_uri() + "/"
+# Base URL for the WebView. Restricted to data/images/ so a malicious
+# stimulus cannot use file:// to traverse upward into data/llm_config.json
+# or other in-tree files.
+IMAGES_DIR = DATA_DIR / "images"
+IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+PROJECT_BASE_URL = IMAGES_DIR.as_uri() + "/"
 
 
 # Minimal KaTeX CSS/JS served locally. If KaTeX files are not bundled,
@@ -38,6 +42,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self' data:;
+               script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net;
+               style-src  'self' 'unsafe-inline' https://cdn.jsdelivr.net;
+               font-src   'self' data: https://cdn.jsdelivr.net;
+               img-src    'self' data:;
+               connect-src 'none';
+               frame-src  'none';
+               object-src 'none';">
 {katex_css}
 {katex_js}
 {katex_auto}
@@ -46,66 +59,66 @@ body {{
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     font-size: {font_size}px;
     line-height: 1.6;
-    color: #e8e8e8;
+    color: {text_primary};
     padding: 14px 18px;
     margin: 0;
-    background: #1e1e1e;
+    background: {bg_page};
 }}
 .passage {{
-    border-left: 3px solid #4FC3F7;
+    border-left: 3px solid {accent};
     padding-left: 16px;
     margin-bottom: 16px;
-    color: #c0c0c0;
+    color: {text_secondary};
 }}
 .prompt {{
     font-weight: 500;
-    color: #ffffff;
+    color: {text_primary};
     margin-bottom: 12px;
 }}
 .highlight {{
-    background-color: #4a3f1c;
-    color: #ffeaa7;
+    background-color: {warning_bg};
+    color: {warning_text};
     padding: 2px 4px;
     border-radius: 3px;
 }}
 table {{
     border-collapse: collapse;
     margin: 12px 0;
-    color: #e8e8e8;
+    color: {text_primary};
 }}
 th, td {{
-    border: 1px solid #444;
+    border: 1px solid {border};
     padding: 6px 12px;
     text-align: center;
 }}
 th {{
-    background: #2a2a2a;
-    color: #ffffff;
+    background: {bg_surface};
+    color: {text_primary};
 }}
 .answer-correct {{
-    background: #1b3a1b;
-    border-left: 3px solid #4caf50;
+    background: {success_bg};
+    border-left: 3px solid {success};
     padding: 10px 14px;
     margin: 8px 0 12px 0;
     border-radius: 3px;
-    color: #c8e6c9;
+    color: {text_primary};
     font-size: 16px;
 }}
 .answer-correct strong {{
-    color: #81c784;
+    color: {success};
 }}
 .explanation {{
-    background: #252525;
-    border-left: 3px solid #4FC3F7;
+    background: {bg_surface};
+    border-left: 3px solid {accent};
     padding: 10px 14px;
     margin: 8px 0;
     border-radius: 3px;
-    color: #d4d4d4;
+    color: {text_primary};
 }}
 .explanation h3 {{
     margin: 0 0 8px 0;
     font-size: 14px;
-    color: #4FC3F7;
+    color: {accent};
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }}
@@ -154,14 +167,32 @@ class MathView(wx.Panel):
         self._current_html = ""
 
     def set_content(self, html_body):
-        """Set the HTML content (with optional LaTeX delimiters)."""
-        self._current_html = html_body
+        """Set the HTML content (with optional LaTeX delimiters).
+
+        `html_body` is treated as untrusted (it may originate from
+        LLM-generated stimuli or imported ebook HTML) and is sanitized via
+        bleach before being inlined into the page template.
+        """
+        sanitized = safe_html(html_body)
+        self._current_html = sanitized
+        # Pull all colors from the central palette so the WebView matches
+        # the native widgets without per-screen overrides.
         full_html = HTML_TEMPLATE.format(
             katex_css=KATEX_CSS,
             katex_js=KATEX_JS,
             katex_auto=KATEX_AUTO,
-            content=html_body,
+            content=sanitized,
             font_size=ui_scale.get_dashboard_html_font_pt(),
+            bg_page=hex_str(Color.BG_PAGE),
+            bg_surface=hex_str(Color.BG_SURFACE),
+            text_primary=hex_str(Color.TEXT_PRIMARY),
+            text_secondary=hex_str(Color.TEXT_SECONDARY),
+            border=hex_str(Color.BORDER),
+            accent=hex_str(Color.ACCENT),
+            success=hex_str(Color.SUCCESS),
+            success_bg="#1b3a1b",
+            warning_bg="#4a3f1c",
+            warning_text="#ffeaa7",
         )
         self.webview.SetPage(full_html, PROJECT_BASE_URL)
 

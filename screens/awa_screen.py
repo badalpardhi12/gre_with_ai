@@ -1,11 +1,19 @@
 """
-AWA screen — essay writing with prompt display, rich text editor, timer, and word count.
+AWA screen — essay writing with prompt display, plain editor, timer, and word count.
 """
-import wx
-import wx.richtext
+import os
+from pathlib import Path
 
+import wx
+
+from config import AWA_TIME, DATA_DIR
+from widgets.theme import Color
 from widgets.timer import TimerWidget
-from config import AWA_TIME
+
+
+# Periodic-autosave interval. Writing every ~10s is plenty for a 30-minute
+# essay and keeps disk wear minimal.
+AWA_AUTOSAVE_INTERVAL_MS = 10_000
 
 
 class AWAScreen(wx.Panel):
@@ -13,8 +21,11 @@ class AWAScreen(wx.Panel):
 
     def __init__(self, parent):
         super().__init__(parent)
+        self.SetBackgroundColour(Color.BG_PAGE)
         self._on_submit = None
         self._prompt_data = None
+        self._draft_path = None
+        self._autosave_timer = None
         self._build_ui()
 
     def _build_ui(self):
@@ -59,9 +70,11 @@ class AWAScreen(wx.Panel):
                                        wx.FONTWEIGHT_BOLD))
         editor_sizer.Add(editor_header, 0, wx.ALL, 8)
 
-        self.editor = wx.richtext.RichTextCtrl(editor_panel,
-                                                style=wx.VSCROLL | wx.HSCROLL |
-                                                wx.TE_MULTILINE | wx.TE_WORDWRAP)
+        # Plain TextCtrl: rich-text formatting was silently dropped on submit
+        # via .GetValue() anyway. Plain keeps round-trip fidelity and sidesteps
+        # RichTextCtrl quirks on macOS dark mode.
+        self.editor = wx.TextCtrl(editor_panel,
+                                  style=wx.TE_MULTILINE | wx.TE_WORDWRAP)
         self.editor.SetFont(wx.Font(12, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                                      wx.FONTWEIGHT_NORMAL))
         self.editor.Bind(wx.EVT_TEXT, self._on_text_change)
@@ -97,8 +110,13 @@ class AWAScreen(wx.Panel):
         main_sizer.Add(bottom_bar, 0, wx.EXPAND)
         self.SetSizer(main_sizer)
 
-    def load_prompt(self, prompt_data):
-        """Load an AWA prompt. prompt_data = {"prompt_text": ..., "instructions": ...}"""
+    def load_prompt(self, prompt_data, session_id=None):
+        """Load an AWA prompt. prompt_data = {"prompt_text": ..., "instructions": ...}.
+
+        If `session_id` is given, the editor autosaves to
+        `data/awa_draft_<session_id>.txt` every ~10s; on load, an existing
+        draft for that session id offers to restore.
+        """
         self._prompt_data = prompt_data
         text = prompt_data.get("prompt_text", "")
         instructions = prompt_data.get("instructions", "")
@@ -107,6 +125,67 @@ class AWAScreen(wx.Panel):
         self.prompt_text.SetValue(text)
         self.editor.Clear()
         self.word_count_label.SetLabel("Words: 0")
+
+        # Set up draft autosave for this session.
+        if session_id is not None:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            self._draft_path = DATA_DIR / f"awa_draft_{session_id}.txt"
+            self._maybe_restore_draft()
+            self._start_autosave()
+        else:
+            self._draft_path = None
+
+    def _maybe_restore_draft(self):
+        if not self._draft_path or not self._draft_path.exists():
+            return
+        try:
+            text = self._draft_path.read_text(encoding="utf-8")
+        except OSError:
+            return
+        if not text.strip():
+            return
+        dlg = wx.MessageDialog(
+            self,
+            "We found an unfinished draft from a previous session for this "
+            "AWA prompt. Restore it?",
+            "Restore Draft?",
+            wx.YES_NO | wx.YES_DEFAULT | wx.ICON_QUESTION,
+        )
+        try:
+            if dlg.ShowModal() == wx.ID_YES:
+                self.editor.SetValue(text)
+                self.word_count_label.SetLabel(f"Words: {self.get_word_count()}")
+        finally:
+            dlg.Destroy()
+
+    def _start_autosave(self):
+        if self._autosave_timer is None:
+            self._autosave_timer = wx.Timer(self)
+            self.Bind(wx.EVT_TIMER, self._on_autosave_tick, self._autosave_timer)
+        self._autosave_timer.Start(AWA_AUTOSAVE_INTERVAL_MS)
+
+    def _stop_autosave(self):
+        if self._autosave_timer is not None:
+            self._autosave_timer.Stop()
+
+    def _on_autosave_tick(self, _):
+        if not self._draft_path:
+            return
+        try:
+            tmp = self._draft_path.with_suffix(self._draft_path.suffix + ".tmp")
+            tmp.write_text(self.editor.GetValue(), encoding="utf-8")
+            os.replace(tmp, self._draft_path)
+        except OSError:
+            pass
+
+    def _delete_draft(self):
+        self._stop_autosave()
+        if self._draft_path and self._draft_path.exists():
+            try:
+                self._draft_path.unlink()
+            except OSError:
+                pass
+        self._draft_path = None
 
     def start_timer(self):
         self.timer.set_time(AWA_TIME)
@@ -162,5 +241,8 @@ class AWAScreen(wx.Panel):
                 dlg.Destroy()
                 return
             dlg.Destroy()
+        # Submission complete — clean up the draft so we don't show "restore?"
+        # next time this prompt is opened in a future session.
+        self._delete_draft()
         if self._on_submit:
             self._on_submit(essay, wc)

@@ -4,12 +4,15 @@ base URL, model, and max tokens.
 """
 import wx
 
-from config import load_llm_config, save_llm_config
+from config import load_llm_config, save_llm_config, LLM_MODEL
 
 
-# Popular models available on OpenRouter (for the dropdown)
+# Popular models available on OpenRouter (for the dropdown). Listed
+# Opus-first so the recommended high-quality default is at the top of the
+# combobox.
 POPULAR_MODELS = [
-    "anthropic/claude-sonnet-4-20250514",
+    "anthropic/claude-opus-4",
+    "anthropic/claude-sonnet-4",
     "anthropic/claude-3.5-sonnet",
     "openai/gpt-4o",
     "openai/gpt-4o-mini",
@@ -98,7 +101,7 @@ class LLMSettingsDialog(wx.Dialog):
         self.base_url_ctrl.SetValue(
             self._config.get("base_url", "https://openrouter.ai/api/v1"))
         self.model_ctrl.SetValue(
-            self._config.get("model", "anthropic/claude-sonnet-4-20250514"))
+            self._config.get("model", LLM_MODEL))
         self.max_tokens_ctrl.SetValue(
             int(self._config.get("max_tokens", 4096)))
 
@@ -113,7 +116,7 @@ class LLMSettingsDialog(wx.Dialog):
         self.EndModal(wx.ID_OK)
 
     def _on_test(self, event):
-        """Test the OpenRouter connection with current s`ettings."""
+        """Test the OpenRouter connection with current settings."""
         self.test_status.SetLabel("Testing...")
         self.test_btn.Disable()
         self.Update()

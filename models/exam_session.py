@@ -3,6 +3,7 @@ Exam session state machine and test assembly logic.
 Implements the post-September 2023 GRE format.
 """
 import json
+import os
 import random
 from datetime import datetime
 from enum import Enum
@@ -279,9 +280,6 @@ class ExamSession:
         if total == 0:
             return
 
-        correct_count = sum(1 for v in correctness.values() if v)
-        pct_correct = correct_count / total
-
         if completed_type == SectionType.VERBAL_S1:
             s2_type = SectionType.VERBAL_S2
             measure = "verbal"
@@ -292,13 +290,19 @@ class ExamSession:
         if s2_type not in self.sections:
             return
 
-        # Determine difficulty band
-        if pct_correct < ADAPT_EASY_THRESHOLD:
-            band = "easy"
-        elif pct_correct > ADAPT_HARD_THRESHOLD:
-            band = "hard"
-        else:
+        # If the user didn't answer anything, default to medium so we don't
+        # punish a skipped section by routing them to easy (lowering ceiling).
+        if not correctness:
             band = "medium"
+        else:
+            correct_count = sum(1 for v in correctness.values() if v)
+            pct_correct = correct_count / total
+            if pct_correct < ADAPT_EASY_THRESHOLD:
+                band = "easy"
+            elif pct_correct > ADAPT_HARD_THRESHOLD:
+                band = "hard"
+            else:
+                band = "medium"
 
         self.sections[s2_type].difficulty_band = band
 
@@ -334,17 +338,30 @@ class ExamSession:
     # ── Autosave journal ──────────────────────────────────────────────
 
     def log_event(self, event_type, payload=None):
-        """Append an event to the local autosave journal."""
-        entry = {
-            "timestamp": datetime.now().isoformat(),
-            "event_type": event_type,
-            "section": self.current_section_type.value if self.current_section_type else None,
-            "payload": payload or {},
-        }
-        self._journal_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self._journal_path, "a") as f:
-            f.write(json.dumps(entry) + "\n")
+        """Append an event to the local autosave journal.
+
+        Crash-durable: each write is followed by `f.flush()` and `os.fsync()`
+        so a power loss between events doesn't lose the most recent answer.
+        Failures are swallowed (best-effort autosave; never break the test).
+        """
+        try:
+            entry = {
+                "timestamp": datetime.now().isoformat(),
+                "event_type": event_type,
+                "section": self.current_section_type.value if self.current_section_type else None,
+                "payload": payload or {},
+            }
+            self._journal_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._journal_path, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+        except OSError:
+            pass
 
     def clear_journal(self):
         if self._journal_path.exists():
-            self._journal_path.unlink()
+            try:
+                self._journal_path.unlink()
+            except OSError:
+                pass

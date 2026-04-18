@@ -1,171 +1,283 @@
 #!/usr/bin/env bash
-# ──────────────────────────────────────────────────────────────
-# GRE Mock Test Platform — Environment Setup
-# ──────────────────────────────────────────────────────────────
-# Usage:  chmod +x setup.sh && ./setup.sh
+# ──────────────────────────────────────────────────────────────────────────
+# GRE prep with AI — one-shot environment setup
+# ──────────────────────────────────────────────────────────────────────────
+# Usage:
+#   chmod +x setup.sh
+#   ./setup.sh
 #
-# What this script does:
-#   1. Checks Python version (3.9+ required)
-#   2. Creates a virtual environment
-#   3. Installs dependencies
-#   4. Sets up the .env file (prompts for OpenRouter API key)
-#   5. Initialises the SQLite database
-#   6. Seeds the question bank (vocab, quant, verbal, AWA prompts)
-# ──────────────────────────────────────────────────────────────
+# What this script does, in order:
+#   1. Detects platform (macOS / Linux / WSL); installs missing system
+#      dependencies via brew (macOS) or apt (Debian/Ubuntu) where possible.
+#   2. Verifies Python 3.9+ is available; installs it via brew on macOS if
+#      missing.
+#   3. Installs Git LFS and runs `git lfs install` + `git lfs pull` so the
+#      shipped question / vocab / lessons database is fetched.
+#   4. Creates the venv at ./venv and installs every dependency in
+#      requirements.txt (plus pytest for the test suite).
+#   5. Runs the test suite as a smoke check.
+#   6. Prints clear next-step instructions (how to launch, how to add an
+#      OpenRouter API key, how to re-run setup).
+#
+# Idempotent — safe to re-run after pulling new commits to refresh deps,
+# fetch new LFS objects, and re-run tests.
+# ──────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+BOLD='\033[1m'
+NC='\033[0m'
 
-info()  { echo -e "${CYAN}[INFO]${NC}  $*"; }
-ok()    { echo -e "${GREEN}[OK]${NC}    $*"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-fail()  { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
+info()  { echo -e "${CYAN}[info]${NC}  $*"; }
+ok()    { echo -e "${GREEN}[ok]${NC}    $*"; }
+warn()  { echo -e "${YELLOW}[warn]${NC}  $*"; }
+fail()  { echo -e "${RED}[err]${NC}  $*" >&2; exit 1; }
+step()  { echo ""; echo -e "${BOLD}── $* ──${NC}"; }
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_DIR"
 
 echo ""
-echo "╔══════════════════════════════════════════════════╗"
-echo "║   GRE Mock Test Platform — Environment Setup    ║"
-echo "╚══════════════════════════════════════════════════╝"
-echo ""
+echo "╔══════════════════════════════════════════════════════════════════╗"
+echo "║                                                                  ║"
+echo "║          GRE prep with AI — environment setup                    ║"
+echo "║                                                                  ║"
+echo "╚══════════════════════════════════════════════════════════════════╝"
 
-# ── 1. Check Python ──────────────────────────────────────────
-info "Checking Python version..."
+# ── 0. Detect platform ────────────────────────────────────────────────────
+step "Detecting platform"
 
-PYTHON=""
-for candidate in python3.12 python3.11 python3.10 python3.9 python3; do
-    if command -v "$candidate" &>/dev/null; then
-        PYTHON="$candidate"
-        break
+OS="$(uname -s)"
+ARCH="$(uname -m)"
+case "$OS" in
+    Darwin)  PLATFORM="macos" ;;
+    Linux)   PLATFORM="linux" ;;
+    *)       PLATFORM="other" ;;
+esac
+ok "Platform: $PLATFORM ($ARCH)"
+
+PKG_MGR=""
+if [[ "$PLATFORM" == "macos" ]]; then
+    if command -v brew &>/dev/null; then
+        PKG_MGR="brew"
+        ok "Homebrew detected"
+    else
+        warn "Homebrew not found. Install it from https://brew.sh and re-run."
+        warn "  /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+        fail "Homebrew is required on macOS for this setup script."
     fi
-done
-
-if [[ -z "$PYTHON" ]]; then
-    fail "Python 3.9+ is required but not found. Install it from https://www.python.org"
+elif [[ "$PLATFORM" == "linux" ]]; then
+    if command -v apt-get &>/dev/null; then
+        PKG_MGR="apt"
+        ok "apt detected"
+    elif command -v dnf &>/dev/null; then
+        PKG_MGR="dnf"
+        ok "dnf detected"
+    else
+        warn "No supported package manager detected. You may need to install"
+        warn "Python 3.9+ and git-lfs manually."
+    fi
 fi
 
-PY_VERSION=$("$PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-PY_MAJOR=$("$PYTHON" -c 'import sys; print(sys.version_info.major)')
-PY_MINOR=$("$PYTHON" -c 'import sys; print(sys.version_info.minor)')
+# ── 1. Python 3.9+ ────────────────────────────────────────────────────────
+step "Checking Python"
 
-if [[ "$PY_MAJOR" -lt 3 ]] || [[ "$PY_MAJOR" -eq 3 && "$PY_MINOR" -lt 9 ]]; then
-    fail "Python 3.9+ is required (found $PY_VERSION). Please upgrade."
+ensure_python() {
+    for candidate in python3.13 python3.12 python3.11 python3.10 python3.9 python3; do
+        if command -v "$candidate" &>/dev/null; then
+            local v_major v_minor
+            v_major=$("$candidate" -c 'import sys; print(sys.version_info.major)')
+            v_minor=$("$candidate" -c 'import sys; print(sys.version_info.minor)')
+            if [[ "$v_major" -ge 3 ]] && [[ "$v_minor" -ge 9 ]]; then
+                PYTHON="$candidate"
+                return 0
+            fi
+        fi
+    done
+    return 1
+}
+
+if ! ensure_python; then
+    if [[ "$PKG_MGR" == "brew" ]]; then
+        info "Installing Python via Homebrew..."
+        brew install python@3.12
+        if ! ensure_python; then
+            fail "Python install completed but Python 3.9+ still not on PATH. "\
+"Open a new shell and re-run this script."
+        fi
+    elif [[ "$PKG_MGR" == "apt" ]]; then
+        info "Installing python3 via apt (sudo will prompt)..."
+        sudo apt-get update -qq
+        sudo apt-get install -y python3 python3-venv python3-pip
+        ensure_python || fail "Python install failed."
+    else
+        fail "Python 3.9+ is required. Install it from https://www.python.org and re-run."
+    fi
 fi
+
+PY_VERSION=$("$PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")')
 ok "Python $PY_VERSION ($PYTHON)"
 
-# ── 2. Create virtual environment ────────────────────────────
-VENV_DIR="$PROJECT_DIR/venv"
+# ── 2. Git LFS ────────────────────────────────────────────────────────────
+step "Setting up Git LFS for the shipped database"
 
-if [[ -d "$VENV_DIR" ]]; then
-    info "Virtual environment already exists at venv/"
-else
-    info "Creating virtual environment..."
-    "$PYTHON" -m venv "$VENV_DIR"
-    ok "Virtual environment created at venv/"
+ensure_lfs() {
+    if command -v git-lfs &>/dev/null || git lfs version &>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+if ! ensure_lfs; then
+    if [[ "$PKG_MGR" == "brew" ]]; then
+        info "Installing git-lfs via Homebrew..."
+        brew install git-lfs
+    elif [[ "$PKG_MGR" == "apt" ]]; then
+        info "Installing git-lfs via apt (sudo will prompt)..."
+        sudo apt-get install -y git-lfs
+    elif [[ "$PKG_MGR" == "dnf" ]]; then
+        sudo dnf install -y git-lfs
+    else
+        fail "git-lfs is required. Install it from https://git-lfs.com and re-run."
+    fi
+    ensure_lfs || fail "git-lfs install completed but the binary isn't on PATH."
 fi
+ok "git-lfs $(git lfs version | head -1)"
 
-# Activate
-# shellcheck disable=SC1091
-source "$VENV_DIR/bin/activate"
-ok "Activated virtual environment"
+# Initialise once per machine (idempotent — safe to re-run).
+git lfs install --local >/dev/null
+ok "git lfs install --local"
 
-# ── 3. Install dependencies ──────────────────────────────────
-info "Upgrading pip..."
-pip install --quiet --upgrade pip
-
-info "Installing dependencies from requirements.txt..."
-pip install --quiet -r requirements.txt
-ok "All dependencies installed"
-
-# wxPython may need platform-specific wheels on Linux
-if [[ "$(uname)" == "Linux" ]]; then
-    if ! python -c "import wx" 2>/dev/null; then
-        warn "wxPython failed to import. On Linux you may need system packages:"
-        warn "  Ubuntu/Debian: sudo apt install libgtk-3-dev libwebkit2gtk-4.0-dev"
-        warn "  Then:  pip install wxPython"
-        warn "  Or use a pre-built wheel: https://extras.wxpython.org/wxPython4/extras/linux/"
+# Only pull if the local DB is the LFS pointer placeholder rather than the
+# real SQLite file. SQLite files start with "SQLite format 3"; LFS pointers
+# start with "version https://git-lfs.github.com/spec/v1".
+DB_PATH="$PROJECT_DIR/data/gre_mock.db"
+if [[ -f "$DB_PATH" ]]; then
+    HEAD_BYTES="$(head -c 16 "$DB_PATH" 2>/dev/null || true)"
+    if [[ "$HEAD_BYTES" == "SQLite format 3" || "$HEAD_BYTES" == SQLite* ]]; then
+        ok "Database already populated ($(du -h "$DB_PATH" | awk '{print $1}'))"
+    else
+        info "Database is an LFS pointer; pulling real content..."
+        git lfs pull
+        ok "Database pulled ($(du -h "$DB_PATH" | awk '{print $1}'))"
+    fi
+else
+    info "No database file yet; pulling from LFS..."
+    git lfs pull
+    if [[ -f "$DB_PATH" ]]; then
+        ok "Database pulled ($(du -h "$DB_PATH" | awk '{print $1}'))"
+    else
+        warn "git lfs pull completed but $DB_PATH is missing."
+        warn "The app will create an empty DB on first launch; you'll need to"
+        warn "run the import scripts in scripts/ to seed it."
     fi
 fi
 
-# ── 4. Set up .env ───────────────────────────────────────────
-if [[ -f "$PROJECT_DIR/.env" ]]; then
-    info ".env file already exists — skipping"
+# ── 3. Virtual environment ────────────────────────────────────────────────
+step "Creating virtual environment"
+
+VENV_DIR="$PROJECT_DIR/venv"
+if [[ -d "$VENV_DIR" ]]; then
+    ok "venv/ already exists; reusing"
 else
-    info "Setting up environment configuration..."
-    cp "$PROJECT_DIR/.env.example" "$PROJECT_DIR/.env"
+    "$PYTHON" -m venv "$VENV_DIR"
+    ok "Created venv/ with $PY_VERSION"
+fi
 
-    echo ""
-    echo "  An OpenRouter API key is needed for LLM features (AWA scoring,"
-    echo "  explanations). Get one free at: https://openrouter.ai/keys"
-    echo ""
-    read -rp "  Enter your OpenRouter API key (or press Enter to skip): " API_KEY
+# Activate in this shell (does not persist after the script exits).
+# shellcheck disable=SC1091
+source "$VENV_DIR/bin/activate"
 
-    if [[ -n "$API_KEY" ]]; then
-        # Use a portable sed approach
-        if [[ "$(uname)" == "Darwin" ]]; then
+# ── 4. Dependencies ───────────────────────────────────────────────────────
+step "Installing Python dependencies"
+
+pip install --quiet --upgrade pip
+ok "pip upgraded"
+
+pip install --quiet -r requirements.txt
+ok "Installed packages from requirements.txt"
+
+# pytest is needed for the test suite but not for runtime.
+if ! python -c 'import pytest' 2>/dev/null; then
+    pip install --quiet pytest
+fi
+ok "pytest available"
+
+# Linux-specific wxPython sanity check — wheels for Linux are usually missing
+# and require a system rebuild.
+if [[ "$PLATFORM" == "linux" ]]; then
+    if ! python -c 'import wx' 2>/dev/null; then
+        warn "wxPython failed to import. On Debian/Ubuntu install:"
+        warn "  sudo apt install libgtk-3-dev libwebkit2gtk-4.0-dev"
+        warn "Then rerun:  pip install -r requirements.txt"
+    fi
+fi
+
+# ── 5. Database init + smoke test ─────────────────────────────────────────
+step "Initialising database (creates tables + applies migrations)"
+python -c "from models.database import init_db; init_db(); print('  database ready')"
+ok "Schema migrations applied"
+
+step "Running the test suite"
+if python -m pytest tests/ -q 2>&1 | tail -3; then
+    ok "Tests passed"
+else
+    warn "Some tests failed. The app may still launch; investigate before relying on results."
+fi
+
+# ── 6. Optional: prompt for OpenRouter key ────────────────────────────────
+step "OpenRouter API key (optional — needed for AI tutor / AWA scoring)"
+
+if [[ -f "$PROJECT_DIR/.env" ]] && grep -q '^OPENROUTER_API_KEY=sk-' "$PROJECT_DIR/.env"; then
+    ok ".env already has an OpenRouter key"
+elif [[ -f "$PROJECT_DIR/data/llm_config.json" ]] && grep -q '"api_key": "sk-' "$PROJECT_DIR/data/llm_config.json"; then
+    ok "data/llm_config.json already has an OpenRouter key"
+else
+    if [[ ! -f "$PROJECT_DIR/.env" ]] && [[ -f "$PROJECT_DIR/.env.example" ]]; then
+        cp "$PROJECT_DIR/.env.example" "$PROJECT_DIR/.env"
+    fi
+    echo ""
+    echo "  Get a free key at: ${BOLD}https://openrouter.ai/keys${NC}"
+    echo "  (You can also add it later from the in-app Settings dialog.)"
+    echo ""
+    read -rp "  Paste your OpenRouter key here, or press Enter to skip: " API_KEY || true
+    if [[ -n "${API_KEY:-}" ]]; then
+        if [[ "$PLATFORM" == "macos" ]]; then
             sed -i '' "s|^OPENROUTER_API_KEY=.*|OPENROUTER_API_KEY=$API_KEY|" "$PROJECT_DIR/.env"
         else
             sed -i "s|^OPENROUTER_API_KEY=.*|OPENROUTER_API_KEY=$API_KEY|" "$PROJECT_DIR/.env"
         fi
-        ok "API key saved to .env"
+        ok "Saved key to .env"
     else
-        warn "Skipped — you can add it later by editing .env"
-        warn "The app will still work but LLM features will be unavailable"
+        warn "Skipped — drills, mock tests, and vocab will still work without a key."
+        warn "AI features (AWA scoring, per-question tutor, study plan) will be"
+        warn "disabled until you set one via the in-app Settings dialog."
     fi
 fi
 
-# ── 5. Create data directories ───────────────────────────────
-mkdir -p "$PROJECT_DIR/data/external"
-mkdir -p "$PROJECT_DIR/data/questions"
-
-# ── 6. Initialise database & seed data ───────────────────────
-info "Initialising database..."
-python scripts/seed_data.py
-ok "Database initialised"
-
-info "Importing vocabulary (Pervasive-GRE dictionary)..."
-python scripts/import_vocab.py
-ok "Vocabulary imported"
-
-info "Importing Barrons vocabulary..."
-python scripts/import_barrons_vocab.py
-ok "Barrons vocabulary imported"
-
-info "Importing AWA prompts..."
-python scripts/import_awa_prompts.py
-ok "AWA prompts imported"
-
-info "Importing quantitative questions..."
-python scripts/import_external_quant.py
-ok "Quant questions imported"
-
-info "Importing verbal / critical reasoning questions..."
-python scripts/import_cr_questions.py
-ok "Verbal questions imported"
-
-info "Expanding question variations..."
-python scripts/expand_questions.py
-ok "Question expansion complete"
-
-# ── 7. Show summary ──────────────────────────────────────────
+# ── 7. Done ───────────────────────────────────────────────────────────────
 echo ""
-echo "────────────────────────────────────────────────────"
-python scripts/dataset_summary.py
-echo "────────────────────────────────────────────────────"
-
+echo "╔══════════════════════════════════════════════════════════════════╗"
+echo -e "║  ${GREEN}Setup complete${NC}                                                  ║"
+echo "╚══════════════════════════════════════════════════════════════════╝"
 echo ""
-ok "Setup complete!"
+echo "  Launch the app:"
 echo ""
-echo "  To start the application:"
+echo -e "    ${BOLD}source venv/bin/activate${NC}"
+echo -e "    ${BOLD}python app.py${NC}"
 echo ""
-echo "    source venv/bin/activate"
-echo "    python app.py"
+echo "  First launch shows a 3-step onboarding wizard (you can skip)."
+echo "  After that the home is the ${BOLD}Today${NC} tab — one big CTA per day."
 echo ""
-echo "  To configure LLM settings (model, API key) from within"
-echo "  the app, use the Settings button on the home screen."
+echo "  Five sidebar tabs (Cmd+1..5):"
+echo "    • Today     — one primary action + plan + forecast"
+echo "    • Learn     — mastery heatmap + lesson per subtopic"
+echo "    • Practice  — Quick Drill / Section Test / Full Mock"
+echo "    • Vocab     — daily SRS flashcards"
+echo "    • Insights  — forecast trend + history + study plan"
+echo ""
+echo "  Re-run this script anytime — it's idempotent and updates deps."
 echo ""

@@ -4,6 +4,8 @@ Instructions screen — displayed before each section begins.
 import wx
 
 from models.exam_session import SectionType, SECTION_META
+from widgets import ui_scale
+from widgets.theme import Color
 
 
 SECTION_INSTRUCTIONS = {
@@ -75,6 +77,7 @@ class InstructionsScreen(wx.Panel):
 
     def __init__(self, parent):
         super().__init__(parent)
+        self.SetBackgroundColour(Color.BG_PAGE)
         self._on_begin = None
         self._on_cancel = None
         self._build_ui()
@@ -94,12 +97,16 @@ class InstructionsScreen(wx.Panel):
         self.title_label = wx.StaticText(self, label="Section Instructions")
         self.title_label.SetFont(wx.Font(22, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                                           wx.FONTWEIGHT_BOLD))
+        self.title_label.SetForegroundColour(Color.TEXT_PRIMARY)
         main_sizer.Add(self.title_label, 0, wx.ALIGN_CENTER | wx.BOTTOM, 20)
 
         self.body_text = wx.StaticText(self, label="")
         self.body_text.SetFont(wx.Font(13, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                                         wx.FONTWEIGHT_NORMAL))
-        self.body_text.Wrap(700)
+        self.body_text.SetForegroundColour(Color.TEXT_SECONDARY)
+        # Wrap width scales with DPI so the text doesn't sit in a narrow
+        # column on a 4K display.
+        self.body_text.Wrap(ui_scale.font_size(700))
         main_sizer.Add(self.body_text, 0, wx.LEFT | wx.RIGHT, 80)
 
         main_sizer.AddSpacer(30)
@@ -117,8 +124,8 @@ class InstructionsScreen(wx.Panel):
         self.begin_btn = wx.Button(self, label="  Begin Section  ", size=(180, 44))
         self.begin_btn.SetFont(wx.Font(14, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                                         wx.FONTWEIGHT_BOLD))
-        self.begin_btn.SetBackgroundColour(wx.Colour(46, 125, 50))
-        self.begin_btn.SetForegroundColour(wx.WHITE)
+        self.begin_btn.SetBackgroundColour(Color.SUCCESS)
+        self.begin_btn.SetForegroundColour(Color.TEXT_INVERSE)
         self.begin_btn.Bind(wx.EVT_BUTTON, self._on_begin_click)
         btn_row.Add(self.begin_btn, 0)
         btn_row.AddStretchSpacer()
@@ -131,7 +138,7 @@ class InstructionsScreen(wx.Panel):
         info = SECTION_INSTRUCTIONS.get(section_type, {})
         self.title_label.SetLabel(info.get("title", "Section"))
         self.body_text.SetLabel(info.get("body", ""))
-        self.body_text.Wrap(700)
+        self.body_text.Wrap(ui_scale.font_size(700))
         self.Layout()
 
     def set_on_begin(self, callback):

@@ -6,6 +6,10 @@ import math
 import re
 from fractions import Fraction
 
+from services.log import get_logger
+
+logger = get_logger("scoring")
+
 
 # ── Scaled Score Lookup (approximation) ───────────────────────────────
 # Maps (raw_correct, difficulty_band) -> (estimated_low, estimated_high)
@@ -115,6 +119,9 @@ class ScoringEngine:
         selected = set(response.get("selected", []))
         correct = set(o["label"] for o in options if o["is_correct"])
         if len(correct) != 2:
+            logger.warning(
+                "SE question has %d correct option(s); expected exactly 2", len(correct)
+            )
             return False
         return selected == correct
 
@@ -130,6 +137,12 @@ class ScoringEngine:
             parts = o["label"].split("_", 1)
             if len(parts) == 2 and o["is_correct"]:
                 correct[parts[0]] = parts[1]
+        if not correct:
+            # Data corruption guard: a TC question with zero is_correct options
+            # used to silently credit any answer because all() over an empty
+            # iterable returns True.
+            logger.warning("TC question has no is_correct options; treating as wrong")
+            return False
         return all(selected.get(blank) == ans for blank, ans in correct.items())
 
     @staticmethod
@@ -158,31 +171,53 @@ class ScoringEngine:
         if user_num is not None and user_den is not None:
             try:
                 user_frac = Fraction(int(user_num), int(user_den))
-            except (ValueError, ZeroDivisionError):
+            except (ValueError, ZeroDivisionError, TypeError):
                 return False
         elif user_value is not None:
             try:
                 user_frac = Fraction(str(user_value))
-            except (ValueError, ZeroDivisionError):
+            except (ValueError, ZeroDivisionError, TypeError):
+                return False
+            # Reject NaN / Inf even though Fraction() rejects them, in case the
+            # caller passed a pre-parsed float.
+            if not math.isfinite(float(user_frac)):
                 return False
         else:
             return False
 
-        # Determine correct value
-        if numeric_answer.get("exact_value") is not None:
-            correct_frac = Fraction(str(numeric_answer["exact_value"]))
-        elif (numeric_answer.get("numerator") is not None and
-              numeric_answer.get("denominator") is not None):
-            correct_frac = Fraction(
-                int(numeric_answer["numerator"]),
-                int(numeric_answer["denominator"]),
-            )
-        else:
+        # Determine correct value, defending against malformed DB rows.
+        try:
+            if numeric_answer.get("exact_value") is not None:
+                correct_frac = Fraction(str(numeric_answer["exact_value"]))
+            elif (numeric_answer.get("numerator") is not None and
+                  numeric_answer.get("denominator") is not None):
+                correct_frac = Fraction(
+                    int(numeric_answer["numerator"]),
+                    int(numeric_answer["denominator"]),
+                )
+            else:
+                logger.warning("Numeric answer has neither exact_value nor numerator/denominator")
+                return False
+        except (ValueError, ZeroDivisionError, TypeError) as e:
+            logger.warning("Malformed numeric answer %r: %s", numeric_answer, e)
             return False
 
-        tolerance = numeric_answer.get("tolerance", 0)
+        # Tolerance can legitimately be missing/None on legacy rows.
+        tolerance = numeric_answer.get("tolerance") or 0
+        try:
+            tolerance = float(tolerance)
+        except (TypeError, ValueError):
+            tolerance = 0
         if tolerance > 0:
-            return abs(float(user_frac) - float(correct_frac)) <= tolerance
+            # Compare in Fraction space to avoid float-precision artifacts
+            # (e.g. Fraction('1.05') as a float is 1.0500000000000000444...,
+            # so float subtraction can mis-classify a value that is exactly
+            # at the tolerance boundary).
+            try:
+                tol_frac = Fraction(str(tolerance))
+            except (ValueError, ZeroDivisionError):
+                tol_frac = Fraction(0)
+            return abs(user_frac - correct_frac) <= tol_frac
         return user_frac == correct_frac
 
     # ── Scaled Score Estimation ───────────────────────────────────────
@@ -195,7 +230,10 @@ class ScoringEngine:
         Returns:
             (low, high) tuple of estimated scaled scores (130-170).
         """
-        raw = max(0, min(27, raw_correct))
+        try:
+            raw = max(0, min(27, int(raw_correct)))
+        except (TypeError, ValueError):
+            return (130, 135)
         table = SCORE_TABLES.get(difficulty_band, SCORE_TABLES["medium"])
         return table.get(raw, (130, 135))
 

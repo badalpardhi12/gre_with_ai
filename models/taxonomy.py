@@ -364,6 +364,20 @@ def get_subtopic_meta(measure, subtopic):
     return None
 
 
+def subtopic_display_name(subtopic_id: str) -> str:
+    """Find a subtopic's pretty display name across all measures.
+
+    Falls back to a Title-Cased version of the snake_case id when the
+    subtopic isn't in the taxonomy.
+    """
+    for taxonomy in (QUANT_TAXONOMY, VERBAL_TAXONOMY, AWA_TAXONOMY):
+        for td in taxonomy.values():
+            if subtopic_id in td.get("subtopics", {}):
+                return td["subtopics"][subtopic_id].get("display_name",
+                                                        subtopic_id)
+    return subtopic_id.replace("_", " ").title()
+
+
 def total_target_count():
     """Sum of all target_count values across the taxonomy. Should be ~4,000."""
     total = 0

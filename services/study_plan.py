@@ -18,8 +18,11 @@ from typing import Optional
 from models.database import db, StudyPlan, DiagnosticResult, Question, MasteryRecord
 from models.taxonomy import get_taxonomy_summary
 from services.llm_service import llm_service
+from services.log import get_logger
 from services.mastery import weakness_ranking, get_all_mastery
 from services.srs import stats as vocab_stats
+
+logger = get_logger("study_plan")
 
 
 PLANNER_SYSTEM = """You are an expert GRE prep coach building a HIGHLY PERSONALIZED weekly study plan.
@@ -113,6 +116,7 @@ def _build_context(diagnostic, user_id: str = "local"):
         parts.append(f"\nVOCAB: {v['reviewed']} studied / {v['total_words']} total, "
                      f"{v['due_today']} due today, {v['mastered']} mastered")
     except Exception:
+        logger.exception("vocab_stats failed in study-plan context")
         parts.append("\nVOCAB: stats unavailable")
 
     return "\n".join(parts)

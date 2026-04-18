@@ -33,7 +33,7 @@ def update_mastery(subtopic: str, is_correct: bool, difficulty: int,
         defaults={
             "attempts": 0,
             "correct": 0,
-            "mastery_score": 0.0,
+            "mastery_score": 0.5,  # neutral prior so cold start isn't anchored at 0/1
             "last_attempt_at": datetime.now(),
         },
     )
@@ -43,14 +43,23 @@ def update_mastery(subtopic: str, is_correct: bool, difficulty: int,
         rec.correct += 1
 
     weight = DIFFICULTY_WEIGHTS.get(difficulty, 1.0)
-    raw = (1.0 if is_correct else 0.0) * weight
-    # Normalize to 0-1 range
-    new_observation = min(1.0, raw / 1.6)
+    # Symmetric scoring around 0.5: correct answers always raise mastery,
+    # wrong answers always lower it. Magnitude scales with difficulty so a
+    # hard question matters more than an easy one. Previously, a correct
+    # easy answer (raw=0.6, normalised=0.375) would *lower* mastery if the
+    # current score was already above 0.375.
+    delta = 0.5 * weight / 1.6
+    new_observation = 0.5 + delta if is_correct else 0.5 - delta
 
     if rec.attempts == 1:
-        rec.mastery_score = new_observation
+        # Pull halfway toward the prior so a single attempt doesn't slam
+        # the score to ~0 / ~1.
+        rec.mastery_score = 0.5 * (rec.mastery_score) + 0.5 * new_observation
     else:
         rec.mastery_score = (1 - ALPHA) * rec.mastery_score + ALPHA * new_observation
+
+    # Clamp into [0, 1] in case of any rounding drift.
+    rec.mastery_score = max(0.0, min(1.0, rec.mastery_score))
 
     rec.last_attempt_at = datetime.now()
     rec.last_updated_at = datetime.now()

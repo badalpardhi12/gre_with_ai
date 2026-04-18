@@ -29,7 +29,10 @@ class QuestionNav(wx.Panel):
         self._build_ui()
 
     def _build_ui(self):
-        self.grid_sizer = wx.GridSizer(cols=min(self.total, 10), hgap=4, vgap=4)
+        # `wx.GridSizer(cols=0, ...)` raises on Windows. Guard against the
+        # zero-questions edge case so an empty section doesn't blow up the UI.
+        cols = max(1, min(self.total or 1, 10))
+        self.grid_sizer = wx.GridSizer(cols=cols, hgap=4, vgap=4)
         self.buttons = []
 
         for i in range(self.total):

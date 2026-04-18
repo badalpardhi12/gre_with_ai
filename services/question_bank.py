@@ -290,6 +290,7 @@ class QuestionBankService:
                 "numerator": numeric.numerator,
                 "denominator": numeric.denominator,
                 "tolerance": numeric.tolerance,
+                "mode": getattr(numeric, "mode", "auto"),
             } if numeric else None,
         }
 
@@ -320,3 +321,57 @@ class QuestionBankService:
             for tag in q.get_tags():
                 tags.add(tag)
         return sorted(tags)
+
+    def subtopic_summary(self, user_id: str = "local"):
+        """Return per-subtopic stats joining the bank, mastery, and lessons.
+
+        Single round-trip per source (Question / MasteryRecord / Lesson) to
+        avoid N+1; the rest is a Python merge keyed by subtopic name.
+
+        Returns: {subtopic: {
+            "question_count": int,
+            "mastery": float|None,
+            "attempts": int,
+            "has_lesson": bool,
+        }}
+        """
+        from peewee import fn
+        from models.database import MasteryRecord, Lesson
+
+        counts = {}
+        rows = (Question
+                .select(Question.subtopic,
+                        fn.COUNT(Question.id).alias("cnt"))
+                .where((Question.subtopic != "") &
+                       (Question.status == "live"))
+                .group_by(Question.subtopic)
+                .dicts())
+        for row in rows:
+            counts[row["subtopic"]] = row["cnt"]
+
+        mastery = {m.subtopic: (m.mastery_score, m.attempts)
+                   for m in MasteryRecord
+                   .select()
+                   .where(MasteryRecord.user_id == user_id)}
+
+        lesson_subs = {l.subtopic for l in Lesson.select(Lesson.subtopic)}
+
+        out = {}
+        for sub, cnt in counts.items():
+            m_score, m_attempts = mastery.get(sub, (None, 0))
+            out[sub] = {
+                "question_count": cnt,
+                "mastery": m_score,
+                "attempts": m_attempts,
+                "has_lesson": sub in lesson_subs,
+            }
+        # Surface mastered-but-no-question rows too (rare; defends against
+        # mid-migration drift).
+        for sub, (m_score, m_attempts) in mastery.items():
+            out.setdefault(sub, {
+                "question_count": 0,
+                "mastery": m_score,
+                "attempts": m_attempts,
+                "has_lesson": sub in lesson_subs,
+            })
+        return out

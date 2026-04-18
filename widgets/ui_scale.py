@@ -51,6 +51,17 @@ def scale():
     return _SCALE
 
 
+def invalidate_scale_cache():
+    """Drop the cached scale factor.
+
+    Call from the main frame's `wx.EVT_DISPLAY_CHANGED` handler so moving
+    the window between displays of different DPI rescales fonts on the next
+    layout pass.
+    """
+    global _SCALE
+    _SCALE = None
+
+
 def font_size(base):
     """Return the scaled font size for a given base size."""
     return max(8, int(round(base * scale())))
@@ -79,6 +90,25 @@ def xlarge():
 
 def title():
     return font_size(BASE_TITLE)
+
+
+# ── Semantic typography tokens ──────────────────────────────────────
+# Prefer these over the size-named helpers above; new screens should use
+# `text_md` not `normal` so design intent reads from the call site.
+def text_xs():       return font_size(9)
+def text_sm():       return font_size(11)
+def text_md():       return font_size(13)
+def text_lg():       return font_size(16)
+def text_xl():       return font_size(20)
+def text_2xl():      return font_size(26)
+def text_display():  return font_size(36)
+
+
+# ── Spacing scale (4px base unit) ───────────────────────────────────
+# `space(1) = 4px`, `space(2) = 8px`, `space(3) = 12px`, …
+# Unifies the inline-padding constants scattered across screens.
+def space(n: int) -> int:
+    return font_size(4 * max(0, n))
 
 
 def make_font(size, weight=wx.FONTWEIGHT_NORMAL,

@@ -19,6 +19,12 @@ build/
 data/*.db-journal
 data/*.db-shm
 data/*.db-wal
+# Autosave / crash-recovery artifacts (per-run, never useful in version control)
+data/autosave_journal.jsonl
+data/autosave_journal.*.jsonl.bak
+data/awa_draft_*.txt
+data/gre_app.log
+data/gre_app.log.*
 
 # Source ebooks and intermediate extraction artifacts (large, binary, generated)
 data/ebooks/

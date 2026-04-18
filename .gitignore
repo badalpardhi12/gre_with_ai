@@ -54,6 +54,7 @@ Thumbs.db
 
 # Logs
 *.log
+setup.log
 
 # Blueprint PDF (large binary)
 *.pdf

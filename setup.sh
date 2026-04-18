@@ -319,6 +319,21 @@ else
     warn "Some tests failed. The app may still launch; investigate before relying on results."
 fi
 
+# ── 5b. Question-bank corruption audit (non-fatal) ────────────────────────
+step "Auditing question bank for data corruption"
+# The audit returns exit-1 on any critical-corruption bucket, but we don't
+# want a future bad import to break a fresh setup. Capture the summary,
+# print it, and only warn — never fail.
+if AUDIT_OUT=$(python scripts/audit_data_corruption.py --summary 2>&1); then
+    echo "$AUDIT_OUT" | sed 's/^/    /'
+    ok "Audit clean — 0 critical corruptions detected"
+else
+    echo "$AUDIT_OUT" | sed 's/^/    /'
+    warn "Audit reported corruption. Affected questions are excluded from"
+    warn "selection (status='retired') and won't be served, but you may"
+    warn "want to re-run scripts/audit_data_corruption.py for details."
+fi
+
 # ── 6. Optional: prompt for OpenRouter key ────────────────────────────────
 step "OpenRouter API key (optional — needed for AI tutor / AWA scoring)"
 

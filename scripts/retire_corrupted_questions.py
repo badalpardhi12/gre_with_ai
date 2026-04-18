@@ -67,7 +67,18 @@ INCOMPLETE_QIDS = [
     793, 794, 795, 797, 798, 799, 800, 948, 2214,
 ]
 
-ALL_RETIRE_QIDS = sorted(set(CORRUPT_QIDS + INCOMPLETE_QIDS))
+# Third batch (2026-04-18): 22 RC questions whose option E text leaked
+# past its boundary and absorbed the "Questions N-M refer to the
+# following passage. <passage…>" marker that belonged to the *next*
+# question set. The leaked option is unreadable and the next question
+# set was extracted without its passage. Carried by migration
+# `008_retire_option_leak_2026_04`.
+OPTION_LEAK_QIDS = [
+    810, 812, 813, 816, 817, 820, 824, 825, 829, 831, 837, 838, 840,
+    1022, 1025, 1029, 1034, 1037, 1039, 1043, 1050, 1056,
+]
+
+ALL_RETIRE_QIDS = sorted(set(CORRUPT_QIDS + INCOMPLETE_QIDS + OPTION_LEAK_QIDS))
 
 
 def main():

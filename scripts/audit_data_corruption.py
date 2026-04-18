@@ -142,6 +142,11 @@ def audit_database(verbose=False, export_json=False, ids_only=False,
     
     # ──── VERBAL AUDIT ────
     verbal_categories = defaultdict(list)
+    option_leak_re = re.compile(
+        r"Question[s]?\s*\d+(?:\s*[-–]\s*\d+)?\s*refer[s]?\s*to",
+        re.I,
+    )
+    option_leak_count = 0
     for q in verbal_qs:
         options = list(QuestionOption.select().where(QuestionOption.question == q))
         cat, details = classify_verbal_answer_key(q, options)
@@ -150,7 +155,20 @@ def audit_database(verbose=False, export_json=False, ids_only=False,
             'subtype': q.subtype,
             'details': details,
         })
-    
+        # Structural check: the "Questions N-M refer to the following
+        # passage" marker should never appear in option text — when it
+        # does, an option ran past its boundary and absorbed the next
+        # set's passage marker.
+        for opt in options:
+            if option_leak_re.search(opt.option_text or ""):
+                option_leak_count += 1
+                verbal_categories["Option-text leakage"].append({
+                    'id': q.id,
+                    'subtype': q.subtype,
+                    'details': f"opt {opt.option_label} contains 'Questions N refer to'",
+                })
+                break
+
     report["verbal_classifications"] = {
         k: len(v) for k, v in verbal_categories.items()
     }
@@ -194,7 +212,8 @@ def audit_database(verbose=False, export_json=False, ids_only=False,
     # ──── WORST QUESTIONS ────
     worst = (
         verbal_categories.get("Answer-key likely WRONG", []) +
-        verbal_categories.get("Explanation-from-other", [])
+        verbal_categories.get("Explanation-from-other", []) +
+        verbal_categories.get("Option-text leakage", [])
     )
     
     for q_info in worst[:5]:

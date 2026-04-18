@@ -141,6 +141,29 @@ def test_tc_no_correct_options_returns_false():
     assert ScoringEngine.check_answer(q, {"selected": {"blank1": "A"}}) is False
 
 
+def test_tc_single_blank_format():
+    """REGRESSION: ~93 TC questions in the shipped bank use single-blank
+    labels (A / B / C with no blank1_ prefix). Previously the scorer's
+    `len(parts) == 2` check skipped them all, so every single-blank TC was
+    marked wrong even when the user selected the correct option (and Show
+    Answer correctly rendered it).
+
+    UI emits {"selected": {"blank1": "A"}} for these (defaults to blank1
+    when there's no underscore in the label) — scoring must match.
+    """
+    q = {
+        "subtype": "tc",
+        "options": [
+            {"label": "A", "text": "ubiquitous", "is_correct": False},
+            {"label": "B", "text": "rare",       "is_correct": True},
+            {"label": "C", "text": "trivial",    "is_correct": False},
+        ],
+    }
+    assert ScoringEngine.check_answer(q, {"selected": {"blank1": "B"}}) is True
+    assert ScoringEngine.check_answer(q, {"selected": {"blank1": "A"}}) is False
+    assert ScoringEngine.check_answer(q, {"selected": {}}) is False
+
+
 # ── Numeric entry ──
 
 def test_numeric_decimal_exact_match():

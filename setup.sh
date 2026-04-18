@@ -21,8 +21,43 @@
 #
 # Idempotent — safe to re-run after pulling new commits to refresh deps,
 # fetch new LFS objects, and re-run tests.
+#
+# Logging: every line of stdout/stderr is echoed to the terminal AND
+# appended to ./setup.log (timestamped) so failed installs leave a forensic
+# trail. To skip the log file, run with NO_LOG=1 ./setup.sh.
 # ──────────────────────────────────────────────────────────────────────────
 set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$PROJECT_DIR"
+
+# ── tee everything to setup.log ──────────────────────────────────────────
+# We do this before anything else so even early-exit failures are captured.
+LOG_FILE="$PROJECT_DIR/setup.log"
+if [[ "${NO_LOG:-0}" != "1" ]]; then
+    # Wrap with `script -q /dev/null` would also work, but a plain `tee` is
+    # portable and preserves color codes for the user's terminal while still
+    # writing the raw stream to the log.
+    if [[ -z "${SETUP_TEEING:-}" ]]; then
+        export SETUP_TEEING=1
+        # Re-exec ourselves with output piped through tee.
+        {
+            echo "──────────────────────────────────────────────────────────"
+            echo "setup.sh started at $(date)"
+            echo "  cwd:  $PROJECT_DIR"
+            echo "  user: $(whoami)"
+            echo "  shell: $SHELL"
+            echo "  args: $*"
+            echo "──────────────────────────────────────────────────────────"
+        } >> "$LOG_FILE"
+        # tee preserves stderr-merged output to BOTH the terminal (with ANSI
+        # colour codes intact) and the log file. We don't add per-line
+        # timestamps because BSD awk on macOS lacks strftime; the header
+        # block above records the start time, which is usually enough to
+        # correlate with any timestamps in subprocess output (pip, brew).
+        exec > >(tee -a "$LOG_FILE") 2>&1
+    fi
+fi
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -37,15 +72,15 @@ warn()  { echo -e "${YELLOW}[warn]${NC}  $*"; }
 fail()  { echo -e "${RED}[err]${NC}  $*" >&2; exit 1; }
 step()  { echo ""; echo -e "${BOLD}── $* ──${NC}"; }
 
-PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$PROJECT_DIR"
-
 echo ""
 echo "╔══════════════════════════════════════════════════════════════════╗"
 echo "║                                                                  ║"
 echo "║          GRE prep with AI — environment setup                    ║"
 echo "║                                                                  ║"
 echo "╚══════════════════════════════════════════════════════════════════╝"
+if [[ "${NO_LOG:-0}" != "1" ]]; then
+    info "Full log: $LOG_FILE  (set NO_LOG=1 to skip)"
+fi
 
 # ── 0. Detect platform ────────────────────────────────────────────────────
 step "Detecting platform"
@@ -58,6 +93,10 @@ case "$OS" in
     *)       PLATFORM="other" ;;
 esac
 ok "Platform: $PLATFORM ($ARCH)"
+info "uname -a: $(uname -a)"
+info "Bash:     ${BASH_VERSION:-unknown}"
+info "Git:      $(git --version 2>/dev/null || echo 'NOT INSTALLED')"
+info "PWD:      $PROJECT_DIR"
 
 PKG_MGR=""
 if [[ "$PLATFORM" == "macos" ]]; then
@@ -102,15 +141,15 @@ ensure_python() {
 
 if ! ensure_python; then
     if [[ "$PKG_MGR" == "brew" ]]; then
-        info "Installing Python via Homebrew..."
-        brew install python@3.12
+        info "Python 3.9+ not found — installing python@3.12 via Homebrew (verbose)..."
+        brew install --verbose python@3.12 || brew install python@3.12
         if ! ensure_python; then
             fail "Python install completed but Python 3.9+ still not on PATH. "\
 "Open a new shell and re-run this script."
         fi
     elif [[ "$PKG_MGR" == "apt" ]]; then
         info "Installing python3 via apt (sudo will prompt)..."
-        sudo apt-get update -qq
+        sudo apt-get update
         sudo apt-get install -y python3 python3-venv python3-pip
         ensure_python || fail "Python install failed."
     else
@@ -133,12 +172,13 @@ ensure_lfs() {
 
 if ! ensure_lfs; then
     if [[ "$PKG_MGR" == "brew" ]]; then
-        info "Installing git-lfs via Homebrew..."
-        brew install git-lfs
+        info "Installing git-lfs via Homebrew (verbose)..."
+        brew install --verbose git-lfs || brew install git-lfs
     elif [[ "$PKG_MGR" == "apt" ]]; then
-        info "Installing git-lfs via apt (sudo will prompt)..."
+        info "Installing git-lfs via apt (sudo will prompt; verbose)..."
         sudo apt-get install -y git-lfs
     elif [[ "$PKG_MGR" == "dnf" ]]; then
+        info "Installing git-lfs via dnf (verbose)..."
         sudo dnf install -y git-lfs
     else
         fail "git-lfs is required. Install it from https://git-lfs.com and re-run."
@@ -148,7 +188,8 @@ fi
 ok "git-lfs $(git lfs version | head -1)"
 
 # Initialise once per machine (idempotent — safe to re-run).
-git lfs install --local >/dev/null
+info "Running: git lfs install --local"
+git lfs install --local
 ok "git lfs install --local"
 
 # Only pull if the local DB is the LFS pointer placeholder rather than the
@@ -160,13 +201,13 @@ if [[ -f "$DB_PATH" ]]; then
     if [[ "$HEAD_BYTES" == "SQLite format 3" || "$HEAD_BYTES" == SQLite* ]]; then
         ok "Database already populated ($(du -h "$DB_PATH" | awk '{print $1}'))"
     else
-        info "Database is an LFS pointer; pulling real content..."
-        git lfs pull
+        info "Database is an LFS pointer; pulling real content (verbose)..."
+        GIT_TRACE=1 git lfs pull
         ok "Database pulled ($(du -h "$DB_PATH" | awk '{print $1}'))"
     fi
 else
-    info "No database file yet; pulling from LFS..."
-    git lfs pull
+    info "No database file yet; pulling from LFS (verbose)..."
+    GIT_TRACE=1 git lfs pull
     if [[ -f "$DB_PATH" ]]; then
         ok "Database pulled ($(du -h "$DB_PATH" | awk '{print $1}'))"
     else
@@ -194,17 +235,24 @@ source "$VENV_DIR/bin/activate"
 # ── 4. Dependencies ───────────────────────────────────────────────────────
 step "Installing Python dependencies"
 
-pip install --quiet --upgrade pip
-ok "pip upgraded"
+info "Upgrading pip (verbose)..."
+pip install --upgrade pip
+ok "pip upgraded to $(pip --version | awk '{print $2}')"
 
-pip install --quiet -r requirements.txt
+info "Installing packages from requirements.txt (verbose)..."
+info "  $(wc -l < requirements.txt | tr -d ' ') packages pinned"
+pip install -r requirements.txt
 ok "Installed packages from requirements.txt"
 
 # pytest is needed for the test suite but not for runtime.
 if ! python -c 'import pytest' 2>/dev/null; then
-    pip install --quiet pytest
+    info "Installing pytest (test runner)..."
+    pip install pytest
 fi
-ok "pytest available"
+ok "pytest available — $(python -c 'import pytest; print(pytest.__version__)')"
+
+info "Installed packages snapshot:"
+pip list --format=columns | sed 's/^/    /'
 
 # Linux-specific wxPython sanity check — wheels for Linux are usually missing
 # and require a system rebuild.
@@ -221,8 +269,8 @@ step "Initialising database (creates tables + applies migrations)"
 python -c "from models.database import init_db; init_db(); print('  database ready')"
 ok "Schema migrations applied"
 
-step "Running the test suite"
-if python -m pytest tests/ -q 2>&1 | tail -3; then
+step "Running the test suite (verbose)"
+if python -m pytest tests/ -v --tb=short; then
     ok "Tests passed"
 else
     warn "Some tests failed. The app may still launch; investigate before relying on results."

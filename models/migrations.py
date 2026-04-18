@@ -168,6 +168,39 @@ def _006_retire_corrupted_2026_04():
     )
 
 
+# Second batch found 2026-04-18 by structural audit (user-reported
+# screenshots). 1 TC mis-keyed (qid 604, "Loki") + 111 QC questions
+# whose prompts lack the "Quantity A:" / "Quantity B:" labels (so the
+# rendered question is structurally unanswerable) + 1 quant DI question
+# whose chart wasn't extracted (qid 948).
+_INCOMPLETE_QIDS_2026_04 = (
+    604, 678, 679, 681, 682, 683, 684, 685, 686, 687, 688, 689, 690,
+    692, 693, 694, 695, 696, 698, 699, 700, 701, 702, 703, 704, 705,
+    706, 707, 708, 709, 710, 711, 712, 713, 714, 715, 716, 717, 719,
+    720, 721, 723, 724, 725, 726, 727, 729, 730, 731, 732, 733, 734,
+    735, 736, 737, 738, 739, 740, 741, 742, 743, 744, 745, 746, 747,
+    748, 749, 750, 752, 753, 754, 755, 756, 757, 758, 760, 761, 762,
+    764, 765, 766, 767, 768, 770, 771, 772, 773, 774, 775, 776, 777,
+    778, 779, 780, 781, 782, 783, 785, 786, 787, 788, 789, 790, 792,
+    793, 794, 795, 797, 798, 799, 800, 948, 2214,
+)
+
+
+def _007_retire_incomplete_2026_04():
+    """Retire 113 questions that are structurally incomplete or
+    mis-keyed (separate bug class from migration 006).
+
+    Idempotent. Same skip-if-missing semantics as 006.
+    """
+    db = _get_db()
+    placeholders = ",".join("?" for _ in _INCOMPLETE_QIDS_2026_04)
+    db.execute_sql(
+        f"UPDATE question SET status='retired' "
+        f"WHERE id IN ({placeholders}) AND status != 'retired'",
+        _INCOMPLETE_QIDS_2026_04,
+    )
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -175,6 +208,7 @@ MIGRATIONS = [
     ("004_user_stats", _004_user_stats),
     ("005_onboarding_inferred_complete", _005_onboarding_inferred_complete),
     ("006_retire_corrupted_2026_04", _006_retire_corrupted_2026_04),
+    ("007_retire_incomplete_2026_04", _007_retire_incomplete_2026_04),
 ]
 
 

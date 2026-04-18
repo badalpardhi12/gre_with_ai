@@ -160,7 +160,7 @@ def audit_database(verbose=False, export_json=False, ids_only=False,
     for q in quant_qs:
         options = list(QuestionOption.select().where(QuestionOption.question == q))
         na = NumericAnswer.get_or_none(NumericAnswer.question == q)
-        
+
         if q.subtype == "numeric_entry":
             if na and isinstance(na.exact_value, (int, float)):
                 pass  # valid
@@ -170,7 +170,25 @@ def audit_database(verbose=False, export_json=False, ids_only=False,
             correct_count = sum(1 for opt in options if opt.is_correct)
             if correct_count != 1:
                 quant_issues["mcq_key_broken"] += 1
-    
+
+        # Structural check: QC must declare both Quantity A: and Quantity B:
+        # in the prompt — otherwise the user can't see the comparison.
+        if q.subtype == "qc":
+            p = q.prompt or ""
+            has_a = re.search(r"Quantity\s*A\s*:", p, re.I) is not None
+            has_b = re.search(r"Quantity\s*B\s*:", p, re.I) is not None
+            if not (has_a and has_b):
+                quant_issues["qc_missing_quantity_labels"] += 1
+
+        # Chart/graph reference without a stimulus = unanswerable DI question
+        chart_re = re.compile(
+            r"\b(the chart|the table|shown above|preceding chart|preceding graph"
+            r"|donations from Company)\b",
+            re.I,
+        )
+        if chart_re.search(q.prompt or "") and q.stimulus_id is None:
+            quant_issues["chart_referenced_no_stimulus"] += 1
+
     report["quant_issues"] = dict(quant_issues)
     
     # ──── WORST QUESTIONS ────

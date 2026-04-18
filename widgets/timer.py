@@ -1,6 +1,8 @@
 """
 Countdown timer widget — displays remaining time with visual warnings.
 """
+import time
+
 import wx
 
 from config import TIMER_WARNING_SECONDS
@@ -10,6 +12,11 @@ class TimerWidget(wx.Panel):
     """
     Section countdown timer. Shows MM:SS.
     Changes colour at warning thresholds.
+
+    Time is anchored to a `time.monotonic()` reading at start so a long UI
+    stall (slow WebView render, modal dialog) doesn't drift the displayed
+    countdown — we read the actual elapsed wall-clock each tick instead of
+    blindly subtracting 1.
     """
 
     def __init__(self, parent, time_seconds=0):
@@ -18,6 +25,10 @@ class TimerWidget(wx.Panel):
         self.remaining = time_seconds
         self._paused = False
         self._running = False
+        self._started_at = None       # monotonic seconds when start() was called
+        self._paused_total = 0.0      # accumulated pause duration
+        self._pause_start = None      # monotonic seconds when pause() was called
+        self._last_tick_remaining = time_seconds
 
         # UI
         self.label = wx.StaticText(self, label="Time Remaining")
@@ -33,7 +44,7 @@ class TimerWidget(wx.Panel):
         sizer.Add(self.display, 0, wx.ALIGN_CENTER)
         self.SetSizer(sizer)
 
-        # Timer (1 second interval)
+        # Timer (1 second interval — display refresh, NOT the source of truth)
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self._on_tick, self.timer)
 
@@ -46,22 +57,35 @@ class TimerWidget(wx.Panel):
         """Reset the timer to a new duration."""
         self.total_time = seconds
         self.remaining = seconds
+        self._started_at = None
+        self._paused_total = 0.0
+        self._pause_start = None
+        self._last_tick_remaining = seconds
         self._update_display()
 
     def start(self):
         """Start the countdown."""
         self._running = True
         self._paused = False
+        self._started_at = time.monotonic()
+        self._paused_total = 0.0
+        self._pause_start = None
+        self._last_tick_remaining = self.total_time
         self.timer.Start(1000)
 
     def pause(self):
         """Pause the countdown."""
-        self._paused = True
+        if not self._paused:
+            self._paused = True
+            self._pause_start = time.monotonic()
         self.timer.Stop()
 
     def resume(self):
         """Resume the countdown."""
-        if self._running:
+        if self._running and self._paused:
+            if self._pause_start is not None:
+                self._paused_total += time.monotonic() - self._pause_start
+                self._pause_start = None
             self._paused = False
             self.timer.Start(1000)
 
@@ -80,22 +104,32 @@ class TimerWidget(wx.Panel):
         self._on_warning = callback
 
     def set_on_tick(self, callback):
-        """Set callback invoked every tick. callback(elapsed_seconds=1)"""
+        """Set callback invoked every tick. callback(elapsed_seconds_since_last_tick)"""
         self._on_tick_cb = callback
 
     def _on_tick(self, event):
-        if self._paused:
+        if self._paused or not self._running or self._started_at is None:
             return
-        self.remaining = max(0, self.remaining - 1)
+
+        elapsed = time.monotonic() - self._started_at - self._paused_total
+        new_remaining = max(0, int(self.total_time - elapsed))
+        # Tick callback receives the *actual* delta (so per-question time
+        # stays accurate even if a tick was missed during a UI stall).
+        delta = max(0, self._last_tick_remaining - new_remaining)
+        self.remaining = new_remaining
+        self._last_tick_remaining = new_remaining
         self._update_display()
 
-        # External tick callback (for per-question timing)
-        if self._on_tick_cb:
-            self._on_tick_cb(1)
+        if self._on_tick_cb and delta > 0:
+            self._on_tick_cb(delta)
 
-        # Warning thresholds
-        if self._on_warning and self.remaining in (300, 60):
-            self._on_warning(self.remaining)
+        # Warning thresholds: fire once per crossing rather than only on the
+        # exact-second match (so a missed tick doesn't skip the warning).
+        if self._on_warning:
+            for threshold in (300, 60):
+                if (self.remaining <= threshold <
+                        self.remaining + delta):
+                    self._on_warning(self.remaining)
 
         if self.remaining <= 0:
             self.stop()

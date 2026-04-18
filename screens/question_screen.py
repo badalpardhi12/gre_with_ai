@@ -10,6 +10,7 @@ from widgets.question_nav import QuestionNav
 from widgets.numeric_entry import NumericEntry
 from widgets.calculator import CalculatorWidget
 from widgets.math_view import MathView
+from widgets.theme import Color
 
 
 class QuestionScreen(wx.Panel):
@@ -21,8 +22,10 @@ class QuestionScreen(wx.Panel):
 
     def __init__(self, parent):
         super().__init__(parent)
+        self.SetBackgroundColour(Color.BG_PAGE)
         self._section_state = None
         self._question_bank = None
+        self._exam = None
         self._current_q = None
         self._measure = None
         self._mode = "simulation"
@@ -169,10 +172,16 @@ class QuestionScreen(wx.Panel):
 
     # ── Public API ────────────────────────────────────────────────────
 
-    def configure(self, section_state, question_bank, measure, mode="simulation"):
-        """Set up the screen for a section."""
+    def configure(self, section_state, question_bank, measure, mode="simulation",
+                  exam=None):
+        """Set up the screen for a section.
+
+        `exam` is the parent ExamSession; passed in so per-question events
+        can be logged to the autosave journal for crash-recovery.
+        """
         self._section_state = section_state
         self._question_bank = question_bank
+        self._exam = exam
         self._measure = measure
         self._mode = mode
 
@@ -378,9 +387,17 @@ class QuestionScreen(wx.Panel):
                     self._answer_controls.append(("tc_radio", blank_name, choice_label, radio))
 
         elif subtype == "numeric_entry":
-            # Numeric entry
-            is_fraction = (q.get("numeric_answer") and
-                          q["numeric_answer"].get("numerator") is not None)
+            # Numeric entry: prefer the explicit `mode` field added in PR 1
+            # (NumericAnswer.mode = 'decimal' | 'fraction' | 'auto'). For
+            # legacy 'auto' rows, fall back to the old "has numerator?" heuristic.
+            na = q.get("numeric_answer") or {}
+            mode = na.get("mode") or "auto"
+            if mode == "fraction":
+                is_fraction = True
+            elif mode == "decimal":
+                is_fraction = False
+            else:
+                is_fraction = na.get("numerator") is not None
             self._numeric_entry = NumericEntry(self.answer_panel,
                                                 fraction_mode=is_fraction)
             self._numeric_entry.set_on_change(lambda _: self._on_answer_change(None))
@@ -469,6 +486,10 @@ class QuestionScreen(wx.Panel):
         qid = ss.current_question_id
         response = self._get_current_response()
         ss.set_response(qid, response)
+        # Crash-durable autosave so a force-quit mid-test can be replayed.
+        if self._exam is not None:
+            self._exam.log_event("answer_changed",
+                                 {"qid": qid, "response": response})
         self._update_nav()
 
     def _on_mark(self, event):
@@ -517,8 +538,12 @@ class QuestionScreen(wx.Panel):
 
         correct_html = " &nbsp; • &nbsp; ".join(self._escape_html(p) for p in correct_parts)
 
-        # Build explanation HTML
+        # Stored explanation (preferred). If missing, fire a one-shot LLM call
+        # to generate one and cache it back to the DB.
         explanation = self._current_q.get("explanation", "")
+        if not explanation or not explanation.strip():
+            explanation = "Generating explanation…"
+            wx.CallAfter(self._fetch_explanation_async)
         explanation_html = self._format_explanation_html(explanation)
 
         html = f"""
@@ -535,6 +560,51 @@ class QuestionScreen(wx.Panel):
         # Show the AI Tutor button now that the answer is revealed
         if self._mode == "learning":
             self.ask_tutor_btn.Show()
+        self.Layout()
+
+    def _fetch_explanation_async(self):
+        """Background-generate an explanation if the question has none."""
+        if self._current_q is None:
+            return
+        from services.explanation import ExplanationService
+        ExplanationService().get_explanation_async(
+            self._current_q,
+            user_response=self._get_current_response() if self._section_state else None,
+            callback=self._on_explanation_ready,
+        )
+
+    def _on_explanation_ready(self, text, error):
+        """Render the just-generated explanation and persist it back."""
+        if not self._explanation_visible or self._current_q is None:
+            return
+        if error or not text:
+            text = ("(Explanation could not be generated — "
+                    f"{error if error else 'empty response'}.)")
+        else:
+            # Cache for future opens.
+            try:
+                from services.explanation import ExplanationService
+                ExplanationService().save_explanation(self._current_q["id"], text)
+                self._current_q["explanation"] = text
+            except Exception:
+                pass
+
+        options = self._current_q.get("options", [])
+        correct_parts = []
+        for o in options:
+            if o.get("is_correct"):
+                label = o["label"].split("_")[-1] if "_" in o["label"] else o["label"]
+                t = o.get("text", "")
+                correct_parts.append(f"{label}) {t}" if t else label)
+        correct_html = " &nbsp; • &nbsp; ".join(self._escape_html(p) for p in correct_parts)
+        explanation_html = self._format_explanation_html(text)
+        html = f"""
+            <div class="answer-correct">
+                <strong>Correct Answer:</strong> {correct_html}
+            </div>
+            {explanation_html}
+        """
+        self._explanation_panel.set_content(html)
         self.Layout()
 
     def _hide_explanation(self):

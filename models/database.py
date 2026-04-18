@@ -8,7 +8,7 @@ from datetime import datetime
 
 from peewee import (
     Model, SqliteDatabase, AutoField, CharField, TextField,
-    IntegerField, FloatField, BooleanField, DateTimeField,
+    IntegerField, FloatField, BooleanField, DateTimeField, DateField,
     ForeignKeyField, Check,
 )
 
@@ -94,7 +94,12 @@ class Question(BaseModel):
     updated_at = DateTimeField(default=datetime.now)
 
     def get_tags(self):
-        return json.loads(self.concept_tags) if self.concept_tags else []
+        # Defensive parse — a manually-edited DB or an old row with malformed
+        # JSON shouldn't crash every screen that reads the field.
+        try:
+            return json.loads(self.concept_tags) if self.concept_tags else []
+        except (ValueError, TypeError):
+            return []
 
     def set_tags(self, tags):
         self.concept_tags = json.dumps(tags)
@@ -123,8 +128,22 @@ class NumericAnswer(BaseModel):
     # For fraction answers
     numerator = IntegerField(null=True)
     denominator = IntegerField(null=True)
-    # Tolerance for rounding
-    tolerance = FloatField(default=0.0)
+    # Tolerance for rounding (decimal answers only; fractions stay exact at 0).
+    # New default: 0.001 catches innocent rounding without making the engine sloppy.
+    tolerance = FloatField(default=0.001)
+    # How the user should enter their answer. 'decimal' shows a single text box,
+    # 'fraction' shows numerator/denominator. 'auto' = inferred from which fields
+    # are populated (legacy rows). Set explicitly on new rows to avoid ambiguity.
+    mode = CharField(default="auto",
+                     choices=[("decimal", "Decimal"),
+                              ("fraction", "Fraction"),
+                              ("auto", "Auto-detect")])
+
+    class Meta:
+        constraints = [
+            Check("exact_value IS NOT NULL OR "
+                  "(numerator IS NOT NULL AND denominator IS NOT NULL)")
+        ]
 
 
 # ── Session & Response Models ─────────────────────────────────────────
@@ -196,7 +215,7 @@ class Response(BaseModel):
     session = ForeignKeyField(Session, backref="responses", on_delete="CASCADE")
     section_result = ForeignKeyField(SectionResult, backref="responses",
                                      on_delete="CASCADE")
-    question = ForeignKeyField(Question, backref="responses")
+    question = ForeignKeyField(Question, backref="responses", on_delete="CASCADE")
     # JSON-encoded answer: {"selected": ["A"]} or {"value": 2.5}
     # or {"numerator": 5, "denominator": 2} or {"selected_sentence": 2}
     response_payload = TextField(default="{}")
@@ -343,14 +362,21 @@ class FlashcardReview(BaseModel):
     word = ForeignKeyField(VocabWord, backref="reviews", on_delete="CASCADE")
     user_id = CharField(default="local")  # single-user app for now
     review_count = IntegerField(default=0)
-    ease_factor = FloatField(default=2.5)         # SM-2 ease
+    ease_factor = FloatField(default=2.5)         # SM-2 ease (legacy; unused)
     interval_days = IntegerField(default=1)
     stability = FloatField(default=1.0)           # FSRS stability
     difficulty = FloatField(default=5.0)          # FSRS difficulty 0-10
     last_response = IntegerField(null=True)       # 1=again, 2=hard, 3=good, 4=easy
     last_reviewed_at = DateTimeField(null=True)
-    next_review_at = DateTimeField(default=datetime.now)
+    # Heavily queried by srs.due_cards; composite index on (user_id, next_review_at)
+    # is created by migration 003 for the existing shipped DB.
+    next_review_at = DateTimeField(default=datetime.now, index=True)
     created_at = DateTimeField(default=datetime.now)
+
+    class Meta:
+        indexes = (
+            (("user_id", "next_review_at"), False),
+        )
 
 
 # ── Lessons ──────────────────────────────────────────────────────────
@@ -414,6 +440,22 @@ class DiagnosticResult(BaseModel):
     completed_at = DateTimeField(default=datetime.now)
 
 
+class UserStats(BaseModel):
+    """Per-user habit + onboarding state.
+
+    Single-row-per-user; the local-only app keeps `user_id="local"`.
+    Created lazily by `services/streak.py` on first activity.
+    """
+    id = AutoField()
+    user_id = CharField(default="local", unique=True)
+    current_streak = IntegerField(default=0)
+    longest_streak = IntegerField(default=0)
+    last_active_date = DateField(null=True)
+    streak_freezes_left = IntegerField(default=1)
+    onboarding_completed_at = DateTimeField(null=True)
+    daily_goal_minutes = IntegerField(default=20)
+
+
 # ── Database initialization ──────────────────────────────────────────
 
 ALL_TABLES = [
@@ -425,13 +467,18 @@ ALL_TABLES = [
     VocabWord, VocabRoot, FlashcardReview,
     Lesson,
     MasteryRecord, StudyPlan, DiagnosticResult,
+    UserStats,
 ]
 
 
 def init_db():
-    """Create all tables if they don't exist."""
+    """Create all tables if they don't exist, then apply pending migrations."""
     db.connect(reuse_if_open=True)
     db.create_tables(ALL_TABLES, safe=True)
+    # Apply schema migrations after tables exist; the migrator owns its own
+    # SchemaMigration table.
+    from models.migrations import apply_pending_migrations
+    apply_pending_migrations()
     db.close()
 
 

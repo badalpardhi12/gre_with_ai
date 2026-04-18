@@ -123,7 +123,14 @@ class CalculatorWidget(wx.Panel):
 
     def _evaluate(self):
         try:
-            # Safe evaluation of arithmetic expressions only
+            # Safe evaluation of arithmetic expressions only.
+            # Reject ** outright — even with __builtins__ scrubbed, an
+            # expression like 9**9**9 would block the UI on a huge BigInt
+            # computation.
+            if "**" in self._expression:
+                self.display.SetValue("Error")
+                self._expression = ""
+                return
             allowed = set("0123456789.+-*/() ")
             expr = self._expression
             if not all(c in allowed for c in expr):

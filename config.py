@@ -70,7 +70,11 @@ LLM_CONFIG_PATH = DATA_DIR / "llm_config.json"
 
 
 def load_llm_config():
-    """Load runtime LLM config from JSON file, falling back to env/defaults."""
+    """Load runtime LLM config from JSON file, falling back to env/defaults.
+
+    A corrupted (truncated, hand-edited, partially-written) JSON file used to
+    crash the app at launch. We now log a warning and fall back to defaults.
+    """
     import json
     config = {
         "api_key": OPENROUTER_API_KEY,
@@ -79,20 +83,41 @@ def load_llm_config():
         "max_tokens": LLM_MAX_TOKENS,
     }
     if LLM_CONFIG_PATH.exists():
-        with open(LLM_CONFIG_PATH) as f:
-            overrides = json.load(f)
-        config.update({k: v for k, v in overrides.items() if v})
+        try:
+            with open(LLM_CONFIG_PATH) as f:
+                overrides = json.load(f)
+            if not isinstance(overrides, dict):
+                raise ValueError("llm_config.json is not a JSON object")
+            config.update({k: v for k, v in overrides.items() if v})
+        except (ValueError, OSError) as exc:
+            # Avoid importing services.log here to keep config.py importable
+            # before the data dir exists. stderr is acceptable for startup.
+            import sys
+            print(f"[warn] Could not parse {LLM_CONFIG_PATH}: {exc}; "
+                  "falling back to env/defaults.", file=sys.stderr)
     return config
 
 
 def save_llm_config(api_key=None, base_url=None, model=None, max_tokens=None):
-    """Persist runtime LLM settings to JSON."""
+    """Persist runtime LLM settings to JSON.
+
+    Writes atomically (temp file + os.replace) so an interrupted save can't
+    corrupt the file. Restricts permissions to 0600 so other local users
+    can't read the API key.
+    """
     import json
+    import os
     LLM_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     data = {}
     if LLM_CONFIG_PATH.exists():
-        with open(LLM_CONFIG_PATH) as f:
-            data = json.load(f)
+        try:
+            with open(LLM_CONFIG_PATH) as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                data = loaded
+        except (ValueError, OSError):
+            # Treat corrupted input as empty; we're about to overwrite anyway.
+            data = {}
     if api_key is not None:
         data["api_key"] = api_key
     if base_url is not None:
@@ -101,5 +126,13 @@ def save_llm_config(api_key=None, base_url=None, model=None, max_tokens=None):
         data["model"] = model
     if max_tokens is not None:
         data["max_tokens"] = max_tokens
-    with open(LLM_CONFIG_PATH, "w") as f:
+
+    tmp_path = LLM_CONFIG_PATH.with_suffix(LLM_CONFIG_PATH.suffix + ".tmp")
+    with open(tmp_path, "w") as f:
         json.dump(data, f, indent=2)
+    os.replace(tmp_path, LLM_CONFIG_PATH)
+    try:
+        os.chmod(LLM_CONFIG_PATH, 0o600)
+    except OSError:
+        # Best-effort on platforms (e.g. Windows) where chmod semantics differ.
+        pass

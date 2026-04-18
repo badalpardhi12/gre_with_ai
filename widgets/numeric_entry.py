@@ -1,7 +1,18 @@
 """
 Numeric entry widget — allows decimal or fraction input for GRE quant questions.
 """
+import math
+import re
+
 import wx
+
+
+# Allow optional sign + digits only — no e/E, decimal points, or whitespace.
+_INT_LITERAL = re.compile(r"^[+-]?\d+$")
+
+
+def _is_int_literal(s: str) -> bool:
+    return bool(_INT_LITERAL.match(s))
 
 
 class NumericEntry(wx.Panel):
@@ -53,6 +64,10 @@ class NumericEntry(wx.Panel):
             num = self.num_ctrl.GetValue().strip()
             den = self.den_ctrl.GetValue().strip()
             if num and den:
+                # Reject anything but a decimal integer (no scientific
+                # notation, decimals, or other surprises in num/den).
+                if not _is_int_literal(num) or not _is_int_literal(den):
+                    return {}
                 try:
                     n, d = int(num), int(den)
                     if d == 0:
@@ -65,10 +80,12 @@ class NumericEntry(wx.Panel):
             val = self.value_ctrl.GetValue().strip()
             if val:
                 try:
-                    float(val)  # validate
-                    return {"value": val}
+                    parsed = float(val)
                 except ValueError:
-                    pass
+                    return {}
+                if not math.isfinite(parsed):
+                    return {}
+                return {"value": val}
             return {}
 
     def set_response(self, payload):

@@ -15,10 +15,14 @@ class AnswerChatDialog(wx.Dialog):
     """Modal dialog with a chat interface scoped to a single question."""
 
     def __init__(self, parent, q_data, user_response=None):
-        super().__init__(parent, title="Ask AI Tutor", size=(720, 600),
-                         style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        super().__init__(
+            parent, title="Ask AI Tutor",
+            size=(ui_scale.font_size(720), ui_scale.font_size(600)),
+            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
+        )
         self.q_data = q_data
         self.chat = AnswerChat(q_data, user_response)
+        self._pending_placeholder_pos = None
         self._build_ui()
 
     def _build_ui(self):
@@ -90,6 +94,10 @@ class AnswerChatDialog(wx.Dialog):
             return
         self.input.SetValue("")
         self._append("You", message)
+        # Track the start position of the placeholder so we can replace just
+        # those characters when the reply arrives — robust to multi-message
+        # bursts and to user input that happens to end with the same string.
+        self._pending_placeholder_pos = self.history_view.GetLastPosition()
         self._append("Tutor", "(thinking...)")
         self.send_btn.Disable()
         # Run in a thread so UI doesn't freeze
@@ -104,10 +112,10 @@ class AnswerChatDialog(wx.Dialog):
         wx.CallAfter(self._receive_reply, reply)
 
     def _receive_reply(self, reply):
-        # Remove the "(thinking...)" line and append actual reply
-        text = self.history_view.GetValue()
-        if text.endswith("Tutor: (thinking...)"):
-            text = text[:-len("Tutor: (thinking...)")].rstrip("\n")
-            self.history_view.SetValue(text)
+        # Remove the placeholder by character range, not string suffix match.
+        if self._pending_placeholder_pos is not None:
+            end = self.history_view.GetLastPosition()
+            self.history_view.Replace(self._pending_placeholder_pos, end, "")
+            self._pending_placeholder_pos = None
         self._append("Tutor", reply)
         self.send_btn.Enable()

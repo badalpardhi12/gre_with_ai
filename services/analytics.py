@@ -1,6 +1,7 @@
 """
 Analytics service — per-question telemetry, pacing, and diagnostics.
 """
+import json
 from collections import defaultdict
 from datetime import datetime
 
@@ -19,7 +20,7 @@ class AnalyticsService:
         TelemetryEvent.create(
             session=session_id,
             event_type=event_type,
-            event_payload=str(payload or {}),
+            event_payload=json.dumps(payload or {}),
             created_at=datetime.now(),
         )
 

@@ -115,13 +115,16 @@ def new_cards(user_id: str = "local", limit: int = 20,
         tier_filter: if given, only return words at this frequency_tier (1=most common)
     """
     from peewee import fn
-    # Subquery: word IDs already reviewed by this user
-    reviewed_q = (FlashcardReview.select(FlashcardReview.word_id)
-                  .where(FlashcardReview.user_id == user_id))
-    reviewed_ids = [r.word_id for r in reviewed_q]
+    # NOT EXISTS subquery instead of `id NOT IN (...long list...)` so we don't
+    # blow past SQLite's 999-parameter limit once the user has reviewed many
+    # words.
+    reviewed_subq = (FlashcardReview
+                     .select(FlashcardReview.word_id)
+                     .where((FlashcardReview.user_id == user_id) &
+                            (FlashcardReview.word_id == VocabWord.id)))
 
     query = (VocabWord.select()
-             .where(VocabWord.id.not_in(reviewed_ids))
+             .where(~fn.EXISTS(reviewed_subq))
              .where(VocabWord.definition != "")
              .where(VocabWord.definition.is_null(False)))
 

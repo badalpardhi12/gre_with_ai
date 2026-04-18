@@ -9,9 +9,29 @@ and are not invoked from the running app.
 import json
 import threading
 
+import httpx
 from openai import OpenAI
 
 from config import load_llm_config
+from services.log import get_logger
+
+logger = get_logger("llm_service")
+
+
+# Connection-level (DNS + TCP) is short; reads are slow because long generations
+# (study-plan, mistake-coach) can take 30-90 seconds. Tuning these values alone
+# is the difference between a stuck UI and a friendly error toast.
+DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=180.0, write=10.0, pool=10.0)
+
+
+def _wx_call_after(callback, *args):
+    """Invoke `callback(*args)` on the wx main thread when wx is available;
+    fall back to a direct call so non-GUI tests can use call_async too."""
+    try:
+        import wx
+        wx.CallAfter(callback, *args)
+    except Exception:
+        callback(*args)
 
 
 class LLMService:
@@ -33,6 +53,7 @@ class LLMService:
             self._client = OpenAI(
                 api_key=api_key,
                 base_url=config.get("base_url", "https://openrouter.ai/api/v1"),
+                timeout=DEFAULT_TIMEOUT,
             )
             self._config = config
         return self._client, config
@@ -83,8 +104,9 @@ class LLMService:
 
     def call_async(self, system_prompt, user_prompt, callback,
                    max_tokens=None, parse_json=False, model=None):
-        """Non-blocking single-turn call. callback(result, error) fires from
-        worker thread; wrap GUI updates in wx.CallAfter."""
+        """Non-blocking single-turn call. callback(result, error) fires on the
+        wx main thread (when wx is available) so callers may update GUI
+        directly without their own wx.CallAfter."""
         def worker():
             try:
                 if parse_json:
@@ -93,9 +115,10 @@ class LLMService:
                 else:
                     result = self.generate(system_prompt, user_prompt,
                                            max_tokens, model)
-                callback(result, None)
+                _wx_call_after(callback, result, None)
             except Exception as e:
-                callback(None, e)
+                logger.exception("call_async failed")
+                _wx_call_after(callback, None, e)
 
         thread = threading.Thread(target=worker, daemon=True)
         thread.start()
@@ -103,13 +126,17 @@ class LLMService:
 
     def chat_async(self, system_prompt, messages, callback,
                    max_tokens=None, model=None):
-        """Non-blocking multi-turn chat call."""
+        """Non-blocking multi-turn chat call.
+
+        callback(result, error) fires on the wx main thread.
+        """
         def worker():
             try:
                 result = self.chat(system_prompt, messages, max_tokens, model)
-                callback(result, None)
+                _wx_call_after(callback, result, None)
             except Exception as e:
-                callback(None, e)
+                logger.exception("chat_async failed")
+                _wx_call_after(callback, None, e)
 
         thread = threading.Thread(target=worker, daemon=True)
         thread.start()

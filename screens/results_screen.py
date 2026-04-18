@@ -3,12 +3,15 @@ Results screen — displays final scores with section breakdown and per-question
 """
 import wx
 
+from widgets.theme import Color
+
 
 class ResultsScreen(wx.Panel):
     """Post-exam results display with scores, breakdown, and question review."""
 
     def __init__(self, parent):
         super().__init__(parent)
+        self.SetBackgroundColour(Color.BG_PAGE)
         self._on_home = None
         self._question_details = []
         self._build_ui()
@@ -85,19 +88,19 @@ class ResultsScreen(wx.Panel):
     def _create_score_card(self, title, score_text):
         """Create a score display card."""
         panel = wx.Panel(self, style=wx.BORDER_SIMPLE)
-        panel.SetBackgroundColour(wx.Colour(245, 245, 250))
+        panel.SetBackgroundColour(Color.BG_SURFACE)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
         label = wx.StaticText(panel, label=title)
         label.SetFont(wx.Font(11, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                                wx.FONTWEIGHT_BOLD))
-        label.SetForegroundColour(wx.Colour(60, 60, 60))
+        label.SetForegroundColour(Color.TEXT_SECONDARY)
         sizer.Add(label, 0, wx.ALIGN_CENTER | wx.TOP, 12)
 
         score = wx.StaticText(panel, label=score_text, name="score_value")
         score.SetFont(wx.Font(28, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                                wx.FONTWEIGHT_BOLD))
-        score.SetForegroundColour(wx.Colour(25, 80, 160))
+        score.SetForegroundColour(Color.ACCENT)
         sizer.Add(score, 0, wx.ALIGN_CENTER | wx.ALL, 8)
 
         panel.SetSizer(sizer)
@@ -169,12 +172,12 @@ class ResultsScreen(wx.Panel):
             correct = q.get("is_correct")
             if correct is True:
                 self.detail_list.SetItem(idx, 3, "✓ Correct")
-                self.detail_list.SetItemBackgroundColour(idx, wx.Colour(230, 255, 230))
-                self.detail_list.SetItemTextColour(idx, wx.Colour(0, 0, 0))
+                self.detail_list.SetItemBackgroundColour(idx, Color.MASTERY[4])
+                self.detail_list.SetItemTextColour(idx, Color.TEXT_INVERSE)
             elif correct is False:
                 self.detail_list.SetItem(idx, 3, "✗ Incorrect")
-                self.detail_list.SetItemBackgroundColour(idx, wx.Colour(255, 235, 235))
-                self.detail_list.SetItemTextColour(idx, wx.Colour(0, 0, 0))
+                self.detail_list.SetItemBackgroundColour(idx, Color.MASTERY[1])
+                self.detail_list.SetItemTextColour(idx, Color.TEXT_PRIMARY)
             else:
                 self.detail_list.SetItem(idx, 3, "— Unanswered")
 

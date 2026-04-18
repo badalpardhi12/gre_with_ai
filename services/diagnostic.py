@@ -123,36 +123,39 @@ def grade_diagnostic(question_ids: list, responses: dict,
     per_topic = defaultdict(lambda: {"attempted": 0, "correct": 0})
     per_subtopic = defaultdict(lambda: {"attempted": 0, "correct": 0})
 
-    for qid in question_ids:
-        q = Question.get_or_none(Question.id == qid)
-        if not q:
-            continue
-        resp = responses.get(qid) or responses.get(str(qid))
-        if not resp:
-            continue
+    # Wrap the scoring + mastery-update pass so a partial diagnostic doesn't
+    # leave half-updated MasteryRecord rows.
+    with db.atomic():
+        for qid in question_ids:
+            q = Question.get_or_none(Question.id == qid)
+            if not q:
+                continue
+            resp = responses.get(qid) or responses.get(str(qid))
+            if not resp:
+                continue
 
-        # Build q_data for scoring
-        from services.question_bank import QuestionBankService
-        qb = QuestionBankService()
-        q_data = qb.get_question(qid)
-        if not q_data:
-            continue
+            # Build q_data for scoring
+            from services.question_bank import QuestionBankService
+            qb = QuestionBankService()
+            q_data = qb.get_question(qid)
+            if not q_data:
+                continue
 
-        is_correct = ScoringEngine.check_answer(q_data, resp)
+            is_correct = ScoringEngine.check_answer(q_data, resp)
 
-        topic_key = q.topic or "unknown"
-        per_topic[topic_key]["attempted"] += 1
-        if is_correct:
-            per_topic[topic_key]["correct"] += 1
-
-        if q.subtopic:
-            per_subtopic[q.subtopic]["attempted"] += 1
+            topic_key = q.topic or "unknown"
+            per_topic[topic_key]["attempted"] += 1
             if is_correct:
-                per_subtopic[q.subtopic]["correct"] += 1
+                per_topic[topic_key]["correct"] += 1
 
-        # Update mastery
-        from services.mastery import update_mastery
-        update_mastery(q.subtopic, is_correct, q.difficulty_target, user_id)
+            if q.subtopic:
+                per_subtopic[q.subtopic]["attempted"] += 1
+                if is_correct:
+                    per_subtopic[q.subtopic]["correct"] += 1
+
+            # Update mastery
+            from services.mastery import update_mastery
+            update_mastery(q.subtopic, is_correct, q.difficulty_target, user_id)
 
     # Compute scores per topic (accuracy)
     scores_per_topic = {

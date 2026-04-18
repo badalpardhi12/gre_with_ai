@@ -3,12 +3,15 @@ Review screen — shows all questions in the current section with status.
 """
 import wx
 
+from widgets.theme import Color
+
 
 class ReviewScreen(wx.Panel):
     """Section review: list all questions with answered/marked status."""
 
     def __init__(self, parent):
         super().__init__(parent)
+        self.SetBackgroundColour(Color.BG_PAGE)
         self._on_goto = None
         self._on_return = None
         self._on_end_section = None
@@ -50,7 +53,7 @@ class ReviewScreen(wx.Panel):
         btn_sizer.Add(self.return_btn, 0, wx.ALL, 8)
 
         self.end_btn = wx.Button(self, label="End Section")
-        self.end_btn.SetBackgroundColour(wx.Colour(200, 60, 60))
+        self.end_btn.SetBackgroundColour(Color.DANGER)
         self.end_btn.SetForegroundColour(wx.WHITE)
         self.end_btn.Bind(wx.EVT_BUTTON, self._on_end_click)
         btn_sizer.Add(self.end_btn, 0, wx.ALL, 8)
@@ -73,7 +76,7 @@ class ReviewScreen(wx.Panel):
             status = "Answered" if item["answered"] else "Not Answered"
             self.list_ctrl.SetItem(idx, 1, status)
             if not item["answered"]:
-                self.list_ctrl.SetItemBackgroundColour(idx, wx.Colour(255, 240, 240))
+                self.list_ctrl.SetItemBackgroundColour(idx, Color.MASTERY[1])
 
             marked = "★ Marked" if item["marked"] else ""
             self.list_ctrl.SetItem(idx, 2, marked)

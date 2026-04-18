@@ -194,25 +194,35 @@ class QuestionScreen(wx.Panel):
         self._measure = measure
         self._mode = mode
 
-        # Section label — extract numeric section index from SECTION_META
+        # Section label — extract numeric section index from SECTION_META.
+        # SectionState may carry a `display_label` override (set by mixed
+        # drills like Quick Drill where one section spans both measures);
+        # honour it so the header doesn't lie about the section's type.
         labels = {
             "verbal": "Verbal Reasoning",
             "quant": "Quantitative Reasoning",
         }
-        section_lbl = labels.get(measure, measure.title())
         sec_type = section_state.section_type
         from models.exam_session import SECTION_META
         _, sec_idx, _, _ = SECTION_META[sec_type]
-        self.section_label.SetLabel(f"{section_lbl} — Section {sec_idx}")
+        if getattr(section_state, "display_label", None):
+            self.section_label.SetLabel(section_state.display_label)
+        else:
+            section_lbl = labels.get(measure, measure.title())
+            self.section_label.SetLabel(f"{section_lbl} — Section {sec_idx}")
 
         # Timer
         self.timer.set_time(section_state.time_limit)
         self.timer.set_on_expire(self._handle_time_expire)
         self.timer.set_on_tick(lambda elapsed: section_state.tick(elapsed))
 
-        # Calculator visibility
+        # Calculator visibility — defaults to the section's measure;
+        # mixed drills override per question in _load_question.
         is_quant = measure == "quant"
         self.calc_btn.Show(is_quant)
+        # Track whether this section mixes measures; cheaper to compute
+        # once than to re-detect on every navigation.
+        self._mixed_section = bool(getattr(section_state, "display_label", None))
 
         # Learning mode controls
         self.show_answer_btn.Show(mode == "learning")
@@ -263,10 +273,23 @@ class QuestionScreen(wx.Panel):
 
         self._current_q = q
 
-        # Update header
-        self.question_label.SetLabel(
-            f"Question {index + 1} of {ss.total_questions}"
-        )
+        # In a mixed-measure section (Quick Drill) toggle calc-button
+        # visibility per question and prepend the measure to the
+        # question label so the user always knows which side they're on.
+        if getattr(self, "_mixed_section", False):
+            q_measure = (q.get("measure") or "").lower()
+            self.calc_btn.Show(q_measure == "quant")
+            measure_tag = "Verbal" if q_measure == "verbal" else (
+                "Quant" if q_measure == "quant" else q_measure.title()
+            )
+            self.question_label.SetLabel(
+                f"{measure_tag} • Question {index + 1} of {ss.total_questions}"
+            )
+            self.Layout()
+        else:
+            self.question_label.SetLabel(
+                f"Question {index + 1} of {ss.total_questions}"
+            )
 
         # Subtype display
         subtype_names = {

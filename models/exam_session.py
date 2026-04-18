@@ -60,6 +60,11 @@ class SectionState:
         self.ended_at = None
         self._per_question_time = {}  # question_id -> seconds spent
         self._last_question_tick = None  # timestamp of last tick for current question
+        # Optional override for the section header — set on Quick Drill
+        # (which mixes verbal+quant) so the screen doesn't claim the
+        # whole section is one measure when it isn't. None = derive from
+        # SECTION_META as before.
+        self.display_label = None
 
     @property
     def total_questions(self):

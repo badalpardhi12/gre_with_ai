@@ -133,11 +133,34 @@ class InstructionsScreen(wx.Panel):
 
         self.SetSizer(main_sizer)
 
-    def set_section(self, section_type):
-        """Configure for a specific section."""
+    def set_section(self, section_type, section_state=None):
+        """Configure for a specific section.
+
+        When `section_state` carries a `display_label` (mixed Quick
+        Drill), the screen overrides the canonical title and body so
+        the user doesn't see "Verbal Reasoning — Section 1" before a
+        drill that actually mixes both measures.
+        """
         info = SECTION_INSTRUCTIONS.get(section_type, {})
-        self.title_label.SetLabel(info.get("title", "Section"))
-        self.body_text.SetLabel(info.get("body", ""))
+        title = info.get("title", "Section")
+        body = info.get("body", "")
+        override = section_state and getattr(section_state, "display_label", None)
+        if override:
+            title = override
+            n = len(getattr(section_state, "question_ids", []) or []) or 10
+            mins = max(1, getattr(section_state, "time_limit", 0) // 60)
+            body = (
+                f"This drill contains {n} questions targeting your weak areas. "
+                f"You have ~{mins} minutes.\n\n"
+                "Questions are mixed across Verbal Reasoning and Quantitative "
+                "Reasoning. Each question's measure (Verbal / Quant) is shown "
+                "above it; the on-screen calculator appears only on quant "
+                "questions.\n\n"
+                "You may navigate freely within this drill, mark questions for "
+                "review, and end the drill at any time."
+            )
+        self.title_label.SetLabel(title)
+        self.body_text.SetLabel(body)
         self.body_text.Wrap(ui_scale.font_size(700))
         self.Layout()
 

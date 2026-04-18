@@ -64,6 +64,16 @@ class Question(BaseModel):
                                      constraints=[Check("difficulty_target BETWEEN 1 AND 5")])
     time_target_seconds = IntegerField(default=90)
     concept_tags = TextField(default="[]")  # JSON list of tags
+
+    # NEW: Taxonomy-aware fields (Phase 0 schema upgrade)
+    topic = CharField(default="", index=True)       # e.g. "algebra", "reading_comprehension"
+    subtopic = CharField(default="", index=True)    # e.g. "linear_equations_systems"
+    question_type = CharField(default="")           # for RC: "main_idea", "inference", etc.
+    source = CharField(default="imported")          # kaplan_2024 | princeton_2012 |
+                                                    # ai_generated | ets_official | seed
+    quality_score = FloatField(null=True)           # LLM-validated quality 0-1
+    mastery_difficulty = FloatField(null=True)      # IRT-style difficulty -3 to +3
+
     provenance = CharField(default="imported",
                            choices=[
                                ("expert", "Expert-authored"),
@@ -283,16 +293,125 @@ class ItemStats(BaseModel):
     updated_at = DateTimeField(default=datetime.now)
 
 
-# ── Vocabulary (for TC/SE generation) ─────────────────────────────────
+# ── Vocabulary (for TC/SE generation + flashcard module) ─────────────
 
 class VocabWord(BaseModel):
-    """GRE vocabulary word for TC/SE question generation."""
+    """GRE vocabulary word for TC/SE question generation + flashcard study."""
     id = AutoField()
     word = CharField(unique=True)
+    part_of_speech = CharField(default="")
     definition = TextField(default="")
-    source = CharField(default="")  # gregmat, magoosh, barrons, etc.
+    source = CharField(default="")  # gregmat, magoosh, barrons, kaplan, etc.
     difficulty = IntegerField(default=3,
                               constraints=[Check("difficulty BETWEEN 1 AND 5")])
+
+    # NEW: Phase 4 vocab module
+    frequency_tier = IntegerField(default=2)        # 1=must-know, 2=common, 3=rare
+    example_sentences = TextField(default="[]")     # JSON list of sentences
+    synonyms = TextField(default="[]")              # JSON list
+    antonyms = TextField(default="[]")              # JSON list
+    root_analysis = TextField(default="")           # plain text
+    mnemonic = TextField(default="")                # memorable hook
+    theme_tags = TextField(default="[]")            # JSON list of theme labels
+    audio_url = CharField(default="")               # optional pronunciation URL
+
+    def get_examples(self):
+        return json.loads(self.example_sentences) if self.example_sentences else []
+
+    def get_synonyms(self):
+        return json.loads(self.synonyms) if self.synonyms else []
+
+    def get_themes(self):
+        return json.loads(self.theme_tags) if self.theme_tags else []
+
+
+class VocabRoot(BaseModel):
+    """Latin/Greek root for vocab word grouping (from Kaplan Appendix B)."""
+    id = AutoField()
+    root = CharField(unique=True)
+    language = CharField(default="latin")  # latin, greek, other
+    meaning = TextField()
+    example_words = TextField(default="[]")  # JSON list of GRE words using this root
+
+    def get_example_words(self):
+        return json.loads(self.example_words) if self.example_words else []
+
+
+class FlashcardReview(BaseModel):
+    """SRS scheduling state for a single user-word pair."""
+    id = AutoField()
+    word = ForeignKeyField(VocabWord, backref="reviews", on_delete="CASCADE")
+    user_id = CharField(default="local")  # single-user app for now
+    review_count = IntegerField(default=0)
+    ease_factor = FloatField(default=2.5)         # SM-2 ease
+    interval_days = IntegerField(default=1)
+    stability = FloatField(default=1.0)           # FSRS stability
+    difficulty = FloatField(default=5.0)          # FSRS difficulty 0-10
+    last_response = IntegerField(null=True)       # 1=again, 2=hard, 3=good, 4=easy
+    last_reviewed_at = DateTimeField(null=True)
+    next_review_at = DateTimeField(default=datetime.now)
+    created_at = DateTimeField(default=datetime.now)
+
+
+# ── Lessons ──────────────────────────────────────────────────────────
+
+class Lesson(BaseModel):
+    """One per-subtopic lesson, generated from textbook content."""
+    id = AutoField()
+    subtopic = CharField(unique=True, index=True)  # e.g. "linear_equations_systems"
+    measure = CharField()  # quant | verbal | strategy
+    title = CharField()
+    body_html = TextField()                 # full lesson HTML (math via KaTeX)
+    examples_json = TextField(default="[]") # JSON list of worked examples
+    formulas_json = TextField(default="[]") # JSON list of key formulas
+    pitfalls_json = TextField(default="[]") # JSON list of common pitfalls
+    source = CharField(default="generated") # generated | kaplan | princeton | hand_written
+    created_at = DateTimeField(default=datetime.now)
+    updated_at = DateTimeField(default=datetime.now)
+
+
+# ── Mastery & Personalization ───────────────────────────────────────
+
+class MasteryRecord(BaseModel):
+    """Per-user, per-subtopic mastery tracking."""
+    id = AutoField()
+    user_id = CharField(default="local")
+    subtopic = CharField(index=True)
+    attempts = IntegerField(default=0)
+    correct = IntegerField(default=0)
+    mastery_score = FloatField(default=0.0)  # 0-1, EWMA of weighted accuracy
+    last_attempt_at = DateTimeField(null=True)
+    last_updated_at = DateTimeField(default=datetime.now)
+
+    class Meta:
+        indexes = (
+            (("user_id", "subtopic"), True),
+        )
+
+
+class StudyPlan(BaseModel):
+    """AI-generated study plan for a user."""
+    id = AutoField()
+    user_id = CharField(default="local")
+    target_score = IntegerField()           # target combined Q+V (260-340)
+    test_date = DateTimeField()
+    hours_per_week = IntegerField(default=10)
+    plan_json = TextField(default="{}")      # week-by-week schedule
+    created_at = DateTimeField(default=datetime.now)
+    last_replanned_at = DateTimeField(default=datetime.now)
+    is_active = BooleanField(default=True)
+
+
+class DiagnosticResult(BaseModel):
+    """User's diagnostic test results - feeds study plan generator."""
+    id = AutoField()
+    user_id = CharField(default="local")
+    session_id = IntegerField(null=True)  # link to Session if used the test infra
+    scores_per_topic_json = TextField(default="{}")   # {topic: accuracy}
+    weakness_ranking_json = TextField(default="[]")   # ordered list of weakest subtopics
+    predicted_verbal_band = CharField(default="")     # e.g. "150-160"
+    predicted_quant_band = CharField(default="")
+    completed_at = DateTimeField(default=datetime.now)
 
 
 # ── Database initialization ──────────────────────────────────────────
@@ -302,7 +421,10 @@ ALL_TABLES = [
     Session, SectionResult, Response,
     ScoringResult,
     AWAPrompt, AWASubmission, AWAResult,
-    TelemetryEvent, ItemStats, VocabWord,
+    TelemetryEvent, ItemStats,
+    VocabWord, VocabRoot, FlashcardReview,
+    Lesson,
+    MasteryRecord, StudyPlan, DiagnosticResult,
 ]
 
 

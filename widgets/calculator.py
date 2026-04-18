@@ -22,7 +22,26 @@ class CalculatorWidget(wx.Panel):
 
     def __init__(self, parent):
         super().__init__(parent, style=wx.BORDER_SIMPLE)
-        self.SetBackgroundColour(wx.Colour(240, 240, 240))
+
+        # Theme adaptation — match macOS appearance
+        appearance = wx.SystemSettings.GetAppearance()
+        is_dark = appearance.IsDark()
+        if is_dark:
+            bg = wx.Colour(45, 45, 45)
+            display_bg = wx.Colour(25, 25, 25)
+            display_fg = wx.Colour(245, 245, 245)
+            btn_bg = wx.Colour(70, 70, 70)
+            btn_fg = wx.Colour(240, 240, 240)
+            op_btn_bg = wx.Colour(95, 95, 95)
+        else:
+            bg = wx.Colour(240, 240, 240)
+            display_bg = wx.Colour(255, 255, 255)
+            display_fg = wx.Colour(20, 20, 20)
+            btn_bg = wx.Colour(255, 255, 255)
+            btn_fg = wx.Colour(30, 30, 30)
+            op_btn_bg = wx.Colour(220, 220, 220)
+
+        self.SetBackgroundColour(bg)
 
         self._expression = ""
         self._memory = 0.0
@@ -32,6 +51,12 @@ class CalculatorWidget(wx.Panel):
         self.display.SetFont(wx.Font(14, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL,
                                       wx.FONTWEIGHT_NORMAL))
         self.display.SetValue("0")
+        self.display.SetBackgroundColour(display_bg)
+        self.display.SetForegroundColour(display_fg)
+
+        # Operator buttons get distinct color
+        op_labels = {"÷", "×", "−", "+", "=", "√", "(", ")", ".", "±"}
+        memory_labels = {"MR", "MC", "M+", "C"}
 
         # Button grid
         grid = wx.GridSizer(rows=len(self.BUTTONS), cols=4, hgap=2, vgap=2)
@@ -41,11 +66,19 @@ class CalculatorWidget(wx.Panel):
                 btn = wx.Button(self, label=label, size=(48, 36))
                 btn.SetFont(wx.Font(11, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                                      wx.FONTWEIGHT_NORMAL))
+                # Color: operators and memory get distinct background
+                if label in op_labels or label in memory_labels:
+                    btn.SetBackgroundColour(op_btn_bg)
+                else:
+                    btn.SetBackgroundColour(btn_bg)
+                btn.SetForegroundColour(btn_fg)
                 btn.Bind(wx.EVT_BUTTON, lambda e, l=label: self._on_button(l))
                 grid.Add(btn, 0, wx.EXPAND)
 
         # Transfer button — allows copying result to numeric entry
         self.transfer_btn = wx.Button(self, label="Transfer Display")
+        self.transfer_btn.SetBackgroundColour(op_btn_bg)
+        self.transfer_btn.SetForegroundColour(btn_fg)
         self.transfer_btn.Bind(wx.EVT_BUTTON, self._on_transfer)
         self._on_transfer_callback = None
 

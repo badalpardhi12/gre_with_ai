@@ -2,10 +2,19 @@
 Math rendering widget using wx.html2.WebView and KaTeX (or MathJax fallback).
 Displays formatted math expressions and rich HTML content.
 """
+from pathlib import Path
+
 import wx
 import wx.html2
 
 from config import RESOURCES_DIR
+from widgets import ui_scale
+
+
+# Base URL for the WebView so file:// images (e.g. DI charts in data/images/)
+# resolve when SetPage loads inline HTML.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_BASE_URL = PROJECT_ROOT.as_uri() + "/"
 
 
 # Minimal KaTeX CSS/JS served locally. If KaTeX files are not bundled,
@@ -35,39 +44,77 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <style>
 body {{
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    font-size: 15px;
+    font-size: {font_size}px;
     line-height: 1.6;
-    color: #333;
-    padding: 12px 16px;
+    color: #e8e8e8;
+    padding: 14px 18px;
     margin: 0;
-    background: #fff;
+    background: #1e1e1e;
 }}
 .passage {{
-    border-left: 3px solid #2196F3;
+    border-left: 3px solid #4FC3F7;
     padding-left: 16px;
     margin-bottom: 16px;
-    color: #555;
+    color: #c0c0c0;
 }}
 .prompt {{
     font-weight: 500;
+    color: #ffffff;
     margin-bottom: 12px;
 }}
 .highlight {{
-    background-color: #fff3cd;
+    background-color: #4a3f1c;
+    color: #ffeaa7;
     padding: 2px 4px;
     border-radius: 3px;
 }}
 table {{
     border-collapse: collapse;
     margin: 12px 0;
+    color: #e8e8e8;
 }}
 th, td {{
-    border: 1px solid #ccc;
+    border: 1px solid #444;
     padding: 6px 12px;
     text-align: center;
 }}
 th {{
-    background: #f0f0f0;
+    background: #2a2a2a;
+    color: #ffffff;
+}}
+.answer-correct {{
+    background: #1b3a1b;
+    border-left: 3px solid #4caf50;
+    padding: 10px 14px;
+    margin: 8px 0 12px 0;
+    border-radius: 3px;
+    color: #c8e6c9;
+    font-size: 16px;
+}}
+.answer-correct strong {{
+    color: #81c784;
+}}
+.explanation {{
+    background: #252525;
+    border-left: 3px solid #4FC3F7;
+    padding: 10px 14px;
+    margin: 8px 0;
+    border-radius: 3px;
+    color: #d4d4d4;
+}}
+.explanation h3 {{
+    margin: 0 0 8px 0;
+    font-size: 14px;
+    color: #4FC3F7;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}}
+.explanation p {{
+    margin: 6px 0;
+}}
+/* KaTeX should inherit color */
+.katex {{
+    color: inherit;
 }}
 </style>
 </head>
@@ -79,7 +126,6 @@ document.addEventListener("DOMContentLoaded", function() {{
         renderMathInElement(document.body, {{
             delimiters: [
                 {{left: "$$", right: "$$", display: true}},
-                {{left: "$", right: "$", display: false}},
                 {{left: "\\\\(", right: "\\\\)", display: false}},
                 {{left: "\\\\[", right: "\\\\]", display: true}}
             ],
@@ -115,8 +161,9 @@ class MathView(wx.Panel):
             katex_js=KATEX_JS,
             katex_auto=KATEX_AUTO,
             content=html_body,
+            font_size=ui_scale.get_dashboard_html_font_pt(),
         )
-        self.webview.SetPage(full_html, "")
+        self.webview.SetPage(full_html, PROJECT_BASE_URL)
 
     def set_passage(self, passage_html):
         """Display a reading comprehension passage."""

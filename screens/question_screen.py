@@ -30,6 +30,7 @@ class QuestionScreen(wx.Panel):
         # Callbacks
         self._on_end_section = None
         self._on_time_expire = None
+        self._on_exit_to_dashboard = None
 
         # Answer controls we create dynamically
         self._answer_controls = []
@@ -106,6 +107,12 @@ class QuestionScreen(wx.Panel):
         self._calc_panel.Hide()
         main_sizer.Add(self._calc_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
 
+        # ── Inline explanation panel (Learning mode + Show Answer) ────
+        self._explanation_panel = MathView(self, size=(-1, 240))
+        self._explanation_panel.Hide()
+        main_sizer.Add(self._explanation_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 6)
+        self._explanation_visible = False
+
         # ── Bottom bar: navigation ────────────────────────────────────
         bottom_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
@@ -122,6 +129,12 @@ class QuestionScreen(wx.Panel):
         self.show_answer_btn.Bind(wx.EVT_BUTTON, self._on_show_answer)
         self.show_answer_btn.Hide()
         bottom_sizer.Add(self.show_answer_btn, 0, wx.ALL, 4)
+
+        # Learning mode: ask AI tutor button (only shown after answer revealed)
+        self.ask_tutor_btn = wx.Button(self, label="🤖 Ask AI Tutor")
+        self.ask_tutor_btn.Bind(wx.EVT_BUTTON, self._on_ask_tutor)
+        self.ask_tutor_btn.Hide()
+        bottom_sizer.Add(self.ask_tutor_btn, 0, wx.ALL, 4)
 
         bottom_sizer.AddStretchSpacer()
 
@@ -141,6 +154,10 @@ class QuestionScreen(wx.Panel):
         self.end_btn.Bind(wx.EVT_BUTTON, self._on_end_section_click)
         bottom_sizer.Add(self.end_btn, 0, wx.ALL, 4)
 
+        self.exit_btn = wx.Button(self, label="Exit to Dashboard")
+        self.exit_btn.Bind(wx.EVT_BUTTON, self._on_exit_clicked)
+        bottom_sizer.Add(self.exit_btn, 0, wx.ALL, 4)
+
         main_sizer.Add(bottom_sizer, 0, wx.EXPAND | wx.ALL, 4)
 
         # ── Question nav grid ────────────────────────────────────────
@@ -159,14 +176,15 @@ class QuestionScreen(wx.Panel):
         self._measure = measure
         self._mode = mode
 
-        # Section label
+        # Section label — extract numeric section index from SECTION_META
         labels = {
             "verbal": "Verbal Reasoning",
             "quant": "Quantitative Reasoning",
         }
         section_lbl = labels.get(measure, measure.title())
         sec_type = section_state.section_type
-        sec_idx = sec_type.value.split("_")[-1] if "_" in sec_type.value else "1"
+        from models.exam_session import SECTION_META
+        _, sec_idx, _, _ = SECTION_META[sec_type]
         self.section_label.SetLabel(f"{section_lbl} — Section {sec_idx}")
 
         # Timer
@@ -202,6 +220,10 @@ class QuestionScreen(wx.Panel):
         """callback()"""
         self._on_review_callback = callback
 
+    def set_on_exit_to_dashboard(self, callback):
+        """callback() — handler for exit-to-dashboard button"""
+        self._on_exit_to_dashboard = callback
+
     # ── Question Loading ──────────────────────────────────────────────
 
     def _load_question(self, index):
@@ -214,6 +236,8 @@ class QuestionScreen(wx.Panel):
         if qid is None:
             return
 
+        # Hide explanation panel when changing questions
+        self._hide_explanation()
         q = self._question_bank.get_question(qid)
         if q is None:
             self.prompt_view.set_content(f"<p><i>Question {qid} not found.</i></p>")
@@ -244,13 +268,17 @@ class QuestionScreen(wx.Panel):
         # Passage / stimulus
         if q.get("stimulus"):
             self.passage_view.set_content(q["stimulus"]["content"])
+            self.passage_panel.Show()
             if not self.content_splitter.IsSplit():
                 self.content_splitter.SplitVertically(
                     self.passage_panel, self.question_panel, 420)
                 self.content_splitter.SetMinimumPaneSize(200)
         else:
+            # Always clear stale content before unsplitting (macOS WebView caches)
+            self.passage_view.set_content("")
             if self.content_splitter.IsSplit():
                 self.content_splitter.Unsplit(self.passage_panel)
+            self.passage_panel.Hide()
 
         # Prompt
         self.prompt_view.set_content(f'<div class="prompt">{q["prompt"]}</div>')
@@ -368,7 +396,13 @@ class QuestionScreen(wx.Panel):
 
         subtype = self._current_q["subtype"]
 
-        if subtype in ("rc_single", "mcq_single", "qc", "data_interp", "rc_select_passage"):
+        if subtype == "rc_select_passage":
+            for ctrl_type, label, ctrl in self._answer_controls:
+                if ctrl.GetValue():
+                    return {"selected_sentence": label}
+            return {}
+
+        elif subtype in ("rc_single", "mcq_single", "qc", "data_interp"):
             for ctrl_type, label, ctrl in self._answer_controls:
                 if ctrl.GetValue():
                     return {"selected": [label]}
@@ -400,7 +434,12 @@ class QuestionScreen(wx.Panel):
 
         subtype = self._current_q["subtype"]
 
-        if subtype in ("rc_single", "mcq_single", "qc", "data_interp", "rc_select_passage"):
+        if subtype == "rc_select_passage":
+            sel = saved.get("selected_sentence")
+            for ct, label, ctrl in self._answer_controls:
+                ctrl.SetValue(label == sel)
+
+        elif subtype in ("rc_single", "mcq_single", "qc", "data_interp"):
             sel = saved.get("selected", [])
             for ct, label, ctrl in self._answer_controls:
                 ctrl.SetValue(label in sel)
@@ -448,22 +487,97 @@ class QuestionScreen(wx.Panel):
         self.Layout()
 
     def _on_show_answer(self, event):
-        """Learning mode: show correct answer."""
+        """Learning mode: toggle inline explanation panel."""
         if self._current_q is None:
             return
+
+        # Toggle off if already showing
+        if self._explanation_visible:
+            self._hide_explanation()
+            return
+
+        # Build correct answer text
         options = self._current_q.get("options", [])
-        correct = [f"{o['label']}) {o['text']}" for o in options if o.get("is_correct")]
+        correct_parts = []
+        for o in options:
+            if o.get("is_correct"):
+                # Strip blank prefix for display (blank1_A → A)
+                label = o["label"].split("_")[-1] if "_" in o["label"] else o["label"]
+                text = o.get("text", "")
+                if text:
+                    correct_parts.append(f"{label}) {text}")
+                else:
+                    correct_parts.append(label)
         na = self._current_q.get("numeric_answer")
         if na:
             if na.get("exact_value") is not None:
-                correct.append(str(na["exact_value"]))
+                correct_parts.append(str(na["exact_value"]))
             elif na.get("numerator") is not None:
-                correct.append(f"{na['numerator']}/{na['denominator']}")
+                correct_parts.append(f"{na['numerator']}/{na['denominator']}")
+
+        correct_html = " &nbsp; • &nbsp; ".join(self._escape_html(p) for p in correct_parts)
+
+        # Build explanation HTML
         explanation = self._current_q.get("explanation", "")
-        msg = "Correct answer(s):\n" + "\n".join(correct)
-        if explanation:
-            msg += f"\n\nExplanation:\n{explanation}"
-        wx.MessageBox(msg, "Answer", wx.OK | wx.ICON_INFORMATION, self)
+        explanation_html = self._format_explanation_html(explanation)
+
+        html = f"""
+            <div class="answer-correct">
+                <strong>Correct Answer:</strong> {correct_html}
+            </div>
+            {explanation_html}
+        """
+
+        self._explanation_panel.set_content(html)
+        self._explanation_panel.Show()
+        self._explanation_visible = True
+        self.show_answer_btn.SetLabel("Hide Answer")
+        # Show the AI Tutor button now that the answer is revealed
+        if self._mode == "learning":
+            self.ask_tutor_btn.Show()
+        self.Layout()
+
+    def _hide_explanation(self):
+        """Hide the inline explanation panel."""
+        if self._explanation_visible:
+            self._explanation_panel.Hide()
+            self._explanation_visible = False
+            self.show_answer_btn.SetLabel("Show Answer")
+            self.ask_tutor_btn.Hide()
+            self.Layout()
+
+    def _on_ask_tutor(self, _):
+        """Open the AI Tutor chat dialog scoped to this question."""
+        if not self._current_q:
+            return
+        # Get current user response if any
+        from screens.answer_chat_screen import AnswerChatDialog
+        user_resp = self._get_current_response()
+        dlg = AnswerChatDialog(self, self._current_q, user_response=user_resp)
+        dlg.ShowModal()
+        dlg.Destroy()
+
+    @staticmethod
+    def _escape_html(text):
+        return (str(text)
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;"))
+
+    def _format_explanation_html(self, explanation):
+        """Convert plain-text explanation into clean HTML paragraphs."""
+        if not explanation or not explanation.strip():
+            return ""
+        # Split on blank lines for paragraphs; preserve LaTeX intact
+        paragraphs = [p.strip() for p in explanation.split("\n\n") if p.strip()]
+        if not paragraphs:
+            paragraphs = [explanation.strip()]
+        # Each paragraph: replace single newlines with spaces, escape HTML
+        body = "".join(
+            f"<p>{self._escape_html(p).replace(chr(10), ' ')}</p>"
+            for p in paragraphs
+        )
+        return f'<div class="explanation"><h3>Explanation</h3>{body}</div>'
 
     def _on_prev(self, event):
         ss = self._section_state
@@ -501,6 +615,22 @@ class QuestionScreen(wx.Panel):
         self.timer.stop()
         if self._on_end_section:
             self._on_end_section()
+
+    def _on_exit_clicked(self, event):
+        """Exit to dashboard, abandoning the test session."""
+        dlg = wx.MessageDialog(
+            self,
+            "Exit to dashboard? Your test progress will be lost.",
+            "Exit Test?",
+            wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
+        )
+        if dlg.ShowModal() == wx.ID_YES:
+            dlg.Destroy()
+            self.timer.stop()
+            if self._on_exit_to_dashboard:
+                self._on_exit_to_dashboard()
+        else:
+            dlg.Destroy()
 
     def _handle_time_expire(self):
         self.timer.stop()

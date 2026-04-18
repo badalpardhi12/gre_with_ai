@@ -21,6 +21,17 @@ data/*.db-journal
 data/*.db-shm
 data/*.db-wal
 
+# Source ebooks and intermediate extraction artifacts (large, binary, generated)
+data/ebooks/
+data/extracted/
+data/images/
+data/llm_config.json
+
+# Coverage / profiling artifacts
+*.profraw
+*.profdata
+.coverage
+
 # Environment
 .env
 .env.local

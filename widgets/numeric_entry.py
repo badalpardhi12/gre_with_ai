@@ -54,7 +54,10 @@ class NumericEntry(wx.Panel):
             den = self.den_ctrl.GetValue().strip()
             if num and den:
                 try:
-                    return {"numerator": int(num), "denominator": int(den)}
+                    n, d = int(num), int(den)
+                    if d == 0:
+                        return {}
+                    return {"numerator": n, "denominator": d}
                 except ValueError:
                     pass
             return {}
@@ -70,6 +73,8 @@ class NumericEntry(wx.Panel):
 
     def set_response(self, payload):
         """Restore a saved response."""
+        if not isinstance(payload, dict):
+            return
         if self.fraction_mode:
             self.num_ctrl.SetValue(str(payload.get("numerator", "")))
             self.den_ctrl.SetValue(str(payload.get("denominator", "")))

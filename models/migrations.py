@@ -201,6 +201,31 @@ def _007_retire_incomplete_2026_04():
     )
 
 
+# Third batch found 2026-04-18 — 22 RC questions whose option E text
+# leaked past its boundary and absorbed the "Questions N-M refer to the
+# following passage. <passage…>" marker that belonged to the *next*
+# question set. The leaked option is unreadable and the next question
+# set was extracted without its passage.
+_OPTION_LEAK_QIDS_2026_04 = (
+    810, 812, 813, 816, 817, 820, 824, 825, 829, 831, 837, 838, 840,
+    1022, 1025, 1029, 1034, 1037, 1039, 1043, 1050, 1056,
+)
+
+
+def _008_retire_option_leak_2026_04():
+    """Retire 22 RC questions with passage-marker leakage in option E.
+
+    Idempotent.
+    """
+    db = _get_db()
+    placeholders = ",".join("?" for _ in _OPTION_LEAK_QIDS_2026_04)
+    db.execute_sql(
+        f"UPDATE question SET status='retired' "
+        f"WHERE id IN ({placeholders}) AND status != 'retired'",
+        _OPTION_LEAK_QIDS_2026_04,
+    )
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -209,6 +234,7 @@ MIGRATIONS = [
     ("005_onboarding_inferred_complete", _005_onboarding_inferred_complete),
     ("006_retire_corrupted_2026_04", _006_retire_corrupted_2026_04),
     ("007_retire_incomplete_2026_04", _007_retire_incomplete_2026_04),
+    ("008_retire_option_leak_2026_04", _008_retire_option_leak_2026_04),
 ]
 
 

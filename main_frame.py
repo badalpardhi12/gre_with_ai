@@ -1087,36 +1087,59 @@ class MainFrame(wx.Frame):
     # ── Today-screen helpers ─────────────────────────────────────────
 
     def _on_start_quick_drill(self):
-        """Pick the user's weakest subtopic with attempts and drill it."""
-        from services.mastery import weakness_ranking
-        try:
-            weak = weakness_ranking(limit=3)
-        except Exception:
-            weak = []
-        if weak:
-            subtopic = weak[0][0]
-            self._on_practice_topic(subtopic)
-            return
-        # No mastery data — fall back to a verbal drill (alphabetical-first
-        # measure; gentler intro than quant).
+        """Build a 10-question mixed drill targeting the user's weak topics.
+
+        Composition: 5 verbal + 5 quant. Each side draws from the user's
+        weakest subtopics on that side; if a measure has no mastery
+        signal, that side falls back to a random medium-difficulty pull
+        from the live bank.
+        """
         from models.exam_session import (
             ExamSession, SectionType, SectionState, SECTION_META,
         )
-        ids = self.question_bank.select_questions(
-            measure="verbal", count=10, difficulty_band="medium")
-        if not ids:
-            ids = self.question_bank.select_questions(
-                measure="quant", count=10, difficulty_band="medium")
+        from models.taxonomy import VERBAL_TAXONOMY, QUANT_TAXONOMY
+        from services.mastery import weakness_ranking
+
+        verbal_subs = {
+            sub for td in VERBAL_TAXONOMY.values()
+            for sub in td["subtopics"].keys()
+        }
+        quant_subs = {
+            sub for td in QUANT_TAXONOMY.values()
+            for sub in td["subtopics"].keys()
+        }
+
+        try:
+            weak = weakness_ranking(limit=20)
+        except Exception:
+            weak = []
+
+        weak_verbal = [s for (s, _, _) in weak if s in verbal_subs]
+        weak_quant = [s for (s, _, _) in weak if s in quant_subs]
+
+        per_measure = 5  # 50/50 split of the 10-question drill
+        ids = []
+        ids += self._draw_drill_ids("verbal", weak_verbal, per_measure)
+        ids += self._draw_drill_ids("quant", weak_quant, per_measure)
+
         if not ids:
             wx.MessageBox("Not enough questions to start a drill.",
                           "Quick Drill", wx.OK | wx.ICON_INFORMATION)
             return
-        # Match the section type to the measure of the questions actually
-        # picked so scoring attribution stays correct.
+
+        # Shuffle so the section doesn't show 5 verbal then 5 quant in
+        # blocks — interleaving keeps the drill feeling varied.
+        import random
+        random.shuffle(ids)
+
+        # Pick the section type from the majority measure so per-section
+        # scoring + the on-screen header label match what the user sees.
         from models.database import Question as _Q
-        first_q = _Q.get_or_none(_Q.id == ids[0])
-        measure = first_q.measure if first_q else "verbal"
-        sec_type = SectionType.VERBAL_S1 if measure == "verbal" else SectionType.QUANT_S1
+        rows = list(_Q.select(_Q.id, _Q.measure).where(_Q.id.in_(ids)))
+        n_quant = sum(1 for r in rows if r.measure == "quant")
+        majority_quant = n_quant > (len(ids) - n_quant)
+        sec_type = SectionType.QUANT_S1 if majority_quant else SectionType.VERBAL_S1
+
         self.exam = ExamSession(test_type="drill", mode="learning")
         self.exam.section_order = [sec_type]
         self.exam.sections[sec_type] = SectionState(
@@ -1130,6 +1153,39 @@ class MainFrame(wx.Frame):
             section_order=json.dumps([sec_type.value]),
         )
         self._show_section_instructions()
+
+    def _draw_drill_ids(self, measure: str, weak_subtopics: list, count: int):
+        """Pull `count` question IDs for a measure, biasing toward weak
+        subtopics when mastery data is available.
+
+        Walks the weak list in order, calling select_drill_smart for
+        each subtopic, until we have `count` ids or the list runs out;
+        then tops up with a random medium-difficulty pull so a thin
+        weak-subtopic catalog can't shrink the drill below `count`.
+        """
+        ids = []
+        seen = set()
+        for sub in weak_subtopics:
+            if len(ids) >= count:
+                break
+            need = count - len(ids)
+            picked = self.question_bank.select_drill_smart(sub, count=need)
+            for qid in picked:
+                if qid not in seen:
+                    ids.append(qid)
+                    seen.add(qid)
+                    if len(ids) >= count:
+                        break
+
+        if len(ids) < count:
+            top_up = self.question_bank.select_questions(
+                measure=measure,
+                count=count - len(ids),
+                difficulty_band="medium",
+                exclude_ids=list(seen),
+            )
+            ids.extend(top_up)
+        return ids[:count]
 
     def _open_plan_dialog(self):
         """Open the StudyPlanDialog (the form survives in dashboard_screen.py)."""

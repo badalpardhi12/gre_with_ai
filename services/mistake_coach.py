@@ -2,10 +2,12 @@
 Per-question AI chat ("Why is C wrong?") and mistake-pattern coach.
 
 Two services:
-1. answer_chat: Conversational follow-up on a specific question after a user misses it
-2. mistake_coach: Analyzes recent error log and produces a diagnosis + targeted drill
+1. AnswerChat: conversational follow-up on a specific question
+2. analyze_mistakes: analyses recent error log → diagnosis + targeted drill
 
-Both use Opus 4.7 via LLM gateway.
+Both use the runtime LLM (OpenRouter via llm_service). The default model is
+controlled by the user's Settings; recommended choice for tutoring is Opus 4
+or better.
 """
 import json
 from datetime import datetime, timedelta
@@ -14,7 +16,7 @@ from typing import List, Optional
 from models.database import (
     db, Question, QuestionOption, NumericAnswer, Response, Stimulus,
 )
-from services.llm_client import get_client, MODEL_OPUS
+from services.llm_service import llm_service
 
 
 # ── Per-question chat ────────────────────────────────────────────────
@@ -64,7 +66,6 @@ class AnswerChat:
         self.q_data = q_data
         self.user_response = user_response
         self.history: List[dict] = []
-        self._client = get_client()
 
     def _system_prompt(self) -> str:
         ctx = build_question_context(self.q_data)
@@ -73,14 +74,15 @@ class AnswerChat:
             user_ans = f"\n\nSTUDENT'S ANSWER (which was wrong): {json.dumps(self.user_response)}"
         return f"{ANSWER_CHAT_SYSTEM}\n\n--- QUESTION CONTEXT ---\n{ctx}{user_ans}"
 
-    def ask(self, user_message: str, model: str = MODEL_OPUS, max_tokens: int = 1024) -> str:
+    def ask(self, user_message: str, model: Optional[str] = None,
+            max_tokens: int = 1024) -> str:
         """Ask a follow-up question. Returns the assistant's reply."""
         self.history.append({"role": "user", "content": user_message})
-        reply = self._client.call_anthropic(
-            model=model,
+        reply = llm_service.chat(
+            system_prompt=self._system_prompt(),
             messages=self.history,
-            system=self._system_prompt(),
             max_tokens=max_tokens,
+            model=model,
         )
         self.history.append({"role": "assistant", "content": reply})
         return reply
@@ -148,7 +150,7 @@ def get_recent_mistakes(user_id: str = "local", since_days: int = 7,
 
 def analyze_mistakes(user_id: str = "local",
                      since_days: int = 7,
-                     model: str = MODEL_OPUS) -> str:
+                     model: Optional[str] = None) -> str:
     """Run the mistake-pattern coach over recent errors. Returns markdown report."""
     mistakes = get_recent_mistakes(user_id, since_days)
     if len(mistakes) < 5:
@@ -172,10 +174,9 @@ def analyze_mistakes(user_id: str = "local",
         + "\n\nProduce the diagnosis and next-step drill now."
     )
 
-    client = get_client()
-    return client.call_anthropic(
-        model=model,
-        messages=[{"role": "user", "content": user_prompt}],
-        system=COACH_SYSTEM,
+    return llm_service.generate(
+        system_prompt=COACH_SYSTEM,
+        user_prompt=user_prompt,
         max_tokens=2048,
+        model=model,
     )

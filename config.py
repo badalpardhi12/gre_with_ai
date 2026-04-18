@@ -59,9 +59,10 @@ MIN_WINDOW_HEIGHT = 800
 TIMER_WARNING_SECONDS = 5 * 60  # 5 minute warning (red timer)
 
 # ── LLM Settings ─────────────────────────────────────────────────────
-# Model can be any OpenRouter-supported model identifier.
-# Override via env vars or the in-app Settings dialog.
-LLM_MODEL = os.getenv("LLM_MODEL", "anthropic/claude-sonnet-4-20250514")
+# Default to Opus 4 via OpenRouter for high-quality tutoring/study planning.
+# Any OpenRouter-supported model id works (anthropic/claude-opus-4,
+# anthropic/claude-sonnet-4, openai/gpt-4o, etc.). Override via env or Settings.
+LLM_MODEL = os.getenv("LLM_MODEL", "anthropic/claude-opus-4")
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "4096"))
 
 # ── LLM Configuration file (runtime overrides) ───────────────────────

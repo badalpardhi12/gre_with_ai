@@ -15,8 +15,7 @@ dist/
 build/
 *.egg
 
-# Database
-data/*.db
+# Database WAL/journal sidecar files (the .db itself ships via Git LFS)
 data/*.db-journal
 data/*.db-shm
 data/*.db-wal

@@ -94,6 +94,11 @@ class MainFrame(wx.Frame):
         # autosave-journal data from the previous launch.
         self._recover_orphaned_state()
 
+        # Best-effort audit at launch: log the live-bank corruption
+        # summary so future regressions show up in setup.log without
+        # interrupting the user.
+        self._log_audit_summary_at_launch()
+
         # Exam state
         self.exam = None
         self.db_session = None
@@ -1266,6 +1271,41 @@ class MainFrame(wx.Frame):
 
         db.close()
         self.Destroy()
+
+    def _log_audit_summary_at_launch(self):
+        """Run the data-corruption audit and log the summary to disk.
+
+        Non-fatal — any exception is swallowed and logged. Result lives in
+        the rotating logger at services/log.py so future bad imports show
+        up in the same file the user already shares for debugging.
+        """
+        try:
+            from services.log import get_logger
+            from scripts.audit_data_corruption import audit_database
+            corruption_found, report = audit_database(include_retired=False)
+            log = get_logger("audit")
+            log.info(
+                "launch audit — total=%d verbal=%d quant=%d "
+                "verbal_classifications=%s quant_issues=%s artifacts=%d",
+                report.get("total_questions", 0),
+                report.get("verbal_count", 0),
+                report.get("quant_count", 0),
+                report.get("verbal_classifications", {}),
+                report.get("quant_issues", {}),
+                len(report.get("llm_artifacts", [])),
+            )
+            if corruption_found:
+                log.warning(
+                    "launch audit found %d critical-corruption rows still live "
+                    "(see scripts/audit_data_corruption.py for detail)",
+                    len(report.get("worst_questions", [])),
+                )
+        except Exception as exc:  # pragma: no cover — diagnostics only
+            try:
+                from services.log import get_logger
+                get_logger("audit").exception("launch audit failed: %s", exc)
+            except Exception:
+                pass
 
     def _recover_orphaned_state(self):
         """Handle leftover state from a previously-killed app run.

@@ -225,9 +225,11 @@ def audit_database(verbose=False, export_json=False, ids_only=False,
     ]
     
     corruption_found = len(worst) > 0 or len(quant_issues) > 0
-    
-    db.close()
-    
+
+    # Don't unconditionally close — when called from a long-running
+    # process (main_frame at launch), the caller wants the connection
+    # to stay open. Close only if we opened it ourselves; the
+    # peewee.SqliteDatabase tolerates `reuse_if_open` being a no-op.
     return corruption_found, report
 
 
@@ -316,7 +318,7 @@ def main():
             print(f"{cat}: {count} ({pct:.1f}%)")
     else:
         print_report(report)
-    
+
     db.close()
     sys.exit(1 if corruption_found else 0)
 

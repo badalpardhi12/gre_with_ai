@@ -125,7 +125,16 @@ fi
 step "Checking Python"
 
 ensure_python() {
-    for candidate in python3.13 python3.12 python3.11 python3.10 python3.9 python3; do
+    # Honour an explicit override first.
+    if [[ -n "${PYTHON:-}" ]] && command -v "$PYTHON" &>/dev/null; then
+        return 0
+    fi
+    # Order matters. Prefer 3.12 (best wheel coverage for our pins:
+    # numpy 2.0.2 + wxPython 4.2.4 ship cp39..cp312 but no cp313 wheel),
+    # fall through to 3.11 / 3.10 / 3.9, and only try 3.13 / 3.14 last
+    # (those force pip into source builds that crash on Apple clang 17).
+    for candidate in python3.12 python3.11 python3.10 python3.9 \
+                     python3.13 python3.14 python3; do
         if command -v "$candidate" &>/dev/null; then
             local v_major v_minor
             v_major=$("$candidate" -c 'import sys; print(sys.version_info.major)')
@@ -221,9 +230,41 @@ fi
 step "Creating virtual environment"
 
 VENV_DIR="$PROJECT_DIR/venv"
+RECREATE_VENV=0
+
 if [[ -d "$VENV_DIR" ]]; then
-    ok "venv/ already exists; reusing"
+    # Detect a venv that was built with a Python version that has no wheels
+    # for our pinned numpy 2.0.2 + wxPython 4.2.4 (cp39..cp312 only). If
+    # someone re-runs setup after upgrading their system Python to 3.13,
+    # the cached venv silently traps them in source builds that crash on
+    # Apple clang 17. Detect + offer to rebuild.
+    EXISTING_PY="$VENV_DIR/bin/python"
+    if [[ -x "$EXISTING_PY" ]]; then
+        EX_VER=$("$EXISTING_PY" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "?.?")
+        EX_MAJOR=$("$EXISTING_PY" -c 'import sys; print(sys.version_info.major)' 2>/dev/null || echo 0)
+        EX_MINOR=$("$EXISTING_PY" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo 0)
+        if [[ "$EX_MAJOR" -eq 3 ]] && [[ "$EX_MINOR" -ge 13 ]]; then
+            warn "Existing venv uses Python $EX_VER, which has no pre-built wheels"
+            warn "for the pinned numpy / wxPython. pip would attempt source builds"
+            warn "that crash on Apple clang 17 (the failure your friend just hit)."
+            warn "Recreating venv with $PYTHON ($PY_VERSION)..."
+            RECREATE_VENV=1
+        else
+            ok "venv/ already exists (Python $EX_VER); reusing"
+        fi
+    else
+        warn "venv/ exists but bin/python is missing — recreating"
+        RECREATE_VENV=1
+    fi
 else
+    RECREATE_VENV=1
+fi
+
+if [[ "$RECREATE_VENV" == "1" ]]; then
+    if [[ -d "$VENV_DIR" ]]; then
+        info "Removing stale venv at $VENV_DIR"
+        rm -rf "$VENV_DIR"
+    fi
     "$PYTHON" -m venv "$VENV_DIR"
     ok "Created venv/ with $PY_VERSION"
 fi
@@ -231,6 +272,8 @@ fi
 # Activate in this shell (does not persist after the script exits).
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
+ok "Active interpreter: $(python -c 'import sys; print(sys.executable)')"
+ok "Active version:     $(python -c 'import sys; print(sys.version.split()[0])')"
 
 # ── 4. Dependencies ───────────────────────────────────────────────────────
 step "Installing Python dependencies"

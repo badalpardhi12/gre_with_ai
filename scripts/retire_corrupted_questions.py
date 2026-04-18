@@ -46,6 +46,29 @@ CORRUPT_QIDS = [
     2418,
 ]
 
+# Second batch found 2026-04-18 by structural audit (user-reported
+# screenshots): 1 TC with mismatched answer key (qid 604, "Loki" — same
+# bug class as the first batch but missed by the first-pass heuristic
+# because the explanation didn't use the giveaway "correct answer is X"
+# phrase) + 111 QC questions whose prompts lack the "Quantity A:" /
+# "Quantity B:" labels (the Quantity values were concatenated into the
+# stem during extraction, leaving the rendered question structurally
+# unanswerable) + 1 quant DI question whose chart wasn't extracted.
+# The migration `007_retire_incomplete_2026_04` carries the same list.
+INCOMPLETE_QIDS = [
+    604, 678, 679, 681, 682, 683, 684, 685, 686, 687, 688, 689, 690,
+    692, 693, 694, 695, 696, 698, 699, 700, 701, 702, 703, 704, 705,
+    706, 707, 708, 709, 710, 711, 712, 713, 714, 715, 716, 717, 719,
+    720, 721, 723, 724, 725, 726, 727, 729, 730, 731, 732, 733, 734,
+    735, 736, 737, 738, 739, 740, 741, 742, 743, 744, 745, 746, 747,
+    748, 749, 750, 752, 753, 754, 755, 756, 757, 758, 760, 761, 762,
+    764, 765, 766, 767, 768, 770, 771, 772, 773, 774, 775, 776, 777,
+    778, 779, 780, 781, 782, 783, 785, 786, 787, 788, 789, 790, 792,
+    793, 794, 795, 797, 798, 799, 800, 948, 2214,
+]
+
+ALL_RETIRE_QIDS = sorted(set(CORRUPT_QIDS + INCOMPLETE_QIDS))
+
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
@@ -56,13 +79,13 @@ def main():
     init_db()
     db.connect(reuse_if_open=True)
 
-    rows = list(Question.select().where(Question.id.in_(CORRUPT_QIDS)))
-    not_found = set(CORRUPT_QIDS) - {r.id for r in rows}
+    rows = list(Question.select().where(Question.id.in_(ALL_RETIRE_QIDS)))
+    not_found = set(ALL_RETIRE_QIDS) - {r.id for r in rows}
     already_retired = [r for r in rows if r.status == "retired"]
     to_retire = [r for r in rows if r.status != "retired"]
 
     print(f"Plan:")
-    print(f"  total in retire list:       {len(CORRUPT_QIDS)}")
+    print(f"  total in retire list:       {len(ALL_RETIRE_QIDS)}")
     print(f"  found in DB:                {len(rows)}")
     print(f"  not found (skipped):        {len(not_found)}")
     print(f"  already retired (no-op):    {len(already_retired)}")

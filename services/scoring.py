@@ -127,20 +127,35 @@ class ScoringEngine:
 
     @staticmethod
     def _check_text_completion(options, response):
-        """TC: all blanks must be correct. options grouped per blank."""
+        """TC: all blanks must be correct. options grouped per blank.
+
+        Two label conventions exist in the bank — they MUST stay in lock-step
+        with `screens/question_screen.py:_build_answer_controls`:
+        - multi-blank TC: labels are "blank1_A", "blank1_B", "blank2_A", …
+        - single-blank TC: labels are just "A", "B", "C" (no `blank1_`
+          prefix). The UI builds a single radio group keyed under "blank1"
+          for those, so the response payload is `{"selected": {"blank1": "A"}}`.
+
+        Earlier versions only handled the multi-blank form, which silently
+        marked every single-blank TC question wrong (~93 questions in the
+        shipped bank).
+        """
         selected = response.get("selected", {})
         if not isinstance(selected, dict):
             return False
         correct = {}
         for o in options:
-            # TC options have label like "blank1_A", "blank1_B", etc.
+            if not o.get("is_correct"):
+                continue
             parts = o["label"].split("_", 1)
-            if len(parts) == 2 and o["is_correct"]:
+            if len(parts) == 2:
                 correct[parts[0]] = parts[1]
+            else:
+                # Single-blank TC fallback — same convention the UI uses.
+                correct["blank1"] = o["label"]
         if not correct:
-            # Data corruption guard: a TC question with zero is_correct options
-            # used to silently credit any answer because all() over an empty
-            # iterable returns True.
+            # No is_correct option marked at all. True data-corruption case;
+            # distinct from a label-format mismatch (handled above).
             logger.warning("TC question has no is_correct options; treating as wrong")
             return False
         return all(selected.get(blank) == ans for blank, ans in correct.items())

@@ -423,7 +423,9 @@ class MainFrame(wx.Frame):
             self._finish_test()
             return
 
-        self.screens["instructions"].set_section(sec_type)
+        self.screens["instructions"].set_section(
+            sec_type, self.exam.sections.get(sec_type),
+        )
         self._show_screen("instructions")
 
     def _begin_section(self):
@@ -1142,9 +1144,19 @@ class MainFrame(wx.Frame):
 
         self.exam = ExamSession(test_type="drill", mode="learning")
         self.exam.section_order = [sec_type]
-        self.exam.sections[sec_type] = SectionState(
+        section_state = SectionState(
             section_type=sec_type, question_ids=ids,
             time_limit=len(ids) * 90)
+        # Mixed verbal+quant — override the section header so the screen
+        # shows "Quick Drill — Mixed" instead of "Verbal Reasoning" or
+        # "Quantitative Reasoning". The per-question header in
+        # question_screen.py also prepends the current question's
+        # measure so the user always knows which side they're on.
+        n_verbal = len(ids) - n_quant
+        section_state.display_label = (
+            f"Quick Drill — Mixed ({n_verbal} verbal, {n_quant} quant)"
+        )
+        self.exam.sections[sec_type] = section_state
         self.exam._question_bank = self.question_bank
         db.connect(reuse_if_open=True)
         self.db_session = DBSession.create(

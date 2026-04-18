@@ -226,6 +226,17 @@ else
     fi
 fi
 
+# Legacy-layout migration: if the previous version of the app (which
+# used data/gre_mock.db as both seed AND user-writable DB) left local
+# modifications on the tracked seed, copy them into data/gre_user.db
+# (preserving the user's session history) and reset the seed so future
+# `git pull` doesn't get blocked. No-op for fresh clones.
+if git status --porcelain "$DB_PATH" 2>/dev/null | grep -q '^.M'; then
+    info "Detected locally-modified seed (legacy layout). Migrating..."
+    bash "$PROJECT_DIR/scripts/migrate_to_user_db.sh"
+    ok "Migration complete — your data is now in data/gre_user.db"
+fi
+
 # ── 3. Virtual environment ────────────────────────────────────────────────
 step "Creating virtual environment"
 

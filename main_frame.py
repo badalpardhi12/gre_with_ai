@@ -25,6 +25,10 @@ from screens.review_screen import ReviewScreen
 from screens.results_screen import ResultsScreen
 from screens.progress_screen import ProgressScreen
 from screens.llm_settings import LLMSettingsDialog
+from screens.dashboard_screen import DashboardScreen
+from screens.vocab_screen import VocabScreen
+from screens.lesson_screen import LessonScreen
+from screens.topic_browser_screen import TopicBrowserScreen
 
 
 class MainFrame(wx.Frame):
@@ -60,15 +64,106 @@ class MainFrame(wx.Frame):
 
         self.panel_container.SetSizer(self.main_sizer)
 
-        # Start on welcome screen
-        self._show_screen("welcome")
+        # Start on dashboard (new comprehensive home)
+        self._show_screen("dashboard")
+        self.screens["dashboard"].refresh()
+
+        # ── Native menu bar ──────────────────────────────────────────
+        self._build_menu_bar()
+
+        # ── Keyboard shortcuts (ESC = back to dashboard) ─────────────
+        self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
 
         # Close confirmation
         self.Bind(wx.EVT_CLOSE, self._on_close)
 
+    def _build_menu_bar(self):
+        """Build a native macOS menu bar with standard IDs."""
+        menubar = wx.MenuBar()
+
+        # File menu
+        file_menu = wx.Menu()
+        file_menu.Append(wx.ID_NEW, "&New Test\tCtrl+N", "Start a new test")
+        file_menu.AppendSeparator()
+        file_menu.Append(wx.ID_PREFERENCES, "&Preferences\tCtrl+,",
+                         "LLM and app settings")
+        file_menu.AppendSeparator()
+        file_menu.Append(wx.ID_EXIT, "E&xit\tCtrl+Q", "Quit GRE with AI")
+        menubar.Append(file_menu, "&File")
+
+        # View menu
+        view_menu = wx.Menu()
+        view_menu.Append(wx.ID_HOME, "&Dashboard\tCtrl+D",
+                         "Return to the dashboard")
+        view_menu.Append(2001, "&Topic Browser\tCtrl+T",
+                         "Browse all topics")
+        view_menu.Append(2002, "&Vocab Flashcards\tCtrl+L",
+                         "Daily vocabulary review")
+        view_menu.Append(2003, "&Progress\tCtrl+P",
+                         "View your progress")
+        menubar.Append(view_menu, "&View")
+
+        # Help menu
+        help_menu = wx.Menu()
+        help_menu.Append(wx.ID_ABOUT, "&About GRE with AI",
+                         "About this application")
+        menubar.Append(help_menu, "&Help")
+
+        self.SetMenuBar(menubar)
+
+        # Bind menu actions
+        self.Bind(wx.EVT_MENU, lambda _: self._go_home(), id=wx.ID_HOME)
+        self.Bind(wx.EVT_MENU, lambda _: self._show_topics(), id=2001)
+        self.Bind(wx.EVT_MENU, lambda _: self._on_start_vocab(), id=2002)
+        self.Bind(wx.EVT_MENU, lambda _: self._show_progress(), id=2003)
+        self.Bind(wx.EVT_MENU, lambda _: self._show_settings(), id=wx.ID_PREFERENCES)
+        self.Bind(wx.EVT_MENU, lambda _: self._show_about(), id=wx.ID_ABOUT)
+        self.Bind(wx.EVT_MENU, lambda _: self.Close(), id=wx.ID_EXIT)
+        self.Bind(wx.EVT_MENU, lambda _: self._new_test(), id=wx.ID_NEW)
+
+    def _show_about(self):
+        wx.MessageBox(
+            "GRE with AI\n\n"
+            "A comprehensive GRE prep platform powered by Claude Opus 4.7.\n\n"
+            "Features:\n"
+            "• 1,500+ practice questions across all GRE subtopics\n"
+            "• AI-generated lessons and study plans\n"
+            "• Spaced-repetition vocabulary flashcards\n"
+            "• Diagnostic test + adaptive practice\n"
+            "• AI tutor for per-question Q&A\n"
+            "• AWA essay scoring with rubric feedback",
+            "About GRE with AI",
+            wx.OK | wx.ICON_INFORMATION,
+        )
+
+    def _new_test(self):
+        """Cmd+N — go to dashboard so user can pick a test type."""
+        self._go_home()
+
+    def _on_char_hook(self, event):
+        """Global keyboard shortcuts."""
+        key = event.GetKeyCode()
+        # ESC: smart back navigation (only if not in a modal or active test)
+        if key == wx.WXK_ESCAPE:
+            current = None
+            for name, panel in self.screens.items():
+                if panel.IsShown():
+                    current = name
+                    break
+            # From these screens, ESC goes back to dashboard
+            if current in ("vocab", "lesson", "topics", "progress"):
+                self._go_home()
+                return
+            # From instructions, abort the test
+            if current == "instructions":
+                self._abort_test()
+                return
+        event.Skip()
+
     def _create_screens(self):
         """Instantiate all screen panels (hidden by default)."""
         screen_classes = {
+            "dashboard": DashboardScreen,
             "welcome": WelcomeScreen,
             "instructions": InstructionsScreen,
             "awa": AWAScreen,
@@ -76,6 +171,9 @@ class MainFrame(wx.Frame):
             "review": ReviewScreen,
             "results": ResultsScreen,
             "progress": ProgressScreen,
+            "vocab": VocabScreen,
+            "lesson": LessonScreen,
+            "topics": TopicBrowserScreen,
         }
 
         for name, cls in screen_classes.items():
@@ -89,16 +187,39 @@ class MainFrame(wx.Frame):
         self.screens["welcome"].set_on_settings(self._show_settings)
         self.screens["welcome"].set_on_progress(self._show_progress)
         self.screens["instructions"].set_on_begin(self._begin_section)
+        self.screens["instructions"].set_on_cancel(self._abort_test)
         self.screens["awa"].set_on_submit(self._submit_awa)
         self.screens["awa"].set_on_time_expire(self._awa_time_expired)
+        self.screens["awa"].set_on_exit(self._abort_test)
         self.screens["question"].set_on_end_section(self._end_current_section)
         self.screens["question"].set_on_time_expire(self._end_current_section)
         self.screens["question"].set_on_review(self._show_review)
+        self.screens["question"].set_on_exit_to_dashboard(self._abort_test)
         self.screens["review"].set_on_goto(self._goto_question)
         self.screens["review"].set_on_return(self._return_to_questions)
         self.screens["review"].set_on_end_section(self._end_current_section)
         self.screens["results"].set_on_home(self._go_home)
         self.screens["progress"].set_on_home(self._go_home)
+
+        # New screens wiring
+        dash = self.screens["dashboard"]
+        dash.set_handlers(
+            take_diagnostic=self._on_take_diagnostic,
+            start_drill=self._show_topics,
+            start_lesson=self._show_topics,
+            start_vocab=self._on_start_vocab,
+            start_practice_test=lambda: self._start_test("full_mock", "simulation"),
+            start_full_mock=lambda: self._start_test("full_mock", "simulation"),
+            progress=self._show_progress,
+            settings=self._show_settings,
+            browse_topics=self._show_topics,
+        )
+        self.screens["vocab"].set_on_back(lambda: self._show_screen("dashboard"))
+        self.screens["lesson"].set_on_back(lambda: self._show_screen("topics"))
+        self.screens["lesson"].set_on_practice(self._on_practice_topic)
+        self.screens["topics"].set_on_back(lambda: self._show_screen("dashboard"))
+        self.screens["topics"].set_on_open_lesson(self._on_open_lesson)
+        self.screens["topics"].set_on_start_drill(self._on_start_topic_drill)
 
         # Update welcome screen info
         v_count = self.question_bank.get_question_count("verbal")
@@ -471,16 +592,11 @@ class MainFrame(wx.Frame):
     # ── Navigation ────────────────────────────────────────────────────
 
     def _go_home(self):
-        """Return to welcome screen."""
+        """Return to dashboard."""
         self.exam = None
         self.db_session = None
-        # Refresh question counts
-        v_count = self.question_bank.get_question_count("verbal")
-        q_count = self.question_bank.get_question_count("quant")
-        self.screens["welcome"].set_info(
-            f"Question bank: {v_count} verbal, {q_count} quant questions loaded"
-        )
-        self._show_screen("welcome")
+        self.screens["dashboard"].refresh()
+        self._show_screen("dashboard")
 
     def _show_settings(self):
         """Show LLM settings dialog."""
@@ -492,6 +608,153 @@ class MainFrame(wx.Frame):
         """Show the progress dashboard."""
         self.screens["progress"].load_data()
         self._show_screen("progress")
+
+    # ── New screen handlers ──────────────────────────────────────────
+
+    def _on_take_diagnostic(self):
+        """Launch the diagnostic test."""
+        from services.diagnostic import assemble_diagnostic
+        from models.exam_session import ExamSession, SectionType, SectionState
+
+        qids = assemble_diagnostic()
+        if not qids or len(qids) < 5:
+            wx.MessageBox(
+                "Not enough questions to run diagnostic. Build the question bank first.",
+                "Insufficient Questions", wx.OK | wx.ICON_WARNING)
+            return
+
+        dlg = wx.MessageDialog(
+            self,
+            f"Diagnostic test: {len(qids)} questions across all topics.\n"
+            "Untimed but recorded. After completion you'll see your weakness ranking and "
+            "predicted score band.\n\nReady to start?",
+            "Diagnostic Test",
+            wx.OK | wx.CANCEL | wx.ICON_INFORMATION,
+        )
+        if dlg.ShowModal() != wx.ID_OK:
+            dlg.Destroy()
+            return
+        dlg.Destroy()
+
+        # Build a custom drill-like session for the diagnostic
+        # Split questions into verbal and quant by their measure for proper section setup
+        from models.database import Question
+        verbal_ids = [q.id for q in Question.select().where(
+            (Question.id.in_(qids)) & (Question.measure == "verbal"))]
+        quant_ids = [q.id for q in Question.select().where(
+            (Question.id.in_(qids)) & (Question.measure == "quant"))]
+
+        # Pick the larger set as primary (just one section for simplicity)
+        primary_ids = verbal_ids + quant_ids
+        if not primary_ids:
+            wx.MessageBox("No diagnostic questions available.", "Error",
+                          wx.OK | wx.ICON_ERROR)
+            return
+
+        # Use VERBAL_S1 type as container (it just needs *some* section type)
+        sec_type = SectionType.VERBAL_S1 if len(verbal_ids) >= len(quant_ids) else SectionType.QUANT_S1
+
+        self.exam = ExamSession(test_type="custom", mode="learning")
+        self.exam.section_order = [sec_type]
+        self.exam.sections[sec_type] = SectionState(
+            section_type=sec_type,
+            question_ids=primary_ids,
+            time_limit=len(primary_ids) * 120,  # generous time
+        )
+        self.exam._question_bank = self.question_bank
+
+        db.connect(reuse_if_open=True)
+        self.db_session = DBSession.create(
+            test_type="custom",
+            mode="learning",
+            section_order=str([sec_type.value]),
+        )
+        self._show_section_instructions()
+
+    def _on_start_vocab(self):
+        """Launch the vocabulary flashcard session."""
+        try:
+            self.screens["vocab"].start_session(new_count=20)
+            self._show_screen("vocab")
+        except Exception as e:
+            wx.MessageBox(f"Vocab session failed: {e}", "Error",
+                          wx.OK | wx.ICON_ERROR)
+
+    def _show_topics(self):
+        """Show the topic browser screen."""
+        self.screens["topics"].refresh()
+        self._show_screen("topics")
+
+    def _on_open_lesson(self, subtopic):
+        self.screens["lesson"].load_lesson(subtopic)
+        self._show_screen("lesson")
+
+    def _on_practice_topic(self, subtopic):
+        """Start a 10-question drill on a specific subtopic."""
+        from models.exam_session import ExamSession, SectionType, SECTION_META, SectionState
+        from models.taxonomy import VERBAL_TAXONOMY
+
+        # Determine measure from taxonomy (NOT from string heuristic)
+        verbal_subs = set()
+        for t, td in VERBAL_TAXONOMY.items():
+            verbal_subs.update(td["subtopics"].keys())
+        if subtopic in verbal_subs:
+            measure = "verbal"
+        else:
+            measure = "quant"
+
+        # Use smart drill selector — avoid recent repeats, prioritize unseen + wrong-before
+        ids = self.question_bank.select_drill_smart(subtopic, count=10)
+
+        if not ids:
+            wx.MessageBox(
+                f"No questions available for '{subtopic}' yet.\n"
+                "Try a different subtopic or wait for the AI generation to fill this gap.",
+                "No Questions",
+                wx.OK | wx.ICON_INFORMATION,
+            )
+            return
+
+        # Build a topic drill exam
+        self.exam = ExamSession(test_type="drill", mode="learning")
+        sec_type = SectionType.VERBAL_S1 if measure == "verbal" else SectionType.QUANT_S1
+        self.exam.section_order = [sec_type]
+        self.exam.sections[sec_type] = SectionState(
+            section_type=sec_type,
+            question_ids=ids,
+            time_limit=len(ids) * 90,
+        )
+        self.exam._question_bank = self.question_bank
+
+        db.connect(reuse_if_open=True)
+        self.db_session = DBSession.create(
+            test_type="drill",
+            mode="learning",
+            section_order=str([sec_type.value]),
+        )
+
+        self._show_section_instructions()
+
+    def _on_start_topic_drill(self, subtopic):
+        self._on_practice_topic(subtopic)
+
+    def _abort_test(self):
+        """Abort the current test session and return to dashboard."""
+        if self.exam:
+            dlg = wx.MessageDialog(
+                self,
+                "Are you sure you want to abandon this test? Your progress will be lost.",
+                "Abandon Test?",
+                wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
+            )
+            if dlg.ShowModal() != wx.ID_YES:
+                dlg.Destroy()
+                return
+            dlg.Destroy()
+        self.exam = None
+        self.db_session = None
+        self.screens["dashboard"].refresh()
+        self._show_screen("dashboard")
 
     def _on_close(self, event):
         """Confirm close during active exam."""

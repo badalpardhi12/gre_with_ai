@@ -2,33 +2,134 @@
 Question bank service — loads, filters, and selects questions from the database.
 """
 import random
+from datetime import datetime, timedelta
+
 from models.database import (
     db, Question, QuestionOption, NumericAnswer, Stimulus,
-    AWAPrompt, VocabWord,
+    AWAPrompt, VocabWord, Response,
 )
+
+
+# Real GRE composition targets per section (proportions sum to 1.0)
+# Source: ETS GRE official guide — Verbal/Quant section composition
+VERBAL_COMPOSITION = {
+    "rc_single": 0.35,           # ~5-6 of 12, ~7 of 15
+    "rc_multi": 0.10,            # ~1-2 per section
+    "rc_select_passage": 0.05,   # rare, ~1 per test
+    "tc": 0.25,                  # ~3-4 per section
+    "se": 0.25,                  # ~3-4 per section
+}
+
+QUANT_COMPOSITION = {
+    "qc": 0.30,                  # ~4 per 12-question section
+    "mcq_single": 0.40,          # ~5 per 12-question section
+    "mcq_multi": 0.05,           # ~1 per section
+    "numeric_entry": 0.05,       # ~1 per section
+    "data_interp": 0.20,         # ~2-3 per section
+}
+
+
+def get_recently_seen_ids(days_back: int = 14, user_id: str = "local"):
+    """Return question IDs the user has answered in the last N days.
+
+    Used to avoid showing the same questions in consecutive sessions.
+    """
+    cutoff = datetime.now() - timedelta(days=days_back)
+    rows = Response.select(Response.question_id).where(
+        Response.created_at >= cutoff
+    ).distinct()
+    return set(r.question_id for r in rows)
 
 
 class QuestionBankService:
     """Query and select questions for test assembly and drills."""
 
+    def select_drill_smart(self, subtopic, count=10, user_id="local",
+                           avoid_recent_days=14):
+        """Smart drill selection for a single subtopic.
+
+        Priority:
+        1. Skip questions seen in the last N days (avoid recent repeats)
+        2. Within remaining pool, prefer questions never answered
+        3. Then: questions answered incorrectly (need review)
+        4. Then: rest, shuffled
+        """
+        from peewee import fn
+
+        # All live questions for this subtopic
+        all_qs = list(Question.select(Question.id, Question.difficulty_target)
+                      .where((Question.subtopic == subtopic) &
+                             (Question.status == "live")))
+        if not all_qs:
+            return []
+
+        # Recently seen — skip these
+        recent = get_recently_seen_ids(days_back=avoid_recent_days, user_id=user_id)
+
+        # Past responses for accuracy lookup
+        past_correct = {}
+        rows = Response.select(Response.question_id, Response.is_correct).where(
+            Response.is_correct.is_null(False)
+        )
+        for r in rows:
+            past_correct[r.question_id] = r.is_correct
+
+        # Bucket questions
+        never_seen = []
+        wrong_before = []
+        right_before = []
+
+        for q in all_qs:
+            if q.id in recent:
+                continue
+            if q.id not in past_correct:
+                never_seen.append(q.id)
+            elif past_correct[q.id] is False:
+                wrong_before.append(q.id)
+            else:
+                right_before.append(q.id)
+
+        # If everything is recent, fall back to all
+        if not never_seen and not wrong_before and not right_before:
+            never_seen = [q.id for q in all_qs]
+
+        random.shuffle(never_seen)
+        random.shuffle(wrong_before)
+        random.shuffle(right_before)
+
+        # Compose drill: most never-seen, then wrong-before for review, fill with right-before
+        target = count
+        result = []
+        # 60% never-seen, 30% wrong-before, 10% right-before
+        n_new = min(int(target * 0.6) + 1, len(never_seen))
+        n_wrong = min(int(target * 0.3) + 1, len(wrong_before))
+
+        result.extend(never_seen[:n_new])
+        result.extend(wrong_before[:n_wrong])
+
+        # Fill the rest from anywhere
+        if len(result) < target:
+            remaining = (never_seen[n_new:] + wrong_before[n_wrong:] + right_before)
+            result.extend(remaining[:target - len(result)])
+
+        random.shuffle(result)
+        return result[:target]
+
     def select_questions(self, measure, count, difficulty_band="medium",
                          topic=None, exclude_ids=None):
         """
-        Select `count` question IDs matching criteria.
-        Returns a list of question IDs.
+        Select `count` question IDs (random, no composition).
+        Used for topic drills.
         """
         query = Question.select(Question.id).where(
             Question.measure == measure,
             Question.status == "live",
         )
 
-        # Filter by difficulty band
         if difficulty_band == "easy":
             query = query.where(Question.difficulty_target <= 2)
         elif difficulty_band == "hard":
             query = query.where(Question.difficulty_target >= 4)
-        else:  # medium (or any)
-            pass  # no additional filter for medium — use all available
 
         if topic:
             query = query.where(Question.concept_tags.contains(topic))
@@ -39,6 +140,99 @@ class QuestionBankService:
         available = [q.id for q in query]
         random.shuffle(available)
         return available[:count]
+
+    def select_questions_composed(self, measure, count, difficulty_band="medium",
+                                   exclude_ids=None):
+        """
+        Select `count` question IDs respecting real GRE question-type composition.
+
+        Verbal: 35% rc_single, 10% rc_multi, 5% rc_select_passage, 25% tc, 25% se
+        Quant: 30% qc, 40% mcq_single, 5% mcq_multi, 5% numeric_entry, 20% data_interp
+
+        Deficits in any subtype are filled with the most flexible neighbor
+        (rc_single for verbal, mcq_single for quant), then any remaining shortfall
+        falls back to any matching question.
+        """
+        if measure == "verbal":
+            composition = VERBAL_COMPOSITION
+            fill_subtype = "rc_single"
+        elif measure == "quant":
+            composition = QUANT_COMPOSITION
+            fill_subtype = "mcq_single"
+        else:
+            return self.select_questions(
+                measure, count, difficulty_band, exclude_ids=exclude_ids)
+
+        exclude = set(exclude_ids or [])
+
+        # Compute target counts per subtype
+        targets = {}
+        running_sum = 0
+        sorted_subtypes = sorted(composition.items(), key=lambda x: -x[1])
+        for i, (subtype, ratio) in enumerate(sorted_subtypes):
+            if i == len(sorted_subtypes) - 1:
+                targets[subtype] = max(0, count - running_sum)
+            else:
+                t = round(count * ratio)
+                targets[subtype] = t
+                running_sum += t
+
+        # Pull pool per subtype
+        selected_ids = []
+        deficit = 0
+
+        for subtype, target_count in targets.items():
+            if target_count == 0:
+                continue
+            pool = self._pool_for_subtype(measure, subtype, difficulty_band, exclude)
+            random.shuffle(pool)
+            taken = pool[:target_count]
+            selected_ids.extend(taken)
+            exclude.update(taken)
+            deficit += target_count - len(taken)
+
+        # Fill deficit with the flexible subtype
+        if deficit > 0:
+            extra_pool = self._pool_for_subtype(
+                measure, fill_subtype, difficulty_band, exclude)
+            random.shuffle(extra_pool)
+            extra = extra_pool[:deficit]
+            selected_ids.extend(extra)
+            exclude.update(extra)
+            deficit -= len(extra)
+
+        # Final fallback: any matching question
+        if deficit > 0:
+            fallback_query = Question.select(Question.id).where(
+                Question.measure == measure,
+                Question.status == "live",
+                Question.id.not_in(list(exclude)),
+            )
+            if difficulty_band == "easy":
+                fallback_query = fallback_query.where(Question.difficulty_target <= 2)
+            elif difficulty_band == "hard":
+                fallback_query = fallback_query.where(Question.difficulty_target >= 4)
+            fallback = [q.id for q in fallback_query]
+            random.shuffle(fallback)
+            selected_ids.extend(fallback[:deficit])
+
+        random.shuffle(selected_ids)
+        return selected_ids[:count]
+
+    def _pool_for_subtype(self, measure, subtype, difficulty_band, exclude_ids):
+        """Get all live question IDs for a measure/subtype with difficulty filter."""
+        query = Question.select(Question.id).where(
+            Question.measure == measure,
+            Question.subtype == subtype,
+            Question.status == "live",
+        )
+        if difficulty_band == "easy":
+            query = query.where(Question.difficulty_target <= 2)
+        elif difficulty_band == "hard":
+            query = query.where(Question.difficulty_target >= 4)
+        if exclude_ids:
+            query = query.where(Question.id.not_in(list(exclude_ids)))
+        return [q.id for q in query]
 
     def select_awa_prompt(self):
         """Select a random AWA prompt. Returns [prompt_id]."""

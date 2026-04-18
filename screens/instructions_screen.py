@@ -76,11 +76,20 @@ class InstructionsScreen(wx.Panel):
     def __init__(self, parent):
         super().__init__(parent)
         self._on_begin = None
+        self._on_cancel = None
         self._build_ui()
 
     def _build_ui(self):
         main_sizer = wx.BoxSizer(wx.VERTICAL)
-        main_sizer.AddSpacer(40)
+
+        # Top bar with back button
+        top_bar = wx.BoxSizer(wx.HORIZONTAL)
+        self.back_btn = wx.Button(self, label="← Back to Dashboard")
+        self.back_btn.Bind(wx.EVT_BUTTON, self._on_cancel_click)
+        top_bar.Add(self.back_btn, 0, wx.ALL, 8)
+        top_bar.AddStretchSpacer()
+        main_sizer.Add(top_bar, 0, wx.EXPAND)
+        main_sizer.AddSpacer(20)
 
         self.title_label = wx.StaticText(self, label="Section Instructions")
         self.title_label.SetFont(wx.Font(22, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
@@ -95,13 +104,25 @@ class InstructionsScreen(wx.Panel):
 
         main_sizer.AddSpacer(30)
 
+        # Buttons row
+        btn_row = wx.BoxSizer(wx.HORIZONTAL)
+        btn_row.AddStretchSpacer()
+
+        self.cancel_btn = wx.Button(self, label="  Cancel  ", size=(120, 44))
+        self.cancel_btn.SetFont(wx.Font(13, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
+                                         wx.FONTWEIGHT_NORMAL))
+        self.cancel_btn.Bind(wx.EVT_BUTTON, self._on_cancel_click)
+        btn_row.Add(self.cancel_btn, 0, wx.RIGHT, 20)
+
         self.begin_btn = wx.Button(self, label="  Begin Section  ", size=(180, 44))
         self.begin_btn.SetFont(wx.Font(14, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                                         wx.FONTWEIGHT_BOLD))
         self.begin_btn.SetBackgroundColour(wx.Colour(46, 125, 50))
         self.begin_btn.SetForegroundColour(wx.WHITE)
         self.begin_btn.Bind(wx.EVT_BUTTON, self._on_begin_click)
-        main_sizer.Add(self.begin_btn, 0, wx.ALIGN_CENTER)
+        btn_row.Add(self.begin_btn, 0)
+        btn_row.AddStretchSpacer()
+        main_sizer.Add(btn_row, 0, wx.EXPAND)
 
         self.SetSizer(main_sizer)
 
@@ -116,6 +137,14 @@ class InstructionsScreen(wx.Panel):
     def set_on_begin(self, callback):
         """callback()"""
         self._on_begin = callback
+
+    def set_on_cancel(self, callback):
+        """callback() — called when user clicks Back/Cancel"""
+        self._on_cancel = callback
+
+    def _on_cancel_click(self, event):
+        if self._on_cancel:
+            self._on_cancel()
 
     def _on_begin_click(self, event):
         if self._on_begin:

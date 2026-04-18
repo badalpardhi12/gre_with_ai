@@ -59,6 +59,11 @@ class ScoringEngine:
         Returns:
             bool — True if correct
         """
+        if not isinstance(question_data, dict) or "subtype" not in question_data:
+            return False
+        if not isinstance(user_response, dict):
+            return False
+
         subtype = question_data["subtype"]
 
         if subtype == "numeric_entry":
@@ -157,7 +162,7 @@ class ScoringEngine:
                 return False
         elif user_value is not None:
             try:
-                user_frac = Fraction(str(user_value)).limit_denominator(10000)
+                user_frac = Fraction(str(user_value))
             except (ValueError, ZeroDivisionError):
                 return False
         else:
@@ -165,7 +170,7 @@ class ScoringEngine:
 
         # Determine correct value
         if numeric_answer.get("exact_value") is not None:
-            correct_frac = Fraction(str(numeric_answer["exact_value"])).limit_denominator(10000)
+            correct_frac = Fraction(str(numeric_answer["exact_value"]))
         elif (numeric_answer.get("numerator") is not None and
               numeric_answer.get("denominator") is not None):
             correct_frac = Fraction(

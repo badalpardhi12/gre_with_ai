@@ -191,7 +191,10 @@ class AWAScoringService:
             }
 
         # Step 3: Validate and normalize LLM output
-        score = result.get("overall_score", 3.0)
+        try:
+            score = float(result.get("overall_score", 3.0))
+        except (TypeError, ValueError):
+            score = 3.0
         score = max(0, min(6, round(score * 2) / 2))  # clamp to 0-6, 0.5 steps
 
         # Step 4: Compute confidence band (±0.5 for single model)

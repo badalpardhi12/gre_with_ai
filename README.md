@@ -1,6 +1,8 @@
-# GRE Mock Test Platform with LLM Supervision
+# GRE Mock Test Platform with AI Tutoring
 
-A desktop application for taking realistic GRE practice tests with AI-powered essay scoring. Built with Python, wxPython, and OpenRouter LLM integration.
+A best-in-class desktop GRE preparation platform: full-length section-adaptive
+mock tests, a curated vocabulary curriculum with spaced repetition, AI-generated
+lessons and study plans, and per-question tutoring backed by Claude Opus 4.7.
 
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
 ![wxPython](https://img.shields.io/badge/GUI-wxPython%204.2-orange)
@@ -11,189 +13,101 @@ A desktop application for taking realistic GRE practice tests with AI-powered es
 
 ## Features
 
-- **Full-length mock tests** following the post-September 2023 GRE format (1 h 58 min, 5 sections)
-- **Section-level adaptive difficulty** — second section adjusts based on first-section performance
-- **All GRE question types** — Text Completion, Sentence Equivalence, Reading Comprehension, Quantitative Comparison, Multiple Choice, Numeric Entry, Data Interpretation
-- **Analytical Writing Assessment (AWA)** with real-time word count and LLM-based scoring
-- **On-screen calculator** for quantitative sections
-- **KaTeX math rendering** for formulas and equations
-- **Question bank** with 600+ questions and 9,600+ vocabulary words
-- **Progress dashboard** — track scores, accuracy by topic, and session history
-- **Flexible test modes** — full mock, section-only (verbal/quant), learning mode with explanations
-- **LLM-generated explanations** for missed questions
-- **Configurable LLM backend** — any OpenRouter-supported model (Claude, GPT-4o, Gemini, etc.)
+### Test taking
+- **Full-length mock tests** in the post-September-2023 GRE format
+  (1 h 58 min, 5 sections, AWA + V1/V2 + Q1/Q2)
+- **Section-level adaptive routing** — Section 2 difficulty is chosen from
+  Section 1 performance, mirroring the real ETS engine
+- **All 11 question subtypes** — TC (1/2/3 blank), SE, RC single/multi/select,
+  QC, MCQ single/multi, Numeric Entry, Data Interpretation
+- **Real Data Interpretation charts** — pie/bar/grouped-bar/line/scatter/table,
+  rendered with matplotlib (dark theme), embedded as inline base64
+- **On-screen calculator** for quant sections, KaTeX math rendering throughout
+- **Topic drills** — 10/25/50-question drills per subtopic with smart selection
+  (60% never-seen + 30% wrong-before + 10% right-before, skipping last 14 days)
+
+### Adaptive learning
+- **Diagnostic test** — 30-question stratified intake produces per-topic
+  accuracy, weakness ranking, predicted scaled-score band
+- **Per-subtopic mastery tracking** — EWMA over recent attempts at the user's
+  ability band; "mastered" at ≥0.80 over 10 attempts
+- **AI study plan generator** — Opus 4.7 builds a personalised week-by-week
+  plan from diagnostic + live mastery + bank availability + vocab progress;
+  daily task list shown on the dashboard
+- **Score forecast** — predicted Verbal/Quant scaled-score range, updated
+  after every session
+
+### AI tutoring
+- **"Why is C wrong?" chat** — opens after a missed question, scope-locked to
+  that question; never overrides the deterministic correct answer
+- **Mistake-pattern coach** — every 50 questions, Opus 4.7 analyses your error
+  log and outputs a 3-bullet diagnosis plus a targeted 10-question drill
+- **AWA scoring** — ETS-rubric-aligned essay evaluation with inline feedback
+
+### Content
+- **~2,000 live questions** across 48 subtopics (target: 4,000), tagged by
+  topic + subtopic + question_type, validated for difficulty + quality
+- **3,007 curated vocabulary words** in 3 frequency tiers, with definitions,
+  example sentences, synonyms, antonyms, root analysis, mnemonics, theme tags
+- **308 Latin/Greek roots** linked to vocabulary words
+- **49 subtopic lessons + 8 strategy guides** auto-generated from Kaplan +
+  Princeton ebook content
+- **136 AWA issue prompts**
+
+### Workflow
+- **Dashboard** — score forecast, today's plan, mastery heatmap, recent
+  activity, quick-start buttons
+- **Topic browser** — taxonomy tree with mastery % and one-click drills
+- **Vocabulary flashcards** — FSRS-inspired spaced repetition, 4-button rating
+- **DPI-aware UI scaling** — auto 1.0×/1.25×/1.5× based on display
+- **Native macOS menu bar** with standard IDs (⌘, ⌘W ESC)
 
 ---
 
-## GRE Concepts & Exam Structure
+## GRE Exam Structure (post-September 2023)
 
-### What is the GRE?
+| Section | Time | Questions | Score |
+|---------|------|-----------|-------|
+| AWA | 30 min | 1 issue essay | 0–6 |
+| Verbal 1 | 18 min | 12 | 130–170 combined |
+| Verbal 2 | 23 min | 15 | (section-adaptive) |
+| Quant 1 | 21 min | 12 | 130–170 combined |
+| Quant 2 | 26 min | 15 | (section-adaptive) |
 
-The GRE (Graduate Record Examinations) General Test is a standardised test accepted by thousands of graduate and business schools worldwide. The current format (post-September 2023) is shorter than the legacy version at **1 hour 58 minutes**.
+**Total: 5 sections, 55 questions + 1 essay, 118 minutes.**
 
-### Exam Sections
-
-| Section | Time | Questions | Score Range |
-|---------|------|-----------|-------------|
-| **Analytical Writing (AWA)** | 30 min | 1 essay (Issue task) | 0–6 (half-point increments) |
-| **Verbal Reasoning — Section 1** | 18 min | 12 questions | 130–170 (combined) |
-| **Verbal Reasoning — Section 2** | 23 min | 15 questions | |
-| **Quantitative Reasoning — Section 1** | 21 min | 12 questions | 130–170 (combined) |
-| **Quantitative Reasoning — Section 2** | 26 min | 15 questions | |
-
-**Total: 5 sections, 55 questions + 1 essay, 118 minutes**
-
-### Section-Level Adaptive Testing
-
-The GRE uses a **section-adaptive** design:
-
-1. Everyone gets the same difficulty level for Section 1 (medium)
-2. Your performance on Section 1 determines the difficulty of Section 2:
-   - **< 40% correct** → Easy Section 2 (score ceiling ~155)
-   - **40–70% correct** → Medium Section 2 (score ceiling ~165)
-   - **> 70% correct** → Hard Section 2 (score ceiling 170)
-
-This means doing well on the first section gives you access to higher scores on the second.
-
-### Question Types
-
-**Verbal Reasoning:**
-- **Text Completion (TC)** — Fill in 1–3 blanks in a passage with the best word choices
-- **Sentence Equivalence (SE)** — Select 2 words that complete a sentence with the same meaning
-- **Reading Comprehension (RC)** — Single-answer, multiple-answer, and select-in-passage questions based on reading passages
-
-**Quantitative Reasoning:**
-- **Quantitative Comparison (QC)** — Compare two quantities (A vs B)
-- **Multiple Choice** — Single-answer and multiple-answer variants
-- **Numeric Entry** — Type a decimal or fraction as the answer
-- **Data Interpretation** — Questions based on graphs, tables, or charts
-
-**Analytical Writing:**
-- **Issue Task** — Write an essay presenting your position on a given topic, supported by reasoning and examples
-
-### Scoring
-
-- **Verbal & Quant**: 130–170 in 1-point increments. Raw scores (number correct) are converted to scaled scores based on the difficulty level of questions answered.
-- **AWA**: 0–6 in half-point increments. Evaluated on clarity of position, development of ideas, organisation, supporting evidence, and language control.
+Section 1 performance steers Section 2 difficulty:
+- < 40% correct → Easy S2 (ceiling ~155)
+- 40–70% → Medium S2 (ceiling ~165)
+- > 70% → Hard S2 (ceiling 170)
 
 ---
 
 ## Prerequisites
 
-- **Python 3.9 or higher**
-- **macOS**, **Linux**, or **Windows**
-- **OpenRouter API key** (optional but recommended — needed for AWA essay scoring and question explanations). Get a free key at [openrouter.ai/keys](https://openrouter.ai/keys)
-
-### Platform Notes
-
-| Platform | Status | Notes |
-|----------|--------|-------|
-| macOS | ✅ Fully supported | Native Cocoa rendering |
-| Linux | ✅ Supported | May need `libgtk-3-dev` and `libwebkit2gtk-4.0-dev` for wxPython |
-| Windows | ✅ Supported | wxPython wheel installs via pip |
+- **Python 3.9+** (uses `Optional[X]` rather than `X | Y` to stay 3.9-compatible)
+- **macOS** primary; Linux/Windows supported (wxPython 4.2.4)
+- **LLM access** — defaults to LLM gateway (Opus 4.7); can be
+  swapped for any OpenAI-compatible API (OpenRouter, direct Anthropic, etc.)
 
 ---
 
 ## Quick Start
 
-### Automated Setup (Recommended)
-
 ```bash
 git clone https://github.com/badalpardhi12/gre_with_ai.git
 cd gre_with_ai
-chmod +x setup.sh
-./setup.sh
-```
-
-The setup script will:
-1. Verify Python 3.9+
-2. Create a virtual environment
-3. Install all dependencies
-4. Prompt for your OpenRouter API key
-5. Initialise the database and seed the question bank
-
-Then start the app:
-
-```bash
-source venv/bin/activate
-python app.py
-```
-
-### Manual Setup
-
-```bash
-# Clone
-git clone https://github.com/badalpardhi12/gre_with_ai.git
-cd gre_with_ai
-
-# Virtual environment
 python3 -m venv venv
 source venv/bin/activate
-
-# Dependencies
 pip install -r requirements.txt
-
-# Environment
-cp .env.example .env
-# Edit .env and add your OPENROUTER_API_KEY
-
-# Database & seed data
-python scripts/seed_data.py
-python scripts/import_vocab.py
-python scripts/import_barrons_vocab.py
-python scripts/import_awa_prompts.py
-python scripts/import_external_quant.py
-python scripts/import_cr_questions.py
-python scripts/expand_questions.py
-
-# Run
 python app.py
 ```
 
----
+The database (`data/gre_mock.db`) is auto-created and seeded on first run.
 
-## Usage
-
-### Home Screen
-
-The home screen offers three options:
-
-- **Start Test** — Choose your test configuration:
-  - **Test type**: Full mock, Verbal only, or Quant only
-  - **Mode**: Simulation (timed, exam-like) or Learning (untimed, with explanations)
-- **View Progress** — See your score history, topic-level accuracy, and trends
-- **Settings** — Configure the LLM model, API key, and base URL
-
-### Taking a Test
-
-1. **Select test type and mode**, then click Start
-2. **Instructions screen** shows what to expect in the upcoming section
-3. **Answer questions** using the provided input controls:
-   - Radio buttons for single-select
-   - Checkboxes for multi-select
-   - Text fields for numeric entry (supports decimals and fractions like `3/4`)
-   - Rich text editor for AWA essays
-4. **Navigate** with Previous / Next buttons, or the question navigation bar
-5. **Mark for Review** to flag questions you want to revisit
-6. **Review screen** appears at the end of each section — jump back to any question or submit
-7. **Results screen** shows your scaled scores, section breakdown, and per-question details
-
-### Test Modes
-
-| Mode | Timer | Explanations | Scoring |
-|------|-------|-------------|---------|
-| **Simulation** | ✅ Enforced | After test only | Full adaptive scoring |
-| **Learning** | ❌ Untimed | After each question | Section scores only |
-
-### LLM Features
-
-When an OpenRouter API key is configured:
-
-- **AWA Scoring** — Essays are evaluated on a 6-point ETS-aligned rubric with feedback on position clarity, development, organisation, supporting evidence, and language control
-- **Explanations** — Get detailed explanations for any question after completing a section
-- **Settings** — Switch models at any time from the Settings dialog (Claude, GPT-4o, Gemini, etc.)
-
-Without an API key, the app functions fully for Verbal and Quant sections — only AWA scoring and explanations are unavailable.
+For LLM-backed features (AWA scoring, study plans, AI tutor), configure access
+via Settings inside the app, or set environment variables (see
+[Configuration](#configuration)).
 
 ---
 
@@ -201,194 +115,215 @@ Without an API key, the app functions fully for Verbal and Quant sections — on
 
 ```
 gre_with_ai/
-├── app.py                    # Application entry point
-├── main_frame.py             # Main window & screen orchestration
-├── config.py                 # Exam constants, paths, LLM config
-├── setup.sh                  # Automated environment setup
-├── requirements.txt          # Python dependencies
-├── .env.example              # Environment variable template
+├── app.py                              # Application entry point
+├── main_frame.py                       # Window + screen orchestration + menus
+├── config.py                           # Exam constants, paths
 │
 ├── models/
-│   ├── database.py           # Peewee ORM models (14 tables)
-│   └── exam_session.py       # Exam state machine & section tracking
+│   ├── database.py                     # Peewee ORM (20+ tables)
+│   ├── taxonomy.py                     # 48-subtopic taxonomy (single source of truth)
+│   └── exam_session.py                 # Section + adaptive state
 │
 ├── services/
-│   ├── question_bank.py      # Question selection & difficulty filtering
-│   ├── scoring.py            # Answer checking & scaled score estimation
-│   ├── awa_scorer.py         # AWA essay scoring (deterministic + LLM)
-│   ├── llm_service.py        # OpenRouter API client
-│   ├── explanation.py        # LLM-generated question explanations
-│   └── analytics.py          # Session telemetry & topic breakdown
+│   ├── llm_client.py             # the LLM gateway (Anthropic + Gemini) client
+│   ├── llm_service.py                  # Generic LLM router
+│   ├── question_bank.py                # Composition-aware selection + smart drill picker
+│   ├── scoring.py                      # 11 subtype answer-checkers + scaled scoring
+│   ├── awa_scorer.py                   # ETS-rubric AWA scoring
+│   ├── srs.py                          # FSRS-inspired vocab spaced repetition
+│   ├── diagnostic.py                   # 30Q stratified diagnostic
+│   ├── mastery.py                      # EWMA per-subtopic mastery
+│   ├── study_plan.py                   # Personalised plan via Opus 4.7
+│   ├── mistake_coach.py                # AnswerChat + analyze_mistakes
+│   ├── practice_test_assembler.py      # 6 unique full-length tests
+│   └── score_forecast.py               # Predicted scaled-score range
 │
-├── screens/                  # wxPython UI panels
-│   ├── welcome_screen.py     # Home screen
+├── screens/
+│   ├── dashboard_screen.py             # Main hub (forecast/plan/mastery)
+│   ├── welcome_screen.py
 │   ├── instructions_screen.py
-│   ├── awa_screen.py         # Essay writing interface
-│   ├── question_screen.py    # Question display & answer input
-│   ├── review_screen.py      # End-of-section review
-│   ├── results_screen.py     # Score cards & question details
-│   ├── progress_screen.py    # Historical performance dashboard
-│   └── llm_settings.py       # LLM configuration dialog
+│   ├── awa_screen.py                   # Essay editor + rubric scoring
+│   ├── question_screen.py              # All 11 subtypes; AI-tutor button
+│   ├── review_screen.py
+│   ├── results_screen.py
+│   ├── progress_screen.py
+│   ├── vocab_screen.py                 # Rich-back-card flashcards
+│   ├── lesson_screen.py                # Single lesson reader
+│   ├── topic_browser_screen.py         # Taxonomy tree + per-subtopic drills
+│   ├── answer_chat_screen.py           # Per-question AI tutor dialog
+│   └── llm_settings.py
 │
-├── widgets/                  # Reusable UI components
-│   ├── calculator.py         # On-screen calculator
-│   ├── math_view.py          # KaTeX math rendering
-│   ├── numeric_entry.py      # Decimal/fraction input
-│   ├── question_nav.py       # Question navigation bar
-│   └── timer.py              # Countdown timer
+├── widgets/
+│   ├── math_view.py                    # KaTeX HTML renderer (WebView)
+│   ├── calculator.py
+│   ├── numeric_entry.py
+│   ├── question_nav.py
+│   ├── timer.py
+│   └── ui_scale.py                     # DPI-aware font scaling
 │
-├── scripts/                  # Database seeding & import tools
-│   ├── seed_data.py          # Create tables
-│   ├── import_vocab.py       # Pervasive-GRE vocabulary (4,900 words)
-│   ├── import_barrons_vocab.py  # Barrons 333 + 800 words
-│   ├── import_awa_prompts.py # AWA issue prompts
-│   ├── import_external_quant.py # Quantitative questions
-│   ├── import_cr_questions.py   # Verbal / critical reasoning
-│   ├── expand_questions.py   # Generate question variations
-│   └── dataset_summary.py    # Print question bank statistics
+├── scripts/
+│   ├── seed_data.py
+│   ├── extract_kaplan.py               # EPUB → questions (Kaplan 2024)
+│   ├── extract_princeton.py            # EPUB → questions (Princeton 1,014)
+│   ├── extract_princeton_vision.py     # OCR for image-based math questions
+│   ├── retag_questions.py              # LLM re-tagging to subtopic taxonomy
+│   ├── generate_questions.py           # AI gen → fill subtopic gaps
+│   ├── generate_lessons.py             # AI lesson + strategy generation
+│   ├── generate_explanations.py
+│   ├── curate_vocab.py                 # Tier 1/2/3 + retire low-value words
+│   ├── enrich_vocab.py                 # Examples, synonyms, mnemonics
+│   ├── fix_di_charts.py                # Inline-text DI → matplotlib chart
+│   ├── reconstruct_di_charts.py        # Back-construct charts for orphan DI
+│   ├── embed_chart_images.py           # file:// → base64 data URI
+│   ├── generate_di_charts.py
+│   ├── rate_difficulty.py              # LLM-rated difficulty 1-5
+│   └── cleanup_broken_questions.py
 │
 ├── data/
-│   ├── gre_mock.db           # SQLite database (auto-created)
-│   ├── llm_config.json       # Runtime LLM settings (auto-created)
-│   └── external/             # Source CSV files for imports
+│   ├── gre_mock.db                     # SQLite (auto-created)
+│   ├── images/                         # Rendered DI chart PNGs
+│   ├── ebooks/                         # Source Kaplan + Princeton EPUBs
+│   ├── extracted/                      # Intermediate extraction JSON
+│   └── external/                       # Source CSVs for vocab imports
 │
-├── resources/
-│   └── katex/                # KaTeX library for math rendering
-│
-└── tests/
+└── resources/
+    └── katex/                          # KaTeX library
 ```
 
 ---
 
 ## Question Bank
 
-The platform ships with a seeded question bank:
+Live: ~2,000 questions across 48 subtopics. Distribution targets defined in
+`models/taxonomy.py`; `scripts/generate_questions.py --fill-gaps` brings any
+under-represented subtopic up to its target count via Opus 4.7 generation +
+second-pass validation.
 
-| Category | Count | Source |
-|----------|-------|--------|
-| Verbal questions | ~340 | Critical reasoning datasets, curated RC passages |
-| Quantitative questions | ~260 | Algebra, geometry, arithmetic, data interpretation |
-| AWA prompts | 136 | ETS-style issue prompts |
-| Vocabulary words | ~9,600 | Pervasive-GRE, Barrons 333/800, GRE word collections |
+| Category | Live | Target |
+|----------|-----:|-------:|
+| Quant total | ~1,250 | ~1,400 |
+| Verbal total | ~750 | ~990 |
+| AWA prompts | 136 | 100 |
+| Vocab words (active) | 3,007 | — |
+| Vocab roots | 308 | — |
+| Lessons | 49 | 48 |
 
-Questions span all GRE subtypes and are tagged by topic (algebra, geometry, arithmetic, critical reasoning, etc.) for the progress dashboard's topic-level accuracy tracking.
+Each question stores: `topic`, `subtopic`, `question_type`, `difficulty_target`
+(1–5), `quality_score` (0–1), `provenance`, `source`. Smart drill selection
+uses `Response` history to skip last-14-days repeats and prefer never-seen +
+previously-wrong questions.
 
 ---
 
 ## Configuration
 
-### Environment Variables (`.env`)
+### LLM backend
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `OPENROUTER_API_KEY` | No* | — | OpenRouter API key for LLM features |
-| `OPENROUTER_BASE_URL` | No | `https://openrouter.ai/api/v1` | API base URL |
-| `LLM_MODEL` | No | `anthropic/claude-sonnet-4-20250514` | Model identifier |
-| `LLM_MAX_TOKENS` | No | `4096` | Max response tokens |
+The app defaults to LLM gateway gateway for Opus 4.7. To use a
+different backend, set environment variables before launch:
 
-*Required for AWA scoring and explanations. The rest of the app works without it.
+| Variable | Purpose |
+|----------|---------|
+| `ANTHROPIC_BASE_URL` | Anthropic-compatible base URL |
+| `ANTHROPIC_AUTH_TOKEN` | Bearer token (LLM gateway id-token, or Anthropic API key) |
+| `OPENROUTER_API_KEY` | Falls back to OpenRouter if LLM gateway is unavailable |
 
-### Runtime Settings
+For the LLM gateway, refresh the token before each long-running script:
 
-LLM settings can also be changed from within the app via **Settings** on the home screen. Runtime changes are saved to `data/llm_config.json` and persist across sessions.
+```bash
+ID_TOKEN=$(/usr/local/bin/auth-helper getToken \
+  -C hvys3fcwcteqrvw3qzkvtk86viuoqv \
+  --token-type=oauth --interactivity-type=none -E prod -G pkce \
+  -o openid,dsid,accountname,profile,groups 2>/dev/null \
+  | tr -s ' \n' '\n' | tail -1)
+ANTHROPIC_BASE_URL="https://llm.gateway.example/api/anthropic" \
+ANTHROPIC_AUTH_TOKEN="$ID_TOKEN" \
+venv/bin/python <SCRIPT>
+```
+
+In-app **Settings** persist runtime LLM config to `data/llm_config.json`.
 
 ---
 
 ## Architecture
 
-### Exam Flow
+### Two-layer separation
+1. **Deterministic core** — section engine, timer, scoring, adaptive routing.
+   Never depends on the LLM. The user's score is always computed from the
+   answer key, never from a model output.
+2. **LLM layer** — AWA scoring, explanations, study-plan generation, the
+   tutoring chat, mistake-pattern coach. May be offline; the rest of the app
+   degrades gracefully.
+
+### Data flow
 
 ```
-WelcomeScreen
-    │ (select test type & mode)
-    ▼
-InstructionsScreen ◄─── (shown before each section)
+WelcomeScreen / Dashboard
     │
-    ├──► AWAScreen (30 min essay)
-    │       │ (submit → async LLM scoring)
-    │       ▼
-    ├──► QuestionScreen (V1/V2/Q1/Q2)
-    │       │ (prev/next, mark for review)
-    │       ▼
-    │    ReviewScreen (jump to flagged Qs)
-    │       │ (end section)
-    │       ▼
-    │    ── adaptive routing ──
-    │       S1 perf < 40% → Easy S2
-    │       S1 perf 40-70% → Medium S2
-    │       S1 perf > 70% → Hard S2
-    │       ▼
-    │    (repeat for next section)
-    ▼
-ResultsScreen (scaled scores, breakdown, Q details)
+    ├─► Diagnostic ─────► DiagnosticResult ─┐
+    │                                       │
+    ├─► Topic drill (smart-pick)            ├─► StudyPlan (Opus 4.7)
+    │       │                               │
+    │       ▼                               ▼
+    │   QuestionScreen ◄── adaptive next ─ Today's tasks (dashboard)
+    │       │
+    │       ├─► AnswerChat (per-Q tutor)
+    │       ├─► MasteryRecord update
+    │       └─► Response logged
+    │
+    ├─► Full mock test
+    │       AWA → V1 → V2(adaptive) → Q1 → Q2(adaptive) → Results
+    │
+    ├─► Vocabulary session (FSRS)
+    │       Due cards + N new → 4-button rating → reschedule
+    │
+    └─► MistakeCoach (every 50 Qs) → diagnosis + targeted drill
 ```
-
-### Key Components
-
-- **ExamSession** (`models/exam_session.py`) — State machine tracking section order, current question, responses, timing, and marked questions
-- **QuestionBank** (`services/question_bank.py`) — Selects questions by measure, difficulty band, and topic while avoiding repeats
-- **ScoringEngine** (`services/scoring.py`) — Deterministic answer checking for all question types + scaled score estimation via lookup tables
-- **AWAScorer** (`services/awa_scorer.py`) — Multi-signal essay evaluation: deterministic prechecks (word count, empty/off-topic detection) followed by LLM-based rubric scoring
-- **LLMService** (`services/llm_service.py`) — OpenRouter client with sync and async (threaded) modes; any OpenAI-compatible API is supported
 
 ### Database
 
-SQLite with WAL mode via Peewee ORM. 14 tables covering questions, sessions, responses, scores, vocabulary, and analytics. The database is auto-created on first run.
+SQLite + Peewee. Schema migrations applied via `SqliteMigrator`. Key tables:
+`Question`, `QuestionOption`, `NumericAnswer`, `Stimulus`, `Response`,
+`ItemStats`, `ExamSession`, `SectionRecord`, `AWAPrompt`, `AWAEssay`,
+`VocabWord`, `VocabRoot`, `FlashcardReview`, `MasteryRecord`, `Lesson`,
+`StudyPlan`, `DiagnosticResult`.
+
+---
+
+## Data Interpretation Charts
+
+DI questions render real visualisations rather than inline text. Pipeline:
+
+1. **AI generation** (`scripts/generate_questions.py`) — Opus 4.7 emits a
+   `chart_spec` JSON object alongside the question
+2. **Imported orphans** (`scripts/reconstruct_di_charts.py`) — for questions
+   whose original ebook charts were lost during extraction, Opus
+   back-constructs a chart spec consistent with the marked-correct answer;
+   shared-data groups (e.g. multiple questions referencing the same Springfield
+   1992-1998 income chart) deduplicate via a `data_context` key
+3. **Rendering** — matplotlib (dark theme) outputs PNG; HTML wraps as inline
+   `<img src="data:image/png;base64,...">` so wxPython WebView renders without
+   `file://` security issues
+4. **Tables** — rendered as styled HTML, not images
+
+Supported chart types: pie, bar, grouped-bar (multi-series), line, stacked-bar,
+scatter, table.
 
 ---
 
 ## Troubleshooting
 
-### wxPython won't install on Linux
+**wxPython on Linux**: needs GTK + WebKit dev headers
+(`sudo apt install libgtk-3-dev libwebkit2gtk-4.0-dev`).
 
-wxPython requires GTK development headers:
+**"No questions available"**: run `venv/bin/python scripts/seed_data.py` then
+the import scripts in `scripts/`.
 
-```bash
-# Ubuntu / Debian
-sudo apt install libgtk-3-dev libwebkit2gtk-4.0-dev
+**AWA scoring shows N/A**: configure LLM settings in the app or set the
+environment variables above.
 
-# Fedora
-sudo dnf install wxGTK3-devel webkit2gtk3-devel
-
-# Then install wxPython
-pip install wxPython
-```
-
-If building from source is slow, use a pre-built wheel from [extras.wxpython.org](https://extras.wxpython.org/wxPython4/extras/linux/).
-
-### "No questions available" error
-
-Run the seed scripts to populate the question bank:
-
-```bash
-source venv/bin/activate
-python scripts/seed_data.py
-python scripts/import_vocab.py
-python scripts/import_barrons_vocab.py
-python scripts/import_awa_prompts.py
-python scripts/import_external_quant.py
-python scripts/import_cr_questions.py
-python scripts/expand_questions.py
-```
-
-Or re-run `./setup.sh` to do this automatically.
-
-### AWA scoring shows "N/A"
-
-Ensure your OpenRouter API key is set:
-
-1. Check `.env` has a valid `OPENROUTER_API_KEY`
-2. Or configure it from the app: Home → Settings → enter your key
-3. Verify it works by clicking "Test Connection" in Settings
-
-### Database reset
-
-To start fresh, delete the database and re-seed:
-
-```bash
-rm data/gre_mock.db*
-./setup.sh
-```
+**Database reset**: `rm data/gre_mock.db*` then re-launch — the app will
+recreate and reseed.
 
 ---
 

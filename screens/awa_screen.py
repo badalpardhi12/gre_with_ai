@@ -81,6 +81,11 @@ class AWAScreen(wx.Panel):
 
         # ── Bottom bar: submit button ─────────────────────────────────
         bottom_bar = wx.BoxSizer(wx.HORIZONTAL)
+
+        self.exit_btn = wx.Button(self, label="Exit to Dashboard", size=(170, 38))
+        self.exit_btn.Bind(wx.EVT_BUTTON, self._on_exit_clicked)
+        bottom_bar.Add(self.exit_btn, 0, wx.ALL, 8)
+
         bottom_bar.AddStretchSpacer()
 
         self.submit_btn = wx.Button(self, label="  Submit Essay  ", size=(160, 38))
@@ -113,6 +118,24 @@ class AWAScreen(wx.Panel):
 
     def set_on_time_expire(self, callback):
         self.timer.set_on_expire(callback)
+
+    def set_on_exit(self, callback):
+        """callback() — exit AWA back to dashboard"""
+        self._on_exit = callback
+
+    def _on_exit_clicked(self, event):
+        dlg = wx.MessageDialog(
+            self,
+            "Exit to dashboard? Your essay will be lost.",
+            "Exit AWA?",
+            wx.YES_NO | wx.NO_DEFAULT | wx.ICON_WARNING,
+        )
+        if dlg.ShowModal() == wx.ID_YES:
+            dlg.Destroy()
+            if hasattr(self, '_on_exit') and self._on_exit:
+                self._on_exit()
+        else:
+            dlg.Destroy()
 
     def get_essay(self):
         return self.editor.GetValue()

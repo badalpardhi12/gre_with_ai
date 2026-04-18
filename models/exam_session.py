@@ -187,7 +187,7 @@ class ExamSession:
             if measure == "awa":
                 q_ids = question_bank.select_awa_prompt()
             elif sec_idx == 1:
-                q_ids = question_bank.select_questions(
+                q_ids = question_bank.select_questions_composed(
                     measure=measure,
                     count=q_count,
                     difficulty_band="medium",
@@ -213,7 +213,7 @@ class ExamSession:
         for sec_type in self.section_order:
             m, sec_idx, time_limit, q_count = SECTION_META[sec_type]
             if sec_idx == 1:
-                q_ids = question_bank.select_questions(
+                q_ids = question_bank.select_questions_composed(
                     measure=m, count=q_count, difficulty_band="medium",
                 )
             else:
@@ -307,7 +307,7 @@ class ExamSession:
         qb = getattr(self, '_question_bank', None)
         if qb and not self.sections[s2_type].question_ids:
             s1_ids = s1.question_ids
-            q_ids = qb.select_questions(
+            q_ids = qb.select_questions_composed(
                 measure=measure,
                 count=q_count,
                 difficulty_band=band,

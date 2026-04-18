@@ -439,6 +439,20 @@ table.
 > `pip install wxPython` may need GTK + WebKit dev headers:
 > `sudo apt install libgtk-3-dev libwebkit2gtk-4.0-dev`
 
+**numpy / wxPython "metadata-generation-failed" on macOS Python 3.13**
+> Apple clang 17 + numpy 2.0.2 + Python 3.13 = source-build failure with
+> `error: no type named 'ptrdiff_t' in namespace 'std'`. Pinned wheels
+> only ship for Python 3.9–3.12.
+> **Fix:** delete the venv and re-run setup with Python 3.12:
+> ```bash
+> rm -rf venv
+> brew install python@3.12
+> PYTHON=python3.12 ./setup.sh
+> ```
+> The current `setup.sh` already prefers `python3.12` over `python3.13`
+> when both are present; this is only relevant if 3.12 is missing or
+> you forced `PYTHON=python3.13`.
+
 **Empty dashboard / "no questions"**
 > The database ships via Git LFS. Re-run `./setup.sh` (or
 > `git lfs install && git lfs pull`) to fetch `data/gre_mock.db`.

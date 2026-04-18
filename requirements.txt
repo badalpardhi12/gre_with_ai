@@ -11,7 +11,11 @@ httpcore==1.0.9
 httpx==0.28.1
 idna==3.11
 jiter==0.13.0
-numpy==2.0.2
+# numpy: must allow >=2.1 for Python 3.13 wheel coverage. With the strict
+# pin (numpy==2.0.2) anyone on 3.13 falls back to a source build that
+# crashes on Apple clang 17. setup.sh prefers Python 3.12 anyway, but the
+# loose constraint protects users who override with PYTHON=python3.13.
+numpy>=2.0.2,<3
 openai==2.30.0
 peewee==4.0.4
 pydantic==2.12.5

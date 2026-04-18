@@ -2,6 +2,7 @@
 Configuration module — loads .env and defines exam constants.
 """
 import os
+import shutil
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -11,7 +12,35 @@ load_dotenv()
 # Paths
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
-DB_PATH = DATA_DIR / "gre_mock.db"
+
+# ── Database path resolution ─────────────────────────────────────────
+# `gre_mock.db` is the SEED — shipped via Git LFS, never written by the
+# running app. The actual runtime DB is `gre_user.db` (gitignored), so
+# user state (responses, sessions, mastery, flags, streak) lives outside
+# version control. This split fixed the bug where every launch left
+# `data/gre_mock.db` "modified" in `git status`, blocking pulls.
+SEED_DB_PATH = DATA_DIR / "gre_mock.db"
+DB_PATH = DATA_DIR / "gre_user.db"
+
+
+def _bootstrap_user_db():
+    """If the user-writable DB is missing, copy the shipped seed into
+    place. Idempotent — once `gre_user.db` exists this is a no-op.
+
+    Runs at import time so every module that imports `DB_PATH` sees the
+    correct, populated file.
+    """
+    if DB_PATH.exists():
+        return
+    if not SEED_DB_PATH.exists():
+        # No seed available either — let init_db create an empty DB.
+        return
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(str(SEED_DB_PATH), str(DB_PATH))
+
+
+_bootstrap_user_db()
+
 QUESTIONS_DIR = DATA_DIR / "questions"
 RESOURCES_DIR = BASE_DIR / "resources"
 KATEX_DIR = RESOURCES_DIR / "katex"

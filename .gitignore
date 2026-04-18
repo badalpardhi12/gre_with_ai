@@ -19,6 +19,12 @@ build/
 data/*.db-journal
 data/*.db-shm
 data/*.db-wal
+# Per-user runtime DB — bootstrapped from the shipped data/gre_mock.db
+# seed on first launch by config._bootstrap_user_db. Never tracked, so
+# user state (sessions, responses, mastery, flags) doesn't churn the
+# tracked seed file and block `git pull` for the next sync.
+data/gre_user.db
+data/gre_user.db-*
 # Autosave / crash-recovery artifacts (per-run, never useful in version control)
 data/autosave_journal.jsonl
 data/autosave_journal.*.jsonl.bak

@@ -867,7 +867,13 @@ class MainFrame(wx.Frame):
         return summaries
 
     def _build_question_details(self):
-        """Build per-question detail data for results screen."""
+        """Build per-question detail data for results screen.
+
+        Includes the prompt, options (with is_correct flags), the user's
+        response payload, and the stored explanation so the results
+        screen can render a full per-question answer review with
+        explanations for both solved and unsolved items.
+        """
         details = []
         for sec_type in self.exam.section_order:
             section = self.exam.sections[sec_type]
@@ -877,6 +883,7 @@ class MainFrame(wx.Frame):
             correctness = getattr(section, '_correctness', {})
             for qid in section.question_ids:
                 q = self.question_bank.get_question(qid)
+                user_resp = section.responses.get(qid)
                 details.append({
                     "question_id": qid,
                     "measure": measure,
@@ -885,6 +892,12 @@ class MainFrame(wx.Frame):
                     "is_correct": correctness.get(qid),
                     "is_marked": qid in section.marked,
                     "time_spent": getattr(section, '_per_question_time', {}).get(qid, 0),
+                    "prompt": q["prompt"] if q else "",
+                    "options": q["options"] if q else [],
+                    "stimulus": q["stimulus"] if q else None,
+                    "numeric_answer": q.get("numeric_answer") if q else None,
+                    "explanation": (q.get("explanation") or "") if q else "",
+                    "user_response": user_resp,
                 })
         return details
 

@@ -76,6 +76,17 @@ class ResultsScreen(wx.Panel):
         btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
         btn_sizer.AddStretchSpacer()
 
+        review_btn = wx.Button(self, label="  📖 Review Answers + Explanations  ",
+                               size=(280, 40))
+        review_btn.SetFont(wx.Font(12, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
+                                    wx.FONTWEIGHT_BOLD))
+        review_btn.SetToolTip(
+            "Walk through every question with your answer, the correct answer, "
+            "and the stored explanation."
+        )
+        review_btn.Bind(wx.EVT_BUTTON, self._on_review_answers)
+        btn_sizer.Add(review_btn, 0, wx.ALL, 12)
+
         home_btn = wx.Button(self, label="  Return to Home  ", size=(180, 40))
         home_btn.SetFont(wx.Font(12, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                                   wx.FONTWEIGHT_BOLD))
@@ -120,8 +131,13 @@ class ResultsScreen(wx.Panel):
 
         scores: dict with verbal_estimated_low/high, quant_estimated_low/high, awa_estimated
         section_summaries: list of section summary dicts
-        question_details: list of per-question detail dicts
+        question_details: list of per-question detail dicts (with prompt,
+            options, user_response, explanation — used by the Review
+            Answers dialog)
         """
+        # Stash the rich detail list so the Review Answers dialog can
+        # render the per-question cards without going back to the DB.
+        self._question_details = question_details or []
         # Score cards
         v_low = scores.get("verbal_estimated_low")
         v_high = scores.get("verbal_estimated_high")
@@ -191,3 +207,18 @@ class ResultsScreen(wx.Panel):
     def _on_home_click(self, event):
         if self._on_home:
             self._on_home()
+
+    def _on_review_answers(self, _):
+        """Open the per-question answer + explanation review dialog."""
+        from screens.answer_review_dialog import AnswerReviewDialog
+        if not self._question_details:
+            wx.MessageBox(
+                "No question detail to review.",
+                "Review", wx.OK | wx.ICON_INFORMATION, parent=self,
+            )
+            return
+        dlg = AnswerReviewDialog(self, self._question_details)
+        try:
+            dlg.ShowModal()
+        finally:
+            dlg.Destroy()

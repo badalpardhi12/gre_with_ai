@@ -456,6 +456,25 @@ class UserStats(BaseModel):
     daily_goal_minutes = IntegerField(default=20)
 
 
+class QuestionFlag(BaseModel):
+    """User-submitted report that a question is wrong / broken.
+
+    Three or more distinct flags on the same question auto-retire it
+    (handled in services.question_bank.auto_retire_flagged_questions).
+    """
+    id = AutoField()
+    question = ForeignKeyField(Question, backref="flags", on_delete="CASCADE")
+    user_id = CharField(default="local", index=True)
+    reason = CharField(choices=[
+        ("wrong_answer", "Marked answer is wrong"),
+        ("wrong_explanation", "Explanation doesn't match the question"),
+        ("doesnt_make_sense", "Question doesn't make sense / incomplete"),
+        ("other", "Other"),
+    ])
+    note = TextField(default="")
+    created_at = DateTimeField(default=datetime.now, index=True)
+
+
 # ── Database initialization ──────────────────────────────────────────
 
 ALL_TABLES = [
@@ -468,6 +487,7 @@ ALL_TABLES = [
     Lesson,
     MasteryRecord, StudyPlan, DiagnosticResult,
     UserStats,
+    QuestionFlag,
 ]
 
 

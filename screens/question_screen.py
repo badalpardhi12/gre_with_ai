@@ -139,6 +139,15 @@ class QuestionScreen(wx.Panel):
         self.ask_tutor_btn.Hide()
         bottom_sizer.Add(self.ask_tutor_btn, 0, wx.ALL, 4)
 
+        # User report button — always available so a learner can flag a
+        # broken question whether they spot it before or after answering.
+        self.report_btn = wx.Button(self, label="🚩 Report")
+        self.report_btn.SetToolTip(
+            "Report a wrong answer, mismatched explanation, or unanswerable question"
+        )
+        self.report_btn.Bind(wx.EVT_BUTTON, self._on_report_question)
+        bottom_sizer.Add(self.report_btn, 0, wx.ALL, 4)
+
         bottom_sizer.AddStretchSpacer()
 
         self.prev_btn = wx.Button(self, label="◀ Previous")
@@ -625,6 +634,33 @@ class QuestionScreen(wx.Panel):
         user_resp = self._get_current_response()
         dlg = AnswerChatDialog(self, self._current_q, user_response=user_resp)
         dlg.ShowModal()
+        dlg.Destroy()
+
+    def _on_report_question(self, _):
+        """Open a small dialog to report a problem with this question."""
+        if not self._current_q:
+            return
+        qid = self._current_q.get("id")
+        if qid is None:
+            return
+        from widgets.flag_dialog import FlagQuestionDialog
+        from services.question_bank import (
+            flag_question, auto_retire_flagged_questions,
+        )
+        dlg = FlagQuestionDialog(self, qid)
+        if dlg.ShowModal() == wx.ID_OK:
+            reason = dlg.get_reason()
+            note = dlg.get_note()
+            if reason:
+                ok = flag_question(qid, reason, note=note, user_id="local")
+                if ok:
+                    # Auto-retire after enough flags accumulate; this is a
+                    # cheap query so running it inline is fine.
+                    auto_retire_flagged_questions()
+                    wx.MessageBox(
+                        "Thanks — your report was recorded. We'll review it.",
+                        "Reported", wx.OK | wx.ICON_INFORMATION, parent=self,
+                    )
         dlg.Destroy()
 
     @staticmethod

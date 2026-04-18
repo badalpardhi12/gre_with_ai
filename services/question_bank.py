@@ -4,10 +4,22 @@ Question bank service — loads, filters, and selects questions from the databas
 import random
 from datetime import datetime, timedelta
 
+from peewee import fn
+
 from models.database import (
     db, Question, QuestionOption, NumericAnswer, Stimulus,
-    AWAPrompt, VocabWord, Response,
+    AWAPrompt, VocabWord, Response, QuestionFlag,
 )
+from services.log import get_logger
+
+logger = get_logger("question_bank")
+
+
+# Threshold of distinct flag-submitting users at which a question is
+# auto-retired by `auto_retire_flagged_questions`. Conservative because
+# the local-only app today has only one user — set to 1 in single-user
+# mode and bumped to 3 if user_id ever varies.
+AUTO_RETIRE_THRESHOLD_DEFAULT = 3
 
 
 # Real GRE composition targets per section (proportions sum to 1.0)
@@ -375,3 +387,117 @@ class QuestionBankService:
                 "has_lesson": sub in lesson_subs,
             })
         return out
+
+
+# ── User flagging API ────────────────────────────────────────────────
+
+VALID_FLAG_REASONS = {
+    "wrong_answer", "wrong_explanation", "doesnt_make_sense", "other",
+}
+
+
+def flag_question(question_id: int, reason: str, note: str = "",
+                  user_id: str = "local") -> bool:
+    """Record a user's complaint about a question.
+
+    Idempotent per (user, question, reason) — re-clicking the report
+    button doesn't create a duplicate row.
+
+    Returns True if a new flag row was created (or an old one updated),
+    False if the inputs were invalid.
+    """
+    if reason not in VALID_FLAG_REASONS:
+        logger.warning("flag_question: invalid reason %r", reason)
+        return False
+    q = Question.get_or_none(Question.id == question_id)
+    if q is None:
+        logger.warning("flag_question: missing question %d", question_id)
+        return False
+
+    existing = QuestionFlag.get_or_none(
+        QuestionFlag.question == q,
+        QuestionFlag.user_id == user_id,
+        QuestionFlag.reason == reason,
+    )
+    if existing is not None:
+        # Update note (user may add detail on a re-report).
+        if note and note != existing.note:
+            existing.note = note
+            existing.save()
+        return True
+
+    QuestionFlag.create(
+        question=q,
+        user_id=user_id,
+        reason=reason,
+        note=note or "",
+    )
+    logger.info(
+        "user %s flagged question %d as %s", user_id, question_id, reason,
+    )
+    return True
+
+
+def auto_retire_flagged_questions(threshold: int = AUTO_RETIRE_THRESHOLD_DEFAULT,
+                                  single_user_threshold: int = 1) -> list:
+    """Retire questions with enough distinct-user flags.
+
+    In single-user mode (every flag from `local`) we still want a way to
+    auto-retire after a clear signal — the per-question count of *flag
+    rows* must reach `single_user_threshold`. In multi-user mode the
+    `threshold` of *distinct user_ids* applies. Whichever rule trips
+    first wins.
+
+    Returns the list of question IDs that were newly retired.
+    """
+    distinct_users_per_q = (
+        QuestionFlag
+        .select(QuestionFlag.question, fn.COUNT(fn.DISTINCT(QuestionFlag.user_id)).alias("n"))
+        .group_by(QuestionFlag.question)
+    )
+    rows_per_q = (
+        QuestionFlag
+        .select(QuestionFlag.question, fn.COUNT(QuestionFlag.id).alias("n"))
+        .group_by(QuestionFlag.question)
+    )
+
+    distinct = {r.question_id: r.n for r in distinct_users_per_q}
+    total = {r.question_id: r.n for r in rows_per_q}
+
+    candidates = set()
+    for qid, n in distinct.items():
+        if n >= threshold:
+            candidates.add(qid)
+    for qid, n in total.items():
+        if n >= single_user_threshold + 2:  # 3+ rows even from one user
+            candidates.add(qid)
+
+    if not candidates:
+        return []
+
+    with db.atomic():
+        retired_now = list(
+            Question
+            .select(Question.id)
+            .where(Question.id.in_(candidates), Question.status != "retired")
+        )
+        retired_ids = [q.id for q in retired_now]
+        if retired_ids:
+            (Question
+             .update(status="retired")
+             .where(Question.id.in_(retired_ids))
+             .execute())
+            logger.info("auto-retired %d flagged questions: %s",
+                        len(retired_ids), retired_ids)
+    return retired_ids
+
+
+def get_user_flag_for(question_id: int, user_id: str = "local"):
+    """Return this user's existing flag on a question (if any), else None."""
+    return (
+        QuestionFlag
+        .get_or_none(
+            QuestionFlag.question == question_id,
+            QuestionFlag.user_id == user_id,
+        )
+    )

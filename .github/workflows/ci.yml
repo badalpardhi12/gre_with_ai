@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Tests + audit (py${{ matrix.python }} on ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout (with LFS for shipped DB)
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      # wxPython is the only heavy dep, but the test suite is pure
+      # Python (no wx imports). Install everything except wxPython on
+      # CI to keep job time reasonable; if a test ever imports wx we
+      # add it to the install step.
+      - name: Install runtime deps (excluding wxPython)
+        run: |
+          python -m pip install --upgrade pip
+          # Strip wxPython from requirements for the CI install.
+          grep -v -i '^wxpython' requirements.txt > requirements-ci.txt
+          pip install -r requirements-ci.txt
+          pip install pytest
+
+      - name: Initialise database
+        run: python -c "from models.database import init_db; init_db()"
+
+      - name: Run test suite
+        run: pytest tests/ -v --tb=short
+
+      # The audit's exit code is 0 when no critical-corruption rows
+      # are live; we baseline at 0 because PR 1 + PR 2 retired every
+      # known offender. Any future regression breaks the build.
+      - name: Audit question bank
+        run: python scripts/audit_data_corruption.py --summary

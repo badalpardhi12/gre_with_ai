@@ -136,12 +136,45 @@ def _005_onboarding_inferred_complete():
     )
 
 
+# 73 question IDs flagged by `scripts/audit_data_corruption.py` on
+# 2026-04-18 as having corrupted answer keys, mismatched explanations,
+# or LLM "Wait—let me reconsider" artifacts. Hard-coded so that fresh
+# clones reach the same retired state without running
+# `scripts/retire_corrupted_questions.py` (which carries the same list).
+_CORRUPT_QIDS_2026_04 = (
+    8, 169, 264, 432, 433, 434, 441, 442, 443, 461, 462, 469,
+    627, 633, 691, 722, 751, 864, 871, 908, 1029, 1152, 1177, 1191,
+    1206, 1269, 1270, 1278, 1279, 1280, 1282, 1285, 1288, 1291, 1292, 1293,
+    1295, 1300, 1301, 1305, 1306, 1310, 1314, 1316, 1319, 1321, 1324, 1326,
+    1327, 1328, 1330, 1334, 1337, 1348, 1350, 1355, 1356, 1357, 1361, 1364,
+    1370, 1371, 1372, 1373, 1374, 1375, 1377, 1379, 1380, 1381, 2253, 2255,
+    2418,
+)
+
+
+def _006_retire_corrupted_2026_04():
+    """Retire 73 questions with answer-key/explanation corruption.
+
+    Idempotent: rows already at status='retired' stay retired. Missing
+    IDs are silently skipped — a fresh clone with the shipped DB hits
+    every ID, but a re-extracted DB might not contain them all.
+    """
+    db = _get_db()
+    placeholders = ",".join("?" for _ in _CORRUPT_QIDS_2026_04)
+    db.execute_sql(
+        f"UPDATE question SET status='retired' "
+        f"WHERE id IN ({placeholders}) AND status != 'retired'",
+        _CORRUPT_QIDS_2026_04,
+    )
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
     ("003_flashcard_review_indexes", _003_flashcard_review_indexes),
     ("004_user_stats", _004_user_stats),
     ("005_onboarding_inferred_complete", _005_onboarding_inferred_complete),
+    ("006_retire_corrupted_2026_04", _006_retire_corrupted_2026_04),
 ]
 
 

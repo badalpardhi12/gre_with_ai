@@ -2,6 +2,7 @@
 Math rendering widget using wx.html2.WebView and KaTeX (or MathJax fallback).
 Displays formatted math expressions and rich HTML content.
 """
+import re
 from pathlib import Path
 
 import wx
@@ -11,6 +12,36 @@ from config import RESOURCES_DIR, DATA_DIR
 from widgets import ui_scale
 from widgets.html_sanitizer import safe_html
 from widgets.theme import Color, hex_str
+
+
+# Plain-ASCII math notation that imported / older-LLM-generated content
+# uses instead of LaTeX (e.g. "sqrt(3)", "x^2", "pi/2"). At render time
+# we rewrite each occurrence into a KaTeX-recognised inline span so the
+# question matches what a real GRE prep book would show. The substitutions
+# are deliberately conservative — they only fire when the text is clearly
+# mathematical (a number / variable next to the operator), so prose like
+# "the carrot pi" or "his ^th birthday" stays untouched.
+_PLAIN_MATH_NORMALISERS = (
+    # sqrt(<expr>) → \(\sqrt{<expr>}\)
+    (re.compile(r"\bsqrt\s*\(([^()]+)\)"), r"\\(\\sqrt{\1}\\)"),
+    # 3^2 / x^n → \(3^{2}\) / \(x^{n}\)  (single token, no space around ^)
+    (re.compile(r"(?<![\\\w])([A-Za-z0-9]+)\^(\{?[A-Za-z0-9.+\-]+\}?)(?!\w)"),
+     r"\\(\1^{\2}\\)"),
+)
+
+
+def _normalise_plain_math(html: str) -> str:
+    """Best-effort rewrite of common ASCII math into KaTeX-friendly form.
+
+    Idempotent on already-LaTeX content because the regexes won't match
+    inside `\(...\)` or `$...$` blocks (they require bare operators).
+    """
+    if not html:
+        return html
+    out = html
+    for pattern, repl in _PLAIN_MATH_NORMALISERS:
+        out = pattern.sub(repl, out)
+    return out
 
 
 # Base URL for the WebView. Restricted to data/images/ so a malicious
@@ -184,8 +215,13 @@ class MathView(wx.Panel):
         `html_body` is treated as untrusted (it may originate from
         LLM-generated stimuli or imported ebook HTML) and is sanitized via
         bleach before being inlined into the page template.
+
+        Plain ASCII math (e.g. "sqrt(3)", "x^2") is rewritten into KaTeX
+        delimiters before sanitisation so older imported questions
+        render correctly even if the source forgot the math markup.
         """
-        sanitized = safe_html(html_body)
+        normalised = _normalise_plain_math(html_body or "")
+        sanitized = safe_html(normalised)
         self._current_html = sanitized
         # Pull all colors from the central palette so the WebView matches
         # the native widgets without per-screen overrides.

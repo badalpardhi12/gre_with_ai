@@ -175,9 +175,24 @@ def audit_database(verbose=False, export_json=False, ids_only=False,
     
     # ──── QUANT AUDIT ────
     quant_issues = defaultdict(int)
+    # Pre-compile regexes used per-question so the loop stays fast.
+    named_shape_re = re.compile(
+        r"\b(?:Triangle|Square|Rectangle|Pentagon|Quadrilateral|"
+        r"Hexagon|Polygon)\s+([A-Z]{3,5})\b"
+    )
+    seg_eq_re = re.compile(r"\b([A-Z]{2})\s*=\s*[^=]")
+    plain_math_re = re.compile(r"\bsqrt\s*\(|[A-Za-z0-9]\^[A-Za-z0-9]")
+    latex_block_re = re.compile(r"\\\(|\\\[|\$")
+    chart_re = re.compile(
+        r"\b(the chart|the table|shown above|preceding chart|preceding graph"
+        r"|donations from Company)\b",
+        re.I,
+    )
+
     for q in quant_qs:
         options = list(QuestionOption.select().where(QuestionOption.question == q))
         na = NumericAnswer.get_or_none(NumericAnswer.question == q)
+        prompt = q.prompt or ""
 
         if q.subtype == "numeric_entry":
             if na and isinstance(na.exact_value, (int, float)):
@@ -192,20 +207,32 @@ def audit_database(verbose=False, export_json=False, ids_only=False,
         # Structural check: QC must declare both Quantity A: and Quantity B:
         # in the prompt — otherwise the user can't see the comparison.
         if q.subtype == "qc":
-            p = q.prompt or ""
-            has_a = re.search(r"Quantity\s*A\s*:", p, re.I) is not None
-            has_b = re.search(r"Quantity\s*B\s*:", p, re.I) is not None
+            has_a = re.search(r"Quantity\s*A\s*:", prompt, re.I) is not None
+            has_b = re.search(r"Quantity\s*B\s*:", prompt, re.I) is not None
             if not (has_a and has_b):
                 quant_issues["qc_missing_quantity_labels"] += 1
 
         # Chart/graph reference without a stimulus = unanswerable DI question
-        chart_re = re.compile(
-            r"\b(the chart|the table|shown above|preceding chart|preceding graph"
-            r"|donations from Company)\b",
-            re.I,
-        )
-        if chart_re.search(q.prompt or "") and q.stimulus_id is None:
+        if chart_re.search(prompt) and q.stimulus_id is None:
             quant_issues["chart_referenced_no_stimulus"] += 1
+
+        # Geometry-needs-figure: prompt names a labeled shape AND uses
+        # a segment whose endpoints aren't part of that shape AND has
+        # no stimulus. The "AB = 1" with no defined A is the giveaway.
+        if q.stimulus_id is None:
+            shapes = named_shape_re.findall(prompt)
+            if shapes:
+                shape_letters = set("".join(shapes))
+                used_segs = seg_eq_re.findall(prompt)
+                foreign = [s for s in used_segs if not set(s) <= shape_letters]
+                if foreign:
+                    quant_issues["geometry_needs_figure"] += 1
+
+        # Plain-ASCII math notation that should be LaTeX. Informational
+        # only — MathView normalises common cases at render time, but
+        # surfacing the count makes it easier to clean up the source.
+        if plain_math_re.search(prompt) and not latex_block_re.search(prompt):
+            quant_issues["plain_math_notation"] += 1
 
     report["quant_issues"] = dict(quant_issues)
     
@@ -243,7 +270,13 @@ def audit_database(verbose=False, export_json=False, ids_only=False,
         for q in llm_artifacts[:10]
     ]
     
-    corruption_found = len(worst) > 0 or len(quant_issues) > 0
+    # `plain_math_notation` is informational — MathView normalises
+    # common ASCII math ("sqrt(3)" → "\(\sqrt{3}\)") at render time so
+    # it doesn't break a question. Treat the rest of quant_issues as
+    # blocking when computing the exit-code signal.
+    blocking_quant = {k: v for k, v in quant_issues.items()
+                      if k != "plain_math_notation"}
+    corruption_found = len(worst) > 0 or len(blocking_quant) > 0
 
     # Don't unconditionally close — when called from a long-running
     # process (main_frame at launch), the caller wants the connection

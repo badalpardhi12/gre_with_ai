@@ -226,6 +226,31 @@ def _008_retire_option_leak_2026_04():
     )
 
 
+# Fourth batch (2026-04-19): quant questions that name a labeled
+# geometric figure (e.g. "Triangle BCD") then reference a separate
+# segment whose endpoints aren't in the figure ("AB = 1" — but A is
+# never defined). These are unanswerable without a diagram. Detected
+# by the new "geometry_needs_figure" rule in
+# scripts/audit_data_corruption.py.
+_GEOMETRY_NO_FIGURE_QIDS_2026_04 = (
+    638,
+)
+
+
+def _009_retire_geometry_no_figure_2026_04():
+    """Retire quant geometry questions with undefined points.
+
+    Idempotent. Same skip-if-missing semantics as 006-008.
+    """
+    db = _get_db()
+    placeholders = ",".join("?" for _ in _GEOMETRY_NO_FIGURE_QIDS_2026_04)
+    db.execute_sql(
+        f"UPDATE question SET status='retired' "
+        f"WHERE id IN ({placeholders}) AND status != 'retired'",
+        _GEOMETRY_NO_FIGURE_QIDS_2026_04,
+    )
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -235,6 +260,8 @@ MIGRATIONS = [
     ("006_retire_corrupted_2026_04", _006_retire_corrupted_2026_04),
     ("007_retire_incomplete_2026_04", _007_retire_incomplete_2026_04),
     ("008_retire_option_leak_2026_04", _008_retire_option_leak_2026_04),
+    ("009_retire_geometry_no_figure_2026_04",
+     _009_retire_geometry_no_figure_2026_04),
 ]
 
 

@@ -78,7 +78,18 @@ OPTION_LEAK_QIDS = [
     1022, 1025, 1029, 1034, 1037, 1039, 1043, 1050, 1056,
 ]
 
-ALL_RETIRE_QIDS = sorted(set(CORRUPT_QIDS + INCOMPLETE_QIDS + OPTION_LEAK_QIDS))
+# Fourth batch (2026-04-19): quant geometry questions whose prompt
+# names a labeled figure (e.g. "Triangle BCD") then refers to a
+# segment whose endpoints aren't in the figure ("AB = 1" with point A
+# never defined in the text). These are unanswerable without a
+# diagram. Carried by migration 009_retire_geometry_no_figure_2026_04.
+GEOMETRY_NO_FIGURE_QIDS = [
+    638,
+]
+
+ALL_RETIRE_QIDS = sorted(set(
+    CORRUPT_QIDS + INCOMPLETE_QIDS + OPTION_LEAK_QIDS + GEOMETRY_NO_FIGURE_QIDS
+))
 
 
 def main():

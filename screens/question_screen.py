@@ -98,6 +98,12 @@ class QuestionScreen(wx.Panel):
         self.answer_sizer = wx.BoxSizer(wx.VERTICAL)
         self.answer_panel.SetSizer(self.answer_sizer)
         self.question_sizer.Add(self.answer_panel, 1, wx.EXPAND | wx.ALL, 4)
+        # Wrap-on-resize: long option text overflows the panel on narrow
+        # widths (e.g. when the user drags the passage/question splitter
+        # left). Re-wrap every option's StaticText whenever the answer
+        # panel's width changes.
+        self._option_texts = []
+        self.answer_panel.Bind(wx.EVT_SIZE, self._on_answer_panel_resize)
 
         self.question_panel.SetSizer(self.question_sizer)
 
@@ -311,9 +317,15 @@ class QuestionScreen(wx.Panel):
             self.passage_view.set_content(q["stimulus"]["content"])
             self.passage_panel.Show()
             if not self.content_splitter.IsSplit():
+                # Sash at 50% of current width — adapts to whatever
+                # window size the user is on. Gravity 0.5 keeps the
+                # split balanced when the window resizes (without it
+                # the sash sticks to the left, starving the question).
+                w = max(800, self.content_splitter.GetClientSize().width)
                 self.content_splitter.SplitVertically(
-                    self.passage_panel, self.question_panel, 420)
-                self.content_splitter.SetMinimumPaneSize(200)
+                    self.passage_panel, self.question_panel, w // 2)
+                self.content_splitter.SetMinimumPaneSize(220)
+                self.content_splitter.SetSashGravity(0.5)
         else:
             # Always clear stale content before unsplitting (macOS WebView caches)
             self.passage_view.set_content("")
@@ -348,22 +360,24 @@ class QuestionScreen(wx.Panel):
         self.answer_sizer.Clear(True)
         self._answer_controls = []
         self._numeric_entry = None
+        # Reset the per-option StaticText list so the resize handler
+        # only re-wraps the live question's options.
+        self._option_texts = []
 
         subtype = q["subtype"]
         options = q.get("options", [])
 
         if subtype in ("rc_single", "mcq_single", "qc", "data_interp", "rc_select_passage"):
-            # Radio buttons for single-select
+            # Radio buttons for single-select — split control + wrappable
+            # text so long option labels don't get clipped at the panel
+            # boundary on narrow layouts.
             for opt in options:
-                radio = wx.RadioButton(
-                    self.answer_panel,
-                    label=f"{opt['label']}) {opt['text']}",
-                    style=wx.RB_GROUP if opt == options[0] else 0,
+                radio = self._add_wrapping_option(
+                    label_text=f"{opt['label']}) {opt['text']}",
+                    control_type="radio",
+                    is_first=(opt is options[0]),
+                    on_change=self._on_answer_change,
                 )
-                radio.SetFont(wx.Font(11, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
-                                       wx.FONTWEIGHT_NORMAL))
-                radio.Bind(wx.EVT_RADIOBUTTON, self._on_answer_change)
-                self.answer_sizer.Add(radio, 0, wx.ALL, 6)
                 self._answer_controls.append(("radio", opt["label"], radio))
 
         elif subtype in ("rc_multi", "mcq_multi", "se"):
@@ -380,12 +394,11 @@ class QuestionScreen(wx.Panel):
                 self.answer_sizer.Add(hint, 0, wx.LEFT | wx.BOTTOM, 6)
 
             for opt in options:
-                cb = wx.CheckBox(self.answer_panel,
-                                  label=f"{opt['label']}) {opt['text']}")
-                cb.SetFont(wx.Font(11, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
-                                    wx.FONTWEIGHT_NORMAL))
-                cb.Bind(wx.EVT_CHECKBOX, self._on_answer_change)
-                self.answer_sizer.Add(cb, 0, wx.ALL, 6)
+                cb = self._add_wrapping_option(
+                    label_text=f"{opt['label']}) {opt['text']}",
+                    control_type="check",
+                    on_change=self._on_answer_change,
+                )
                 self._answer_controls.append(("check", opt["label"], cb))
 
         elif subtype == "tc":
@@ -409,14 +422,15 @@ class QuestionScreen(wx.Panel):
                 self.answer_sizer.Add(label, 0, wx.LEFT | wx.TOP, 6)
 
                 for i, (choice_label, choice_text) in enumerate(choices):
-                    radio = wx.RadioButton(
-                        self.answer_panel,
-                        label=f"  {choice_label}) {choice_text}",
-                        style=wx.RB_GROUP if i == 0 else 0,
+                    radio = self._add_wrapping_option(
+                        label_text=f"  {choice_label}) {choice_text}",
+                        control_type="radio",
+                        is_first=(i == 0),
+                        on_change=self._on_answer_change,
                     )
-                    radio.Bind(wx.EVT_RADIOBUTTON, self._on_answer_change)
-                    self.answer_sizer.Add(radio, 0, wx.ALL, 4)
-                    self._answer_controls.append(("tc_radio", blank_name, choice_label, radio))
+                    self._answer_controls.append(
+                        ("tc_radio", blank_name, choice_label, radio)
+                    )
 
         elif subtype == "numeric_entry":
             # Numeric entry: prefer the explicit `mode` field added in PR 1
@@ -435,8 +449,82 @@ class QuestionScreen(wx.Panel):
             self._numeric_entry.set_on_change(lambda _: self._on_answer_change(None))
             self.answer_sizer.Add(self._numeric_entry, 0, wx.ALL, 8)
 
+        # Initial wrap pass — answer_panel may already have a stable
+        # width by now (subsequent EVT_SIZE events will re-wrap on
+        # splitter drags).
+        self._rewrap_options()
         self.answer_panel.FitInside()
         self.answer_panel.Layout()
+
+    def _add_wrapping_option(self, label_text: str, control_type: str,
+                              on_change, is_first: bool = False):
+        """Build a row with a small radio/checkbox + a wrappable text
+        label so long option strings flow over multiple lines instead
+        of being clipped by the panel boundary.
+
+        Clicking anywhere on the text also activates the control —
+        matches the official ETS interface where the option's text is a
+        click target.
+
+        Returns the inner control (RadioButton / CheckBox) so callers
+        can `GetValue()` and bind events as before.
+        """
+        row = wx.BoxSizer(wx.HORIZONTAL)
+
+        if control_type == "radio":
+            style = wx.RB_GROUP if is_first else 0
+            ctrl = wx.RadioButton(self.answer_panel, label="", style=style)
+            ctrl.Bind(wx.EVT_RADIOBUTTON, on_change)
+        else:
+            ctrl = wx.CheckBox(self.answer_panel, label="")
+            ctrl.Bind(wx.EVT_CHECKBOX, on_change)
+
+        row.Add(ctrl, 0, wx.RIGHT | wx.ALIGN_TOP, 6)
+
+        text = wx.StaticText(self.answer_panel, label=label_text)
+        text.SetFont(wx.Font(11, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
+                              wx.FONTWEIGHT_NORMAL))
+        text.Bind(wx.EVT_LEFT_DOWN,
+                  lambda evt, c=ctrl: self._toggle_from_text(c, evt))
+        row.Add(text, 1, wx.EXPAND | wx.ALIGN_CENTER_VERTICAL)
+
+        self.answer_sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
+        self._option_texts.append(text)
+        return ctrl
+
+    def _toggle_from_text(self, ctrl, _evt):
+        """Click on option text → activate the control + fire its event."""
+        if isinstance(ctrl, wx.RadioButton):
+            ctrl.SetValue(True)
+            new_evt = wx.PyCommandEvent(wx.EVT_RADIOBUTTON.typeId, ctrl.GetId())
+            new_evt.SetEventObject(ctrl)
+            wx.PostEvent(ctrl, new_evt)
+        elif isinstance(ctrl, wx.CheckBox):
+            ctrl.SetValue(not ctrl.GetValue())
+            new_evt = wx.PyCommandEvent(wx.EVT_CHECKBOX.typeId, ctrl.GetId())
+            new_evt.SetEventObject(ctrl)
+            wx.PostEvent(ctrl, new_evt)
+
+    def _on_answer_panel_resize(self, event):
+        """Re-wrap option text whenever the answer panel resizes
+        (window resize, splitter drag, sidebar toggle)."""
+        self._rewrap_options()
+        event.Skip()
+
+    def _rewrap_options(self):
+        """Wrap every option's StaticText to fit the current panel width."""
+        if not self._option_texts:
+            return
+        # Subtract padding (radio width + horizontal margins) so wrap
+        # doesn't push past the panel edge.
+        avail = self.answer_panel.GetClientSize().width - 56
+        if avail < 80:
+            return  # too narrow to lay out anything sensibly
+        for t in self._option_texts:
+            if t:
+                t.Wrap(avail)
+        self.answer_sizer.Layout()
+        self.answer_panel.FitInside()
 
     def _get_current_response(self):
         """Build response dict from current answer controls."""

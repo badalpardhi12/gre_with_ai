@@ -66,6 +66,13 @@ class QuestionScreen(wx.Panel):
 
         # ── Content area (splitter: passage left, question+answers right) ─
         self.content_splitter = wx.SplitterWindow(self, style=wx.SP_LIVE_UPDATE)
+        # Set gravity + min-pane up-front so the very first SplitVertically
+        # call respects them. Gravity 0.5 keeps the sash centred when the
+        # parent resizes (without it the sash sticks to one edge and one
+        # pane gets starved on wide windows — see image of cholesterol RC
+        # where the question column was crushed to ~30%).
+        self.content_splitter.SetSashGravity(0.5)
+        self.content_splitter.SetMinimumPaneSize(280)
 
         # Left panel: passage/stimulus (hidden if no passage)
         self.passage_panel = wx.Panel(self.content_splitter)
@@ -82,7 +89,11 @@ class QuestionScreen(wx.Panel):
         self.question_panel = wx.Panel(self.content_splitter)
         self.question_sizer = wx.BoxSizer(wx.VERTICAL)
 
-        self.prompt_view = MathView(self.question_panel, size=(-1, 150))
+        # Prompt view height: 220 covers a typical 3-line GRE stem on a
+        # narrow column ("If the statements above are true, which of the
+        # following is most strongly supported by them?"). The WebView
+        # scrolls if a question is longer.
+        self.prompt_view = MathView(self.question_panel, size=(-1, 220))
         self.question_sizer.Add(self.prompt_view, 0, wx.EXPAND | wx.ALL, 4)
 
         # Subtype label
@@ -317,15 +328,16 @@ class QuestionScreen(wx.Panel):
             self.passage_view.set_content(q["stimulus"]["content"])
             self.passage_panel.Show()
             if not self.content_splitter.IsSplit():
-                # Sash at 50% of current width — adapts to whatever
-                # window size the user is on. Gravity 0.5 keeps the
-                # split balanced when the window resizes (without it
-                # the sash sticks to the left, starving the question).
-                w = max(800, self.content_splitter.GetClientSize().width)
+                # SplitVertically with sashPos=0 tells wx to use a
+                # default position; we then snap the sash to a true
+                # 50/50 of the *realized* splitter width on the next
+                # event-loop pass via CallAfter — calling
+                # GetClientSize() inline returns 0 / a stale value
+                # before layout settles, which is what crushed the
+                # right column to ~30% in the cholesterol screenshot.
                 self.content_splitter.SplitVertically(
-                    self.passage_panel, self.question_panel, w // 2)
-                self.content_splitter.SetMinimumPaneSize(220)
-                self.content_splitter.SetSashGravity(0.5)
+                    self.passage_panel, self.question_panel, 0)
+                wx.CallAfter(self._center_passage_sash)
         else:
             # Always clear stale content before unsplitting (macOS WebView caches)
             self.passage_view.set_content("")
@@ -514,6 +526,24 @@ class QuestionScreen(wx.Panel):
         (window resize, splitter drag, sidebar toggle)."""
         self._rewrap_options()
         event.Skip()
+
+    def _center_passage_sash(self):
+        """Snap the passage/question splitter to true 50/50 once the
+        splitter has its post-layout width. Called via wx.CallAfter
+        after the first SplitVertically because GetClientSize() is
+        unreliable in the same event-loop tick as the split."""
+        if not self.content_splitter.IsSplit():
+            return
+        w = self.content_splitter.GetClientSize().width
+        if w < 560:
+            # Splitter still hasn't been sized — try once more after
+            # the next paint.
+            wx.CallLater(50, self._center_passage_sash)
+            return
+        self.content_splitter.SetSashPosition(w // 2)
+        # Trigger an option re-wrap now that the answer panel has its
+        # final width.
+        self._rewrap_options()
 
     def _rewrap_options(self):
         """Wrap every option's StaticText to fit the current panel width."""

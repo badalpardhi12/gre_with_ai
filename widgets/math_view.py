@@ -95,6 +95,18 @@ th {{
     background: {bg_surface};
     color: {text_primary};
 }}
+/* DI plots, geometry figures, and any embedded image must shrink to
+ * fit the panel. Without this rule a wide chart pushes its container
+ * past the splitter and the user has to drag the sash to see the
+ * options. `display: block` + `margin: auto` centers the image; the
+ * `max-height` prevents tall figures from dominating a short window. */
+img {{
+    max-width: 100%;
+    height: auto;
+    max-height: 60vh;
+    display: block;
+    margin: 8px auto;
+}}
 .answer-correct {{
     background: {success_bg};
     border-left: 3px solid {success};

@@ -486,7 +486,11 @@ class QuestionScreen(wx.Panel):
                               wx.FONTWEIGHT_NORMAL))
         text.Bind(wx.EVT_LEFT_DOWN,
                   lambda evt, c=ctrl: self._toggle_from_text(c, evt))
-        row.Add(text, 1, wx.EXPAND | wx.ALIGN_CENTER_VERTICAL)
+        # wx forbids EXPAND + ALIGN_* together in box sizers; EXPAND
+        # alone fills the horizontal space (which is what we need so
+        # Wrap() has the full width to work with), and the text
+        # naturally top-aligns next to the radio.
+        row.Add(text, 1, wx.EXPAND)
 
         self.answer_sizer.Add(row, 0, wx.EXPAND | wx.ALL, 6)
         self._option_texts.append(text)

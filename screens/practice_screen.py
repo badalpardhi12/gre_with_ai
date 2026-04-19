@@ -94,16 +94,28 @@ class PracticeScreen(wx.Panel):
         self._on_quick_drill: Optional[Callable] = None
         self._on_section_test: Optional[Callable] = None   # callable(measure: str)
         self._on_full_mock: Optional[Callable] = None
+        self._on_resume: Optional[Callable] = None
         self._build_ui()
 
     def set_handlers(self, quick_drill=None, section_test=None,
-                     full_mock=None):
+                     full_mock=None, resume=None):
         if quick_drill is not None:
             self._on_quick_drill = quick_drill
         if section_test is not None:
             self._on_section_test = section_test
         if full_mock is not None:
             self._on_full_mock = full_mock
+        if resume is not None:
+            self._on_resume = resume
+
+    def set_resume_visible(self, visible: bool):
+        """Show/hide the "Resume in-progress test" banner. Called by
+        main_frame whenever the in-flight ExamSession state changes
+        (start, pause-via-sidebar, abort, finish)."""
+        if not hasattr(self, "_resume_banner"):
+            return
+        self._resume_banner.Show(bool(visible))
+        self.Layout()
 
     def refresh(self):
         try:
@@ -123,6 +135,16 @@ class PracticeScreen(wx.Panel):
             wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD,
         ))
         outer.Add(title, 0, wx.ALL, ui_scale.space(5))
+
+        # Resume-in-progress banner. Hidden by default; main_frame
+        # toggles visibility via set_resume_visible() whenever an
+        # ExamSession is paused (sidebar nav away from a test screen).
+        self._resume_banner = self._make_resume_banner()
+        self._resume_banner.Hide()
+        outer.Add(
+            self._resume_banner, 0, wx.EXPAND |
+            wx.LEFT | wx.RIGHT | wx.BOTTOM, ui_scale.space(5),
+        )
 
         # Three mode cards.
         modes = wx.BoxSizer(wx.HORIZONTAL)
@@ -173,6 +195,40 @@ class PracticeScreen(wx.Panel):
             cta_label="Begin exam →",
             on_click=lambda: self._on_full_mock and self._on_full_mock(),
         )
+
+    def _make_resume_banner(self):
+        """Bright callout that returns the user to the in-flight test.
+
+        Lives at the top of the Practice screen, hidden by default so
+        regular visits aren't cluttered. main_frame.set_resume_visible
+        toggles the Show() state when an ExamSession exists in memory.
+        """
+        panel = wx.Panel(self)
+        panel.SetBackgroundColour(Color.ACCENT)
+        row = wx.BoxSizer(wx.HORIZONTAL)
+
+        text = wx.StaticText(
+            panel,
+            label="▶  You have a test in progress — pick up where you left off.",
+        )
+        text.SetForegroundColour(Color.TEXT_INVERSE)
+        f = text.GetFont()
+        f.SetWeight(wx.FONTWEIGHT_BOLD)
+        f.SetPointSize(f.GetPointSize() + 1)
+        text.SetFont(f)
+        row.Add(text, 1, wx.ALIGN_CENTER_VERTICAL | wx.ALL,
+                ui_scale.space(3))
+
+        resume_btn = SecondaryButton(panel, label="Resume Test")
+        resume_btn.Bind(
+            wx.EVT_BUTTON,
+            lambda _: self._on_resume and self._on_resume(),
+        )
+        row.Add(resume_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL,
+                ui_scale.space(2))
+
+        panel.SetSizer(row)
+        return panel
 
     # ── recent ────────────────────────────────────────────────────────
 

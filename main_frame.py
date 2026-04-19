@@ -295,6 +295,7 @@ class MainFrame(wx.Frame):
             quick_drill=self._on_start_quick_drill,
             section_test=self._start_section_test,
             full_mock=lambda: self._start_test("full_mock", "simulation"),
+            resume=self._resume_in_progress_test,
         )
         self.screens["insights"].set_handlers(
             update_plan=self._open_plan_dialog,
@@ -331,20 +332,49 @@ class MainFrame(wx.Frame):
         """
         for sname, panel in self.screens.items():
             panel.Show(sname == name)
+        # Track the active screen name so _on_sidebar_select can detect
+        # navigation away from a test-in-progress screen and prompt
+        # before clobbering the user's session.
+        self._current_screen_name = name
         target_tab = SCREEN_TO_TAB.get(name)
         if target_tab:
             self.sidebar.set_active(target_tab)
         self.panel_container.Layout()
+
+    # Test-flow screens — sidebar nav away from these prompts the user
+    # so an accidental click doesn't appear to lose their progress.
+    _TEST_FLOW_SCREENS = {"question", "awa", "instructions", "review"}
 
     def _on_sidebar_select(self, tab_id: str):
         """Sidebar callback. Routes to the canonical home screen for the tab.
 
         The Settings cog uses a sentinel id and opens the modal dialog rather
         than activating a tab.
+
+        If the user is mid-test (any of the test-flow screens active and
+        an in-progress ExamSession in memory), prompt before navigating
+        away — `self.exam` is preserved so they can come back via the
+        Resume CTA on the Practice tab.
         """
         if tab_id == self.sidebar.SETTINGS_ID:
             self._show_settings()
             return
+
+        if self._is_test_in_progress():
+            current_tab = SCREEN_TO_TAB.get(
+                getattr(self, "_current_screen_name", None))
+            if current_tab == tab_id:
+                # Clicking the same tab the test belongs to — no nav,
+                # no prompt.
+                return
+            if not self._confirm_pause_test():
+                # User chose to stay; restore the active-tab indicator
+                # to the test's home so the sidebar doesn't show the
+                # destination tab as selected.
+                if current_tab:
+                    self.sidebar.set_active(current_tab)
+                return
+
         screen_name = TAB_HOME_SCREEN.get(tab_id, "today")
         if screen_name in self.screens:
             self.sidebar.set_active(tab_id)
@@ -369,6 +399,60 @@ class MainFrame(wx.Frame):
                     screen.refresh()
                 except Exception:
                     pass
+            # Surface the in-progress test as a resume CTA so the user
+            # can get back to it without scanning the screen.
+            self._refresh_resume_indicator()
+
+    def _is_test_in_progress(self) -> bool:
+        """True iff the user is currently on a test-flow screen and the
+        ExamSession in memory is unfinished."""
+        if getattr(self, "_current_screen_name", None) not in self._TEST_FLOW_SCREENS:
+            return False
+        if self.exam is None:
+            return False
+        # Any not-yet-completed section means the test is still in
+        # progress; the results screen sets self.exam = None via
+        # _go_home so a finished test never trips this.
+        for section in self.exam.sections.values():
+            if not section.is_complete:
+                return True
+        return False
+
+    def _confirm_pause_test(self) -> bool:
+        """Two-button confirm: Stay / Pause & Switch.
+
+        Returns True if the user chose to leave; the caller is
+        responsible for navigating. `self.exam` is intentionally NOT
+        cleared so the Resume CTA on the Practice tab can route back
+        to the active question screen.
+        """
+        dlg = wx.MessageDialog(
+            self,
+            "You have a test in progress.\n\n"
+            "If you switch tabs now, your test will pause and you can "
+            "resume it from the Practice tab. Your answers so far are "
+            "kept.",
+            "Test in progress",
+            wx.YES_NO | wx.NO_DEFAULT | wx.ICON_QUESTION,
+        )
+        dlg.SetYesNoLabels("Pause && Switch", "Stay in test")
+        try:
+            return dlg.ShowModal() == wx.ID_YES
+        finally:
+            dlg.Destroy()
+
+    def _refresh_resume_indicator(self):
+        """Tell the Practice screen whether to show its Resume CTA."""
+        practice = self.screens.get("practice")
+        if practice is None or not hasattr(practice, "set_resume_visible"):
+            return
+        # Only offer Resume when there's an unfinished exam AND the
+        # question screen has a configured section to return to.
+        active = (
+            self.exam is not None
+            and any(not s.is_complete for s in self.exam.sections.values())
+        )
+        practice.set_resume_visible(active)
 
     # ── Test Flow ─────────────────────────────────────────────────────
 
@@ -928,6 +1012,7 @@ class MainFrame(wx.Frame):
         """Return to the Today tab (the canonical home)."""
         self.exam = None
         self.db_session = None
+        self._refresh_resume_indicator()
         self._on_sidebar_select("today")
 
     def _on_onboarding_skip(self):
@@ -1317,7 +1402,32 @@ class MainFrame(wx.Frame):
         self._mark_session_abandoned()
         self.exam = None
         self.db_session = None
+        self._refresh_resume_indicator()
         self._on_sidebar_select("today")
+
+    def _resume_in_progress_test(self):
+        """Re-enter the in-flight test from the Practice tab.
+
+        Routes to whichever screen the user was on when they paused
+        (question by default; instructions if they paused before
+        clicking Begin; awa for the essay section).
+        """
+        if self.exam is None:
+            return
+        # Pick a target screen based on the current section type.
+        try:
+            from models.exam_session import SectionType
+            sec_type = self.exam.current_section_type
+        except Exception:
+            sec_type = None
+        target = "question"
+        if sec_type is not None and sec_type.name == "AWA":
+            target = "awa"
+        # If the question screen still has its previous configuration
+        # the panel state is intact — Show() simply makes it visible
+        # again with timer running, options selected, etc.
+        self._show_screen(target)
+        self._refresh_resume_indicator()
 
     def _mark_session_abandoned(self):
         """Stamp state='abandoned' on the active DB session and clear journal."""

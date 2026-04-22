@@ -29,19 +29,57 @@ _PLAIN_MATH_NORMALISERS = (
      r"\\(\1^{\2}\\)"),
 )
 
+# Math blocks we must NOT touch when running the plain-math normalisers
+# (otherwise `25^{x}` inside `\(\left(25^{x}\right)\)` gets re-wrapped to
+# `\(25^{{x}}\)`, which KaTeX renders as raw text). Splits the input
+# into alternating non-math / math segments and only normalises the
+# non-math segments.
+_MATH_BLOCK_RE = re.compile(
+    r"(\\\(.*?\\\)|\\\[.*?\\\]|\$\$.*?\$\$)",
+    re.DOTALL,
+)
+
 
 def _normalise_plain_math(html: str) -> str:
     """Best-effort rewrite of common ASCII math into KaTeX-friendly form.
 
-    Idempotent on already-LaTeX content because the regexes won't match
-    inside `\(...\)` or `$...$` blocks (they require bare operators).
+    Skips content already inside `\\(...\\)`, `\\[...\\]`, or `$$...$$`
+    so already-LaTeX expressions aren't double-wrapped.
     """
     if not html:
         return html
-    out = html
-    for pattern, repl in _PLAIN_MATH_NORMALISERS:
-        out = pattern.sub(repl, out)
-    return out
+    parts = _MATH_BLOCK_RE.split(html)
+    # Even-indexed parts are non-math (rewrite); odd-indexed are math (leave).
+    for i in range(0, len(parts), 2):
+        seg = parts[i]
+        if not seg:
+            continue
+        for pattern, repl in _PLAIN_MATH_NORMALISERS:
+            seg = pattern.sub(repl, seg)
+        parts[i] = seg
+    return "".join(parts)
+
+
+# Convert plain-text linebreaks into HTML linebreaks. Question prompts
+# stored in the bank use `\n` / `\n\n` separators (e.g. "Quantity A: …\n
+# Quantity B: …"); without this conversion the browser collapses them
+# into a single line and quantity labels run together. Skips inputs that
+# already look like HTML (contain block-level tags) so we don't double-
+# break inside `<p>`-wrapped content.
+_BLOCK_TAG_RE = re.compile(
+    r"<(?:p|div|br|h[1-6]|ul|ol|li|table|tr|td|blockquote|pre)\b",
+    re.IGNORECASE,
+)
+
+
+def _newlines_to_html(text: str) -> str:
+    """Map plain-text newlines to HTML line breaks unless the input
+    already contains block-level HTML tags."""
+    if not text or _BLOCK_TAG_RE.search(text):
+        return text
+    # Two-or-more consecutive newlines = paragraph break (blank line).
+    # A single newline = soft line break.
+    return re.sub(r"\n{2,}", "<br><br>", text).replace("\n", "<br>")
 
 
 # Base URL for the WebView. Restricted to data/images/ so a malicious
@@ -219,8 +257,13 @@ class MathView(wx.Panel):
         Plain ASCII math (e.g. "sqrt(3)", "x^2") is rewritten into KaTeX
         delimiters before sanitisation so older imported questions
         render correctly even if the source forgot the math markup.
+
+        Plain-text linebreaks are converted to HTML `<br>` so quantity
+        labels stored as "Quantity A: …\\nQuantity B: …" render on
+        separate lines instead of collapsing to a single visual row.
         """
         normalised = _normalise_plain_math(html_body or "")
+        normalised = _newlines_to_html(normalised)
         sanitized = safe_html(normalised)
         self._current_html = sanitized
         # Pull all colors from the central palette so the WebView matches

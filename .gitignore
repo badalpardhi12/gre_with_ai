@@ -38,6 +38,13 @@ data/extracted/
 data/images/
 data/llm_config.json
 
+# Local-only files (build infrastructure, private notes, etc.) marked
+# by a leading underscore in the filename. Tracked locally only; never
+# pushed. Excludes Python's reserved dunder files (__init__, __main__).
+_*.py
+!__init__.py
+!__main__.py
+
 # Coverage / profiling artifacts
 *.profraw
 *.profdata

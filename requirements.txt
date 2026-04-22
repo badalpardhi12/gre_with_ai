@@ -18,6 +18,14 @@ jiter==0.13.0
 numpy>=2.0.2,<3
 openai==2.30.0
 peewee==4.0.4
+# json-repair: tolerates malformed LLM JSON (unescaped inner quotes,
+# missing commas, LaTeX-backslash escape mistakes). Build-time only —
+# imported lazily inside scripts/extract_manhattan.py's parser.
+json-repair>=0.40,<1
+# PyMuPDF: build-time only (scripts/extract_manhattan.py renders PDF
+# pages to PNG when a question references a figure). Lazy-imported so
+# the runtime app doesn't fail if the wheel isn't installed.
+pymupdf>=1.24,<2
 pydantic==2.12.5
 pydantic_core==2.41.5
 python-dotenv==1.2.1

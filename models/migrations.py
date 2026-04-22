@@ -251,6 +251,51 @@ def _009_retire_geometry_no_figure_2026_04():
     )
 
 
+# Fifth batch (2026-04-21): RC questions whose `stimulus_id` points at
+# the wrong passage — the question stem references one topic
+# (Matisse/Picasso, invisible/guerrilla theater) but the linked
+# stimulus is about something completely different (Marie Antoinette,
+# quantum mechanics). Surfaced by the tightened "Explanation-from-other"
+# detector in scripts/audit_data_corruption.py: with the false-positive
+# heuristics filtered out, these stand out as quoting prose that exists
+# nowhere in the prompt, options, or attached stimulus.
+#   QID 2684          — Matisse/Picasso → Marie Antoinette stim
+#   QIDs 2759-2762    — invisible/guerrilla theater → quantum mechanics stim
+# The source passages aren't present in any stimulus row, so re-linking
+# isn't an option. Retire until/unless the original Manhattan passages
+# get re-extracted.
+_ORPHAN_RC_STIM_QIDS_2026_04 = (
+    2684, 2759, 2760, 2761, 2762,
+)
+
+
+def _010_retire_orphan_rc_stim_2026_04():
+    """Retire RC questions linked to the wrong stimulus.
+
+    Idempotent. Same skip-if-missing semantics as 006-009.
+    """
+    db = _get_db()
+    placeholders = ",".join("?" for _ in _ORPHAN_RC_STIM_QIDS_2026_04)
+    db.execute_sql(
+        f"UPDATE question SET status='retired' "
+        f"WHERE id IN ({placeholders}) AND status != 'retired'",
+        _ORPHAN_RC_STIM_QIDS_2026_04,
+    )
+
+
+def _011_retire_legacy_quant_imports_2026_04():
+    """Retire 460 live + 129 already-retired quant rows whose source is
+    'imported' (Kaplan / Princeton / seed-data leftovers). Manhattan
+    quant import lands fresh under source='manhattan_5lb_2018' starting
+    in this same release. ai_generated rows are untouched. Idempotent.
+    """
+    db = _get_db()
+    db.execute_sql(
+        "UPDATE question SET status='retired' "
+        "WHERE measure='quant' AND source='imported' AND status != 'retired'"
+    )
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -262,6 +307,10 @@ MIGRATIONS = [
     ("008_retire_option_leak_2026_04", _008_retire_option_leak_2026_04),
     ("009_retire_geometry_no_figure_2026_04",
      _009_retire_geometry_no_figure_2026_04),
+    ("010_retire_orphan_rc_stim_2026_04",
+     _010_retire_orphan_rc_stim_2026_04),
+    ("011_retire_legacy_quant_imports_2026_04",
+     _011_retire_legacy_quant_imports_2026_04),
 ]
 
 

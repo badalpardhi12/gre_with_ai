@@ -1,0 +1,99 @@
+action,qid,old_stim,new_stim,reason
+relink,4617,1011,453,retired-twin found
+relink,4619,1011,453,retired-twin found
+relink,4620,1011,453,retired-twin found
+relink,4622,1012,455,retired-twin found
+relink,4623,1012,456,retired-twin found
+relink,4624,1013,457,retired-twin found
+relink,4625,1013,457,retired-twin found
+relink,4627,1014,458,retired-twin found
+relink,4628,1014,459,retired-twin found
+relink,4634,1016,460,retired-twin found
+relink,4635,1016,461,retired-twin found
+relink,4636,1016,462,retired-twin found
+relink,4637,1017,464,retired-twin found
+relink,4638,1017,464,retired-twin found
+relink,4639,1017,464,retired-twin found
+relink,4641,1018,466,retired-twin found
+relink,4642,1018,466,retired-twin found
+relink,4645,1020,467,retired-twin found
+relink,4646,1020,468,retired-twin found
+relink,4647,1020,468,retired-twin found
+relink,4648,1021,469,retired-twin found
+relink,4649,1021,469,retired-twin found
+relink,4650,1022,470,retired-twin found
+relink,4652,1022,470,retired-twin found
+relink,4653,1022,470,retired-twin found
+relink,4655,1023,471,retired-twin found
+relink,4656,1023,472,retired-twin found
+relink,4666,1031,474,retired-twin found
+relink,4667,1031,474,retired-twin found
+relink,4668,1031,474,retired-twin found
+retire_empty_stim,4621,1012,,"empty chart stimulus, no recoverable chart"
+retire_empty_stim,4626,1014,,"empty chart stimulus, no recoverable chart"
+retire_empty_stim,4630,1014,,"empty chart stimulus, no recoverable chart"
+retire_empty_stim,4631,1015,,"empty chart stimulus, no recoverable chart"
+retire_empty_stim,4632,1015,,"empty chart stimulus, no recoverable chart"
+retire_empty_stim,4633,1015,,"empty chart stimulus, no recoverable chart"
+retire_empty_stim,4643,1019,,"empty chart stimulus, no recoverable chart"
+retire_empty_stim,4644,1019,,"empty chart stimulus, no recoverable chart"
+retire_empty_stim,4654,1023,,"empty chart stimulus, no recoverable chart"
+retire_empty_stim,4659,1025,,"empty chart stimulus, no recoverable chart"
+retire_empty_stim,4660,1026,,"empty chart stimulus, no recoverable chart"
+retire_empty_stim,4661,1027,,"empty chart stimulus, no recoverable chart"
+retire_empty_stim,4663,1028,,"empty chart stimulus, no recoverable chart"
+retire_empty_stim,4664,1029,,"empty chart stimulus, no recoverable chart"
+retire_empty_stim,4665,1030,,"empty chart stimulus, no recoverable chart"
+retire_empty_stim,4669,1032,,"empty chart stimulus, no recoverable chart"
+retire_empty_stim,4670,1033,,"empty chart stimulus, no recoverable chart"
+retire_empty_stim,4676,1035,,"empty chart stimulus, no recoverable chart"
+retire_empty_stim,4677,1036,,"empty chart stimulus, no recoverable chart"
+retire_empty_stim,4678,1036,,"empty chart stimulus, no recoverable chart"
+retire_empty_stim,4680,1038,,"empty chart stimulus, no recoverable chart"
+retire_null_stim,3861,,,figure-referencing prompt with no stimulus
+retire_null_stim,3864,,,figure-referencing prompt with no stimulus
+retire_null_stim,3870,,,figure-referencing prompt with no stimulus
+retire_null_stim,3871,,,figure-referencing prompt with no stimulus
+retire_null_stim,3882,,,figure-referencing prompt with no stimulus
+retire_null_stim,3883,,,figure-referencing prompt with no stimulus
+retire_null_stim,3886,,,figure-referencing prompt with no stimulus
+retire_null_stim,3890,,,figure-referencing prompt with no stimulus
+retire_null_stim,3892,,,figure-referencing prompt with no stimulus
+retire_null_stim,3893,,,figure-referencing prompt with no stimulus
+retire_null_stim,4172,,,figure-referencing prompt with no stimulus
+retire_null_stim,4193,,,figure-referencing prompt with no stimulus
+retire_null_stim,4216,,,figure-referencing prompt with no stimulus
+retire_null_stim,4230,,,figure-referencing prompt with no stimulus
+retire_null_stim,4242,,,figure-referencing prompt with no stimulus
+retire_null_stim,4245,,,figure-referencing prompt with no stimulus
+retire_null_stim,4246,,,figure-referencing prompt with no stimulus
+retire_null_stim,4248,,,figure-referencing prompt with no stimulus
+retire_null_stim,4294,,,figure-referencing prompt with no stimulus
+retire_null_stim,4477,,,figure-referencing prompt with no stimulus
+retire_null_stim,4480,,,figure-referencing prompt with no stimulus
+retire_null_stim,4483,,,figure-referencing prompt with no stimulus
+retire_null_stim,4484,,,figure-referencing prompt with no stimulus
+retire_null_stim,4488,,,figure-referencing prompt with no stimulus
+retire_null_stim,4489,,,figure-referencing prompt with no stimulus
+retire_null_stim,4490,,,figure-referencing prompt with no stimulus
+retire_null_stim,4494,,,figure-referencing prompt with no stimulus
+retire_null_stim,4495,,,figure-referencing prompt with no stimulus
+retire_null_stim,4499,,,figure-referencing prompt with no stimulus
+retire_null_stim,4504,,,figure-referencing prompt with no stimulus
+retire_null_stim,4505,,,figure-referencing prompt with no stimulus
+retire_null_stim,4507,,,figure-referencing prompt with no stimulus
+retire_null_stim,4511,,,figure-referencing prompt with no stimulus
+retire_null_stim,4517,,,figure-referencing prompt with no stimulus
+retire_null_stim,4521,,,figure-referencing prompt with no stimulus
+retire_null_stim,4528,,,figure-referencing prompt with no stimulus
+retire_null_stim,4531,,,figure-referencing prompt with no stimulus
+retire_null_stim,4539,,,figure-referencing prompt with no stimulus
+retire_null_stim,4548,,,figure-referencing prompt with no stimulus
+retire_null_stim,4565,,,figure-referencing prompt with no stimulus
+retire_null_stim,4581,,,figure-referencing prompt with no stimulus
+retire_null_stim,4592,,,figure-referencing prompt with no stimulus
+retire_null_stim,4594,,,figure-referencing prompt with no stimulus
+retire_null_stim,4601,,,figure-referencing prompt with no stimulus
+retire_null_stim,5003,,,figure-referencing prompt with no stimulus
+retire_null_stim,5054,,,figure-referencing prompt with no stimulus
+retire_null_stim,5055,,,figure-referencing prompt with no stimulus

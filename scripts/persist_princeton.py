@@ -160,6 +160,37 @@ def _flat_options_from_vision(vr, raw_correct_label):
     return out
 
 
+def _estimate_difficulty(subtype: str, stem: str, stimulus_text: str) -> int:
+    """Deterministic per-item difficulty estimate in 1..5.
+
+    Princeton's source material doesn't label difficulty, but uniform
+    ``difficulty_target=3`` breaks ``services.question_bank``'s easy/hard
+    filters. We bucket by combined stem + stimulus length using subtype-
+    specific thresholds calibrated against the ``ai_synthetic``
+    distribution. Intended as a coarse signal; run
+    ``scripts/backfill_difficulty_target.py`` afterwards for a
+    population-relative spread.
+    """
+    n = len(stem or "") + len(stimulus_text or "")
+    # (threshold, difficulty) pairs; first threshold wins.
+    curve = {
+        "tc": [(90, 2), (160, 3), (280, 4), (10**9, 5)],
+        "se": [(120, 2), (180, 3), (260, 4), (10**9, 5)],
+        "qc": [(50, 2), (90, 3), (160, 4), (10**9, 5)],
+        "numeric_entry": [(70, 2), (130, 3), (220, 4), (10**9, 5)],
+        "mcq_single": [(70, 2), (130, 3), (220, 4), (10**9, 5)],
+        "mcq_multi": [(100, 2), (160, 3), (250, 4), (10**9, 5)],
+        "data_interp": [(120, 3), (200, 4), (10**9, 5)],
+        "rc_single": [(40, 2), (90, 3), (160, 4), (10**9, 5)],
+        "rc_multi": [(120, 2), (200, 3), (320, 4), (10**9, 5)],
+        "rc_select_passage": [(80, 2), (140, 3), (220, 4), (10**9, 5)],
+    }.get(subtype, [(100, 2), (180, 3), (300, 4), (10**9, 5)])
+    for threshold, diff in curve:
+        if n <= threshold:
+            return diff
+    return 3
+
+
 def build_question_for_review(q: dict, tc_vision: dict) -> dict:
     """Project an extracted item into the dict shape expert_review expects."""
     options = q.get("options") or []
@@ -167,15 +198,17 @@ def build_question_for_review(q: dict, tc_vision: dict) -> dict:
         vr = tc_vision.get(str(q["qst_id"]))
         if vr and "table" in vr:
             options = _flat_options_from_vision(vr, q.get("correct_label"))
+    stem = q.get("prompt") or ""
+    stimulus_text = q.get("stimulus_text") or ""
     return {
         "subtype": q["subtype"],
-        "stem": q.get("prompt") or "",
+        "stem": stem,
         "options": options,
         "correct_label": q.get("correct_label"),
         "explanation": "",
-        "difficulty": 3,
+        "difficulty": _estimate_difficulty(q["subtype"], stem, stimulus_text),
         "source": SOURCE_TAG,
-        "stimulus_text": q.get("stimulus_text") or "",
+        "stimulus_text": stimulus_text,
     }
 
 
@@ -374,7 +407,9 @@ def persist_one(q: dict, tc_vision: dict, plan: dict,
         "subtype": q["subtype"],
         "stimulus": stimulus,
         "prompt": q.get("prompt") or "",
-        "difficulty_target": 3,
+        "difficulty_target": _estimate_difficulty(
+            q["subtype"], q.get("prompt") or "", q.get("stimulus_text") or ""
+        ),
         "concept_tags": json.dumps([]),
         "topic": "",
         "subtopic": "",

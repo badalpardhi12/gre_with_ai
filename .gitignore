@@ -32,6 +32,10 @@ data/awa_draft_*.txt
 data/gre_app.log
 data/gre_app.log.*
 
+# Pre-consolidation safety backups — never tracked, retained locally so
+# a broken merge can be rolled back without re-running consolidation.
+data/*.pre-consolidation.bak
+
 # Source ebooks and intermediate extraction artifacts (large, binary, generated)
 data/ebooks/
 data/extracted/
@@ -44,6 +48,13 @@ data/llm_config.json
 _*.py
 !__init__.py
 !__main__.py
+
+# Worktree-local debug + sample-review helpers — these are scratch
+# scripts that point at specific qids during agent runs and shouldn't
+# enter the public tree.
+sample_review_tmp/
+kaplan_sample_review_tmp/
+princeton_sample_review_tmp/
 
 # Coverage / profiling artifacts
 *.profraw

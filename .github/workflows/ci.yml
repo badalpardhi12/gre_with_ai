@@ -66,6 +66,18 @@ jobs:
           echo "pytest-exit-code: $rc"
           echo "--- last 60 lines of captured output ---"
           tail -60 pytest.out
+
+          # Mirror the failure summary into the job summary so anyone
+          # (including anonymous API clients) can see it via
+          # /repos/.../actions/runs/<id>/summary. Truncated to 30KB to
+          # avoid overflowing GitHub's 1MB cap.
+          {
+            echo "### pytest exit $rc (python ${{ matrix.python }} on ${{ matrix.os }})"
+            echo ""
+            echo '```'
+            tail -c 30000 pytest.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           exit $rc
 
       - name: Upload pytest log

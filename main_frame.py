@@ -1159,6 +1159,14 @@ class MainFrame(wx.Frame):
             )
             return
 
+        # Cluster atomicity — same rule as Quick Drill: an RC subtopic like
+        # "rc_inference" can produce an orphan sibling, so expand clusters
+        # before shipping the drill. Oversize tolerance of 3 keeps a
+        # 10-question drill feeling right even if an RC passage lands in it.
+        ids = self.question_bank.enforce_cluster_atomicity(
+            ids, strict_count=True, max_oversize=3,
+        )
+
         # Build a topic drill exam
         self.exam = ExamSession(test_type="drill", mode="learning")
         sec_type = SectionType.VERBAL_S1 if measure == "verbal" else SectionType.QUANT_S1
@@ -1227,10 +1235,44 @@ class MainFrame(wx.Frame):
                           "Quick Drill", wx.OK | wx.ICON_INFORMATION)
             return
 
+        # Cluster atomicity: the per-subtopic drill picker is unaware of RC
+        # passage clusters, so it can leave a single sibling of a 3-question
+        # passage orphaned. That breaks the real-GRE experience (every RC
+        # question is shown alongside its passage siblings). Expand clusters
+        # here, tolerating modest oversize — a 10-item drill that lands on
+        # an RC cluster is fine at 12 or 13; shorter sections get priority
+        # over exactly-N counts. Oversize-capped so a big passage-cluster
+        # can't balloon the drill past the user's expected session length.
+        ids = self.question_bank.enforce_cluster_atomicity(
+            ids, strict_count=True, max_oversize=3,
+        )
+
+        if not ids:
+            wx.MessageBox("Not enough questions to start a drill.",
+                          "Quick Drill", wx.OK | wx.ICON_INFORMATION)
+            return
+
         # Shuffle so the section doesn't show 5 verbal then 5 quant in
         # blocks — interleaving keeps the drill feeling varied.
+        # Cluster-aware shuffle: siblings must stay adjacent so the
+        # passage pane only renders once per passage. We group by
+        # stimulus_id, shuffle the groups, then flatten.
         import random
-        random.shuffle(ids)
+        from models.database import Question as _Qmod
+        rows_stim = {
+            r.id: r.stimulus_id for r in
+            _Qmod.select(_Qmod.id, _Qmod.stimulus).where(_Qmod.id.in_(ids))
+        }
+        groups = {}
+        for qid in ids:
+            stim = rows_stim.get(qid)
+            # Non-clustered items get unique per-id keys so they shuffle
+            # independently; clustered items share their stimulus key.
+            key = ("stim", stim) if stim else ("solo", qid)
+            groups.setdefault(key, []).append(qid)
+        group_keys = list(groups.keys())
+        random.shuffle(group_keys)
+        ids = [qid for k in group_keys for qid in groups[k]]
 
         # Pick the section type from the majority measure so per-section
         # scoring + the on-screen header label match what the user sees.

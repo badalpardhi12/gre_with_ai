@@ -602,6 +602,117 @@ class QuestionBankService:
 
         return picked
 
+    def enforce_cluster_atomicity(self, question_ids, strict_count=False,
+                                    max_oversize=3):
+        """Rewrite a candidate question-ID list so RC/DI clusters stay atomic.
+
+        Quick Drill (and any other custom assembly that doesn't go through
+        ``select_questions_composed``) picks items one at a time from
+        per-subtopic pools. That can leave a single sibling of a 3-question
+        RC cluster in the list — the user then sees an orphan passage-
+        question with no siblings, which breaks the real-GRE experience.
+
+        This helper walks the list, preserving order, and for every item
+        that belongs to a cluster either:
+
+        1. Expands: pulls in every live sibling under the same
+           ``stimulus_id`` (option "a" — matches real GRE RC presentation),
+           so the user sees the full passage-cluster together. The cluster
+           is inserted at the position of the original orphan, with
+           siblings kept adjacent so the passage pane only has to render
+           once.
+
+        2. Drops: if ``strict_count=True`` and expanding would push the
+           total past ``len(question_ids) + max_oversize``, the cluster
+           (including the original orphan) is removed entirely rather than
+           shipped partial.
+
+        Non-cluster questions pass through unchanged. The returned list
+        preserves relative order so any caller-chosen interleaving
+        (e.g. Quick Drill's verbal/quant shuffle) is still honoured for
+        the non-clustered questions.
+        """
+        if not question_ids:
+            return list(question_ids)
+
+        # Fetch subtype + stimulus for every candidate in one round-trip.
+        rows = list(
+            Question.select(Question.id, Question.subtype, Question.stimulus)
+            .where(Question.id.in_(list(question_ids)))
+        )
+        by_id = {r.id: r for r in rows}
+
+        target_budget = len(question_ids) + max_oversize
+        seen_clusters = set()
+        seen_ids = set()
+        out = []
+
+        for qid in question_ids:
+            if qid in seen_ids:
+                continue
+            q = by_id.get(qid)
+            if q is None:
+                # Question vanished between selection and expansion (rare —
+                # race with retirement). Skip rather than crash.
+                continue
+
+            key = _cluster_group(q)
+            if key[0] != "stim":
+                # Singleton — pass through.
+                out.append(qid)
+                seen_ids.add(qid)
+                continue
+
+            if key in seen_clusters:
+                continue
+            seen_clusters.add(key)
+
+            # Pull the full live sibling set for this cluster.
+            stim_id = key[1]
+            subtype_key = key[2]
+            sibling_query = Question.select(Question.id).where(
+                (Question.stimulus == stim_id) &
+                (Question.status == "live")
+            )
+            if subtype_key == "rc":
+                sibling_query = sibling_query.where(
+                    Question.subtype.in_(list(CLUSTERED_VERBAL_SUBTYPES))
+                )
+            else:
+                sibling_query = sibling_query.where(
+                    Question.subtype == subtype_key
+                )
+            clause = _exclude_synthetic_clause()
+            if clause is not None:
+                sibling_query = sibling_query.where(clause)
+            siblings = [s.id for s in sibling_query]
+
+            if not siblings:
+                # Degenerate: the orphan's own row is the only sibling
+                # (DB race). Emit it and move on.
+                out.append(qid)
+                seen_ids.add(qid)
+                continue
+
+            projected = len(out) + len(siblings) + (
+                len(question_ids) - question_ids.index(qid) - 1
+            )
+            if strict_count and projected > target_budget:
+                # Expanding would blow past the caller's budget. Drop the
+                # whole cluster (orphan included) so the user never sees
+                # a partial passage.
+                seen_ids.update(siblings)
+                continue
+
+            # Keep siblings adjacent so the passage pane only renders once.
+            for sid in siblings:
+                if sid not in seen_ids:
+                    out.append(sid)
+                    seen_ids.add(sid)
+
+        return out
+
+
     def _pool_for_subtype(self, measure, subtype, difficulty_band, exclude_ids):
         """Get all live question IDs for a measure/subtype with difficulty filter."""
         query = Question.select(Question.id).where(

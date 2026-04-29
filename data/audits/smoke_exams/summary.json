@@ -1,0 +1,26 @@
+{
+  "seeds": [
+    17,
+    42,
+    101,
+    2026,
+    31337
+  ],
+  "per_exam_pass": [
+    true,
+    true,
+    true,
+    true,
+    true
+  ],
+  "total_questions_served": 270,
+  "unique_questions_served": 245,
+  "reuse_ratio": 0.0926,
+  "max_times_any_qid_reused": 4,
+  "exclude_plumbing_check": {
+    "verbal_overlap_after_exclude": [],
+    "quant_overlap_after_exclude": []
+  },
+  "exclude_plumbing_ok": true,
+  "dedup_ok": true
+}

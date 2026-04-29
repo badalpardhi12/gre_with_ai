@@ -1,0 +1,149 @@
+{
+  "seed": 31337,
+  "order": [
+    "awa",
+    "quant_s1",
+    "quant_s2",
+    "verbal_s1",
+    "verbal_s2"
+  ],
+  "sections": [
+    {
+      "section": "awa",
+      "count": 1,
+      "time_limit": 1800,
+      "subtypes": {
+        "qc": 1
+      },
+      "clusters": {},
+      "failures": []
+    },
+    {
+      "section": "quant_s1",
+      "count": 12,
+      "time_limit": 1260,
+      "subtypes": {
+        "mcq_single": 8,
+        "qc": 4
+      },
+      "clusters": {
+        "716": 1,
+        "963": 3
+      },
+      "failures": []
+    },
+    {
+      "section": "quant_s2",
+      "count": 15,
+      "time_limit": 1560,
+      "subtypes": {
+        "qc": 4,
+        "mcq_single": 10,
+        "numeric_entry": 1
+      },
+      "clusters": {
+        "871": 1,
+        "896": 1,
+        "962": 3
+      },
+      "failures": []
+    },
+    {
+      "section": "verbal_s1",
+      "count": 12,
+      "time_limit": 1080,
+      "subtypes": {
+        "tc": 3,
+        "rc_single": 5,
+        "se": 3,
+        "rc_multi": 1
+      },
+      "clusters": {
+        "314": 1,
+        "358": 1,
+        "373": 1,
+        "620": 1,
+        "635": 1,
+        "662": 1
+      },
+      "failures": []
+    },
+    {
+      "section": "verbal_s2",
+      "count": 15,
+      "time_limit": 1380,
+      "subtypes": {
+        "tc": 4,
+        "rc_single": 6,
+        "se": 4,
+        "rc_multi": 1
+      },
+      "clusters": {
+        "312": 1,
+        "346": 1,
+        "587": 2,
+        "599": 2,
+        "632": 1
+      },
+      "failures": []
+    }
+  ],
+  "blueprint_ok": true,
+  "failures": [],
+  "all_non_awa_qids": [
+    1398,
+    1408,
+    1440,
+    1442,
+    1463,
+    1493,
+    1547,
+    1624,
+    1669,
+    1755,
+    1875,
+    1884,
+    1894,
+    1952,
+    1954,
+    1986,
+    1998,
+    2013,
+    2097,
+    2226,
+    2274,
+    2454,
+    2495,
+    2498,
+    2504,
+    2561,
+    2572,
+    2594,
+    2611,
+    2622,
+    2639,
+    2645,
+    2705,
+    2706,
+    2729,
+    2730,
+    2786,
+    2800,
+    2803,
+    2830,
+    2952,
+    2978,
+    3129,
+    3607,
+    3649,
+    3650,
+    3655,
+    3694,
+    3814,
+    3829,
+    3848,
+    3850,
+    3851,
+    3852
+  ]
+}

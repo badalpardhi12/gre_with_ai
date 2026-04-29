@@ -84,7 +84,9 @@ class Question(BaseModel):
     status = CharField(default="live",
                        choices=[
                            ("draft", "Draft"),
+                           ("candidate", "Candidate"),  # synthetic, awaiting SME
                            ("review", "Under review"),
+                           ("pretest", "Pretest"),      # SME-approved, gathering item stats
                            ("pilot", "Pilot / beta"),
                            ("live", "Live"),
                            ("retired", "Retired"),
@@ -92,6 +94,48 @@ class Question(BaseModel):
     explanation = TextField(default="")  # Explanation / solution text (HTML OK)
     created_at = DateTimeField(default=datetime.now)
     updated_at = DateTimeField(default=datetime.now)
+
+    # NEW (migration _012_synthetic_provenance_2026_04): synthetic-pipeline audit.
+    # Populated only when source='ai_synthetic'; legacy rows keep defaults.
+    #   provenance_json — full pipeline blob: run_id, prompt_hash, judge scores
+    #                      per axis per judge, adversarial agreement, etc.
+    #   review_notes    — SME free-text from the human review queue.
+    #   generated_at    — timestamp when the LLM produced the draft.
+    #   run_id          — FK-ish link to SyntheticGenerationRun.run_id
+    #                      (kept as a string to avoid coupling Question to the
+    #                      synthetic table at the ORM layer).
+    provenance_json = TextField(default="{}")
+    review_notes = TextField(default="")
+    generated_at = DateTimeField(null=True)
+    run_id = CharField(default="", index=True)
+
+    # NEW (migration _014_source_anchor_2026_04): idempotency anchor for
+    # repeatable imports. Extractors (Princeton, Kaplan) set this to the
+    # publisher's per-item locator (e.g. "QST41") so `(source, source_anchor)`
+    # forms the unique key for upserts — a second extraction run doesn't
+    # duplicate rows.
+    source_anchor = CharField(default="", index=True)
+
+    # NEW (migration _013_question_lifecycle_2026_05): pretest +
+    # IRT-estimate columns. Populated by the Phase 2 pretesting screen
+    # once an SME promotes a 'candidate' to 'pretest'. All nullable so
+    # existing live rows keep behaviour unchanged.
+    pretest_started_at = DateTimeField(null=True)
+    pretest_n_responses = IntegerField(default=0)
+    pretest_p_correct = FloatField(null=True)
+    pretest_disc_proxy = FloatField(null=True)
+    irt_b_estimate = FloatField(null=True)
+    irt_a_estimate = FloatField(null=True)
+    promotion_at = DateTimeField(null=True)
+
+    def get_provenance(self):
+        try:
+            return json.loads(self.provenance_json) if self.provenance_json else {}
+        except (ValueError, TypeError):
+            return {}
+
+    def set_provenance(self, payload):
+        self.provenance_json = json.dumps(payload)
 
     def get_tags(self):
         # Defensive parse — a manually-edited DB or an old row with malformed
@@ -475,6 +519,43 @@ class QuestionFlag(BaseModel):
     created_at = DateTimeField(default=datetime.now, index=True)
 
 
+# ── Synthetic Generation Audit (Phase 0+) ────────────────────────────
+
+
+class SyntheticGenerationRun(BaseModel):
+    """One invocation of the synthetic-question pipeline.
+
+    Each run drafts N seeds, walks them through the multi-stage gauntlet
+    (generator → adversarial solvers → ambiguity probe → rubric judge →
+    domain checks), and persists survivors as `Question.source='ai_synthetic'`
+    rows tagged with this run's `run_id`. The counters here let an SME
+    audit per-stage attrition without rerunning the LLM.
+    """
+    id = AutoField()
+    run_id = CharField(unique=True, index=True)        # uuid4 hex
+    started_at = DateTimeField(default=datetime.now)
+    finished_at = DateTimeField(null=True)
+    seeded_count = IntegerField(default=0)
+    drafted_count = IntegerField(default=0)
+    survived_solver = IntegerField(default=0)
+    survived_ambiguity = IntegerField(default=0)
+    survived_judge = IntegerField(default=0)
+    survived_domain = IntegerField(default=0)
+    persisted_count = IntegerField(default=0)
+    config_json = TextField(default="{}")               # serialized registry overlay
+    cost_estimate_usd = FloatField(default=0.0)
+    notes = TextField(default="")
+
+    def get_config(self):
+        try:
+            return json.loads(self.config_json) if self.config_json else {}
+        except (ValueError, TypeError):
+            return {}
+
+    def set_config(self, payload):
+        self.config_json = json.dumps(payload)
+
+
 # ── Database initialization ──────────────────────────────────────────
 
 ALL_TABLES = [
@@ -488,6 +569,7 @@ ALL_TABLES = [
     MasteryRecord, StudyPlan, DiagnosticResult,
     UserStats,
     QuestionFlag,
+    SyntheticGenerationRun,
 ]
 
 

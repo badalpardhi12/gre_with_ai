@@ -58,7 +58,24 @@ jobs:
           pytest tests/ --collect-only -q 2>&1 | tail -80
 
       - name: Run test suite
-        run: pytest tests/ -v --tb=short
+        run: |
+          set +e
+          pytest tests/ -v --tb=long -rA 2>&1 | tee pytest.out
+          rc=${PIPESTATUS[0]}
+          echo "---"
+          echo "pytest-exit-code: $rc"
+          echo "--- last 60 lines of captured output ---"
+          tail -60 pytest.out
+          exit $rc
+
+      - name: Upload pytest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-log-${{ matrix.os }}-py${{ matrix.python }}
+          path: pytest.out
+          if-no-files-found: ignore
+          retention-days: 3
 
       # The audit's exit code is 0 when no critical-corruption rows
       # are live; we baseline at 0 because PR 1 + PR 2 retired every

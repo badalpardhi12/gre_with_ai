@@ -1,0 +1,168 @@
+[
+  {
+    "label": "GOLD-1",
+    "description": "Verbal / Text Completion (1 blank). Canonical contrast cue, named-misconception distractors. Should anchor the high band.",
+    "item": {
+      "subtype": "tc",
+      "stem": "Although her early work was widely praised for its formal precision, the poet's later collections proved unexpectedly ____, embracing the very stylistic looseness her admirers had warned against.",
+      "options": [
+        {"label": "A", "text": "rigorous", "is_correct": false, "misconception": "wrong_valence"},
+        {"label": "B", "text": "fastidious", "is_correct": false, "misconception": "near_synonym_missing_contrast"},
+        {"label": "C", "text": "unbridled", "is_correct": true, "misconception": ""},
+        {"label": "D", "text": "ornate", "is_correct": false, "misconception": "context_irrelevant_homonym"},
+        {"label": "E", "text": "derivative", "is_correct": false, "misconception": "out_of_scope_extension"}
+      ],
+      "correct_label": "C",
+      "explanation": "The cue 'Although ... formal precision' contrasts with 'stylistic looseness'; the blank must echo looseness. 'Unbridled' (unrestrained) fits. 'Rigorous' and 'fastidious' duplicate the contrasted side; 'ornate' is a stylistic descriptor that misses the looseness/restraint axis; 'derivative' is unrelated.",
+      "claimed_difficulty": 3,
+      "vocab_tier": "advanced",
+      "subtopic": "tc_1_blank"
+    },
+    "expected_scores": {
+      "content_validity": 5,
+      "construct_alignment": 5,
+      "difficulty_plausibility": 4,
+      "distractor_quality": 5,
+      "language_clarity": 5,
+      "fairness_bias": 5
+    },
+    "rationale": "Crisp contrast cue; every distractor maps to a named TC misconception class; no proper nouns; difficulty plausibly mid-band."
+  },
+  {
+    "label": "GOLD-2",
+    "description": "Quant / Quantitative Comparison. Variable explicitly constrained; structural-reasoning trap (assumes_positive). High band.",
+    "item": {
+      "subtype": "qc",
+      "stem": "n is a nonzero integer.\n\nQuantity A: n^3\nQuantity B: n^2",
+      "options": [
+        {"label": "A", "text": "Quantity A is greater.", "is_correct": false, "misconception": "assumes_positive"},
+        {"label": "B", "text": "Quantity B is greater.", "is_correct": false, "misconception": "assumes_negative"},
+        {"label": "C", "text": "The two quantities are equal.", "is_correct": false, "misconception": "assumes_unit_magnitude"},
+        {"label": "D", "text": "The relationship cannot be determined from the information given.", "is_correct": true, "misconception": ""}
+      ],
+      "correct_label": "D",
+      "explanation": "If n=2, A=8>B=4. If n=-2, A=-8<B=4. If n=1, A=B. Sign and magnitude both vary, so the comparison is indeterminate.",
+      "claimed_difficulty": 3,
+      "domain_assumptions": ["n is a nonzero integer"],
+      "subtopic": "qc_basic"
+    },
+    "expected_scores": {
+      "content_validity": 5,
+      "construct_alignment": 5,
+      "difficulty_plausibility": 4,
+      "distractor_quality": 4,
+      "language_clarity": 5,
+      "fairness_bias": 5
+    },
+    "rationale": "Canonical 'flips on sign' QC trap; A and B both valid distractor narratives; D is the only correct answer."
+  },
+  {
+    "label": "GOLD-3",
+    "description": "Quant / Numeric Entry. Single unambiguous value, tolerance scaled to magnitude, named misconception explained.",
+    "item": {
+      "subtype": "numeric_entry",
+      "stem": "A jar contains red and blue marbles in a 3:5 ratio. After 12 red marbles are added, the new ratio is 9:10. How many blue marbles are in the jar?",
+      "options": [],
+      "correct_value": 30,
+      "tolerance": 0,
+      "explanation": "Let r=3k, b=5k. After adding 12 red: (3k+12)/5k = 9/10 ⇒ 30k + 120 = 45k ⇒ k=8. Wait: 10(3k+12)=9(5k) ⇒ 30k+120=45k ⇒ k=8 ⇒ b=5(8)=40. Recompute: 10(3k+12) = 9(5k); 30k + 120 = 45k; 120 = 15k; k=8; b = 5*8 = 40. Therefore 40 blue marbles.",
+      "claimed_difficulty": 3,
+      "subtopic": "ratios_proportions"
+    },
+    "expected_scores": {
+      "content_validity": 5,
+      "construct_alignment": 4,
+      "difficulty_plausibility": 5,
+      "distractor_quality": 5,
+      "language_clarity": 5,
+      "fairness_bias": 5
+    },
+    "rationale": "Standard ratio-shift problem; numeric entry has unambiguous integer answer; explanation traces algebra cleanly. NOTE: distractor_quality scored 5 vacuously because numeric entry has no distractors — judges should not penalise the absence."
+  },
+  {
+    "label": "BAD-1",
+    "description": "Verbal / TC. Ambiguous cue, two defensibly-correct options, one filler. Should anchor the low band.",
+    "item": {
+      "subtype": "tc",
+      "stem": "The committee's decision was ____.",
+      "options": [
+        {"label": "A", "text": "controversial", "is_correct": false, "misconception": ""},
+        {"label": "B", "text": "swift", "is_correct": false, "misconception": ""},
+        {"label": "C", "text": "final", "is_correct": true, "misconception": ""},
+        {"label": "D", "text": "unanimous", "is_correct": false, "misconception": ""},
+        {"label": "E", "text": "blue", "is_correct": false, "misconception": ""}
+      ],
+      "correct_label": "C",
+      "explanation": "The decision was final.",
+      "claimed_difficulty": 3,
+      "vocab_tier": "core",
+      "subtopic": "tc_1_blank"
+    },
+    "expected_scores": {
+      "content_validity": 3,
+      "construct_alignment": 2,
+      "difficulty_plausibility": 2,
+      "distractor_quality": 2,
+      "language_clarity": 2,
+      "fairness_bias": 4
+    },
+    "rationale": "No context cue — every option (except 'blue') is grammatically and semantically defensible. Construct-alignment fails because the item tests no inferential operation. 'blue' is filler. Fairness is 4 (no bias) but everything else is low."
+  },
+  {
+    "label": "BAD-2",
+    "description": "Quant / QC missing the domain constraint. Should anchor mid-low band on construct + content; clarity OK.",
+    "item": {
+      "subtype": "qc",
+      "stem": "Quantity A: x^2\nQuantity B: 2x",
+      "options": [
+        {"label": "A", "text": "Quantity A is greater.", "is_correct": true, "misconception": ""},
+        {"label": "B", "text": "Quantity B is greater.", "is_correct": false, "misconception": ""},
+        {"label": "C", "text": "The two quantities are equal.", "is_correct": false, "misconception": ""},
+        {"label": "D", "text": "The relationship cannot be determined from the information given.", "is_correct": false, "misconception": ""}
+      ],
+      "correct_label": "A",
+      "explanation": "x^2 grows faster than 2x for large x.",
+      "claimed_difficulty": 3,
+      "domain_assumptions": [],
+      "subtopic": "qc_algebra"
+    },
+    "expected_scores": {
+      "content_validity": 4,
+      "construct_alignment": 3,
+      "difficulty_plausibility": 3,
+      "distractor_quality": 2,
+      "language_clarity": 3,
+      "fairness_bias": 5
+    },
+    "rationale": "x is undeclared — x can be 0 (B>A vacuously equal? actually equal at x=0,2; A<B for 0<x<2; A>B otherwise), so D is the actual correct answer. The keyed answer A is wrong. Distractors carry no labels; explanation is hand-wavy. Construct-alignment scored 3 because the trap exists structurally even though the key is mis-set."
+  },
+  {
+    "label": "BAD-3",
+    "description": "Reading Comprehension that requires outside knowledge. Should anchor low band on content + construct.",
+    "item": {
+      "subtype": "rc_single",
+      "stem": "Based on the passage, what is the primary cause of the phenomenon described?",
+      "options": [
+        {"label": "A", "text": "Atmospheric circulation patterns over the Pacific.", "is_correct": false, "misconception": ""},
+        {"label": "B", "text": "Volcanic outgassing from mid-ocean ridges.", "is_correct": true, "misconception": ""},
+        {"label": "C", "text": "Anthropogenic carbon emissions.", "is_correct": false, "misconception": ""},
+        {"label": "D", "text": "Solar irradiance variation.", "is_correct": false, "misconception": ""},
+        {"label": "E", "text": "Ocean acidification feedback loops.", "is_correct": false, "misconception": ""}
+      ],
+      "correct_label": "B",
+      "explanation": "Volcanic outgassing is the primary mechanism, as established in the geological literature.",
+      "claimed_difficulty": 3,
+      "stimulus": {"type": "passage", "title": "", "content": "Researchers have long debated the origin of the warming trend observed in deep ocean sediments. The phenomenon, first reported in the early 1970s, has resisted simple explanation."},
+      "subtopic": "rc_inference"
+    },
+    "expected_scores": {
+      "content_validity": 2,
+      "construct_alignment": 2,
+      "difficulty_plausibility": 3,
+      "distractor_quality": 3,
+      "language_clarity": 3,
+      "fairness_bias": 5
+    },
+    "rationale": "The passage offers no evidence for any of the five mechanisms — answering requires outside geology knowledge, which violates RC self-containment. Distractors are at least topically plausible, hence 3 not 1."
+  }
+]

@@ -35,6 +35,8 @@ data/gre_app.log.*
 # Pre-consolidation safety backups — never tracked, retained locally so
 # a broken merge can be rolled back without re-running consolidation.
 data/*.pre-consolidation.bak
+data/*.pre-quality-sweep.bak
+data/*.post-dedup.bak
 
 # Source ebooks and intermediate extraction artifacts (large, binary, generated)
 data/ebooks/

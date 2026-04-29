@@ -46,6 +46,17 @@ jobs:
       - name: Initialise database
         run: python -c "from models.database import init_db; init_db()"
 
+      # Diagnostic: show what's installed and whether pytest can
+      # collect the full suite before actually running it. If a run
+      # fails at "Run test suite" with exit code 2, this step surfaces
+      # the collection error in the log instead of hiding it behind
+      # the matrix aggregate.
+      - name: Diagnostic — pip freeze + pytest --collect-only
+        run: |
+          python --version
+          pip freeze | sort
+          pytest tests/ --collect-only -q 2>&1 | tail -80
+
       - name: Run test suite
         run: pytest tests/ -v --tb=short
 

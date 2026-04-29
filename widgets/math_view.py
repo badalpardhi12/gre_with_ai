@@ -111,15 +111,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy"
-      content="default-src 'self' data:;
-               script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net;
-               style-src  'self' 'unsafe-inline' https://cdn.jsdelivr.net;
-               font-src   'self' data: https://cdn.jsdelivr.net;
-               img-src    'self' data:;
-               connect-src 'none';
-               frame-src  'none';
-               object-src 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src 'self' data: https://cdn.jsdelivr.net; img-src 'self' data: blob: file:; connect-src 'none'; frame-src 'none'; object-src 'none';">
 {katex_css}
 {katex_js}
 {katex_auto}

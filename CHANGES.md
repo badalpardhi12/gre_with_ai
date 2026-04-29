@@ -1,3 +1,145 @@
+# Final merge — 2026-04-29
+
+Ships the three outstanding feature branches on top of the prior
+consolidation, plus the `difficulty_target` uniformity fix that was
+gating real easy/hard filtering.
+
+## Summary
+
+Merged branches (in order, each via `--no-ff`):
+
+1. **`data-quality-sweep-2026-04-28`** (B) — cross-bank dedup (164
+   duplicates retired), Princeton subtopic backfill via Haiku (991
+   classified), legacy `ai_generated` expert-review panel (407 items,
+   130 demoted to draft), unified `services.expert_review` module.
+   One conflict: `.gitignore` (trivially kept both backup suffixes).
+2. **`audit-exam-assembly-2026-04-28`** (A) — ETS blueprint enforcement
+   in `services.question_bank`, DI-cluster anchoring in every Quant
+   section, 29 new pinned blueprint tests, `scripts/audit_exam_assembly.py`
+   and `scripts/smoke_test_exam_assembly.py` probes, `data/audits/
+   ets_blueprint_2026.md`. One conflict: `services/question_bank.py`,
+   resolved by keeping main's `exclude_user_seen` API (already
+   threaded through production callers) and layering A's DI-cluster
+   anchor step + `_select_di_cluster` helper + `_composition_targets`
+   static method + `CLUSTERED_VERBAL_SUBTYPES` export + RC
+   cross-subtype atomicity into the existing flow.
+3. **`vision-review-princeton-figures-2026-04-28`** (C) — migration 015
+   adds `question.figure_refs`, vision-panel review of 51 Princeton draft
+   figures (45 promoted / 6 demoted), 105 figure-ref backfills,
+   `services/vision_expert_review.py`, 15 new tests. Three conflicts:
+   `models/database.py` (merged the `figure_refs` field + helpers alongside
+   main's 012/013/014 columns), `models/migrations.py` (kept all of
+   012/013/014/015 in order), and `data/gre_mock.db` (row-level upsert via
+   new `scripts/upsert_from_branch_db.py`, not a pick-one-file merge).
+
+Test results after each merge:
+
+| Stage              | pytest |
+|--------------------|--------|
+| Baseline (pre-fix) | 366 / 1 skipped |
+| After difficulty fix | 369 |
+| After B merge      | 413 |
+| After A merge      | 442 |
+| After C merge      | 459 |
+
+Smoke test (`scripts/smoke_test_exam_assembly.py`): 5/5 exams pass the
+blueprint, 0 dedup violations, exit 0.
+
+## `difficulty_target` uniformity fix (commit c5139b3)
+
+Before: every Princeton (991), Manhattan (1439), and legacy
+`ai_generated` (1037) row carried `difficulty_target=3`, collapsing
+`services.question_bank`'s easy (`<=2`) and hard (`>=4`) filters to
+empty sets. Root cause: `scripts/persist_princeton.py` hardcoded
+`"difficulty": 3` in `build_question_for_review` + the payload dict at
+persist time, and the Manhattan/legacy-ai_generated imports never ran
+a difficulty-rating pass afterwards.
+
+Fix:
+
+- `scripts/backfill_difficulty_target.py` — per-`(source, subtype)`
+  quintile split on combined prompt + stimulus length, deterministic
+  and idempotent. Subtype-aware curves (TC/SE push harder at the
+  tails, RC singles lean easier).
+- `scripts/persist_princeton.py::_estimate_difficulty` — replaces the
+  hardcoded 3 so future Princeton runs ship a spread at persist time.
+- `tests/test_difficulty_target_spread.py` — three regression guards
+  (live pool must cover easy+medium+hard, each affected source must
+  carry ≥3 distinct difficulties, estimator must be non-constant).
+
+Post-fix live distribution: `d=1:137 d=2:571 d=3:1237 d=4:889 d=5:156`.
+
+## Final row counts (`gre_user.db`, per source × status)
+
+| Source               | live | draft | candidate | retired |
+|----------------------|-----:|------:|----------:|--------:|
+| `ai_generated`       | 749  | 130   | 0         | 158     |
+| `ai_synthetic`       | 180  | 79    | 44        | 1       |
+| `kaplan_2024`        | 151  | 70    | 0         | 0       |
+| `manhattan_5lb_2018` | 1365 | 0     | 0         | 74      |
+| `princeton_2012`     | 545  | 442   | 0         | 4       |
+| `imported` (legacy)  | 0    | 0     | 0         | 1259    |
+
+Total live: **2990**.
+
+## Known outstanding
+
+- **470 unreviewed `ai_generated` items.** Commit 7ee6130 expert-reviewed
+  407 of the 877 legacy items (130 demoted). The remaining pool can be
+  processed by re-running, incrementally:
+
+  ```
+  venv/bin/python scripts/expert_review_ai_generated.py \
+      --resume --batch-size 20
+  ```
+
+  The script's per-item cache under `data/extracted/legacy_ai_generated/`
+  makes re-runs idempotent; a full pass on the remaining 470 takes
+  1–2 hours wall-clock and is safe to run in the background.
+
+- **Princeton vision panel** only reviewed the 51 `needs_vision` items
+  C surfaced. The broader 448-item Princeton draft pool still needs
+  retirement/promotion decisions before shipping as live questions.
+
+## Resume commands
+
+- Legacy `ai_generated` review:
+  ```
+  venv/bin/python scripts/expert_review_ai_generated.py --resume
+  ```
+- Princeton subtopic backfill (already 991/991 classified, but the
+  script is idempotent and catches new rows):
+  ```
+  venv/bin/python scripts/backfill_princeton_subtopics.py --only-missing
+  ```
+- Cross-bank dedup sweep:
+  ```
+  venv/bin/python scripts/dedup_cross_bank.py --apply
+  ```
+- Exam-assembly smoke test:
+  ```
+  venv/bin/python scripts/smoke_test_exam_assembly.py
+  ```
+
+## Rollback
+
+Local pre-merge backups (gitignored):
+
+- `data/gre_mock.db.pre-final-merge.bak` (main's DB before the three-way merge)
+- `data/gre_user.db.pre-final-merge.bak` (runtime DB before the merge)
+
+To roll main back to pre-merge:
+
+```
+git reset --hard 7115f80                             # pre-B-merge
+cp data/gre_mock.db.pre-final-merge.bak data/gre_mock.db
+cp data/gre_user.db.pre-final-merge.bak data/gre_user.db
+```
+
+(The difficulty-fix commit `c5139b3` and the three merge commits
+`b54041c`, `a37b33c`, `6b345ec` will all go away with the reset.)
+
+
 # Consolidation — 2026-04-28
 
 This change consolidates five parallel development streams into a single

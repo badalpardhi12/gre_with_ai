@@ -100,3 +100,36 @@ def test_input_with_existing_br_left_alone():
 def test_empty_input_pass_through():
     assert _newlines_to_html("") == ""
     assert _newlines_to_html(None) is None
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Markdown inline rewrite (GitHub issue #2 regression)
+# ─────────────────────────────────────────────────────────────────────
+def test_markdown_bold_becomes_strong():
+    assert _normalise_plain_math("**Solution:** answer") == "<strong>Solution:</strong> answer"
+
+
+def test_markdown_underscore_bold_becomes_strong():
+    assert _normalise_plain_math("__bold__ text") == "<strong>bold</strong> text"
+
+
+def test_markdown_italic_becomes_em():
+    # Italic needs a preceding non-word char to disambiguate from a
+    # stray asterisk mid-word.
+    assert _normalise_plain_math("it is *important* here") == "it is <em>important</em> here"
+
+
+def test_markdown_does_not_leak_into_math_blocks():
+    # Inside \(..\) the regex is never invoked.
+    assert _normalise_plain_math(r"See \(3^{**2**}\) or done") == r"See \(3^{**2**}\) or done"
+
+
+def test_markdown_bold_in_prose_with_adjacent_math():
+    out = _normalise_plain_math(r"**Step 1:** compute \(x^2\) carefully")
+    assert "<strong>Step 1:</strong>" in out
+    assert r"\(x^2\)" in out
+
+
+def test_markdown_no_asterisks_no_change():
+    # Hot-path guard: text without `*` or `_` skips the regex.
+    assert _normalise_plain_math("plain prose here") == "plain prose here"

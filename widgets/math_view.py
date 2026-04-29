@@ -60,7 +60,9 @@ def _normalise_plain_math(html: str) -> str:
     """Best-effort rewrite of common ASCII math into KaTeX-friendly form.
 
     Skips content already inside `\\(...\\)`, `\\[...\\]`, or `$$...$$`
-    so already-LaTeX expressions aren't double-wrapped.
+    so already-LaTeX expressions aren't double-wrapped. Also rewrites
+    inline Markdown emphasis (`**bold**`, `*italic*`) into HTML so the
+    WebView renders it (fix for GitHub issue #2).
     """
     if not html:
         return html
@@ -72,6 +74,7 @@ def _normalise_plain_math(html: str) -> str:
             continue
         for pattern, repl in _PLAIN_MATH_NORMALISERS:
             seg = pattern.sub(repl, seg)
+        seg = _markdown_inline_to_html(seg)
         parts[i] = seg
     return "".join(parts)
 
@@ -96,6 +99,36 @@ def _newlines_to_html(text: str) -> str:
     # Two-or-more consecutive newlines = paragraph break (blank line).
     # A single newline = soft line break.
     return re.sub(r"\n{2,}", "<br><br>", text).replace("\n", "<br>")
+
+
+# Lightweight Markdown → HTML for inline emphasis and ordered/unordered
+# lists. Imported questions and synthetic explanations use Markdown
+# (`**bold**`, `*italic*`, numbered steps, bullets) but the WebView only
+# renders HTML + KaTeX. Without this conversion a user reported the
+# literal `**bold_text**` appearing on screen (GitHub issue #2).
+#
+# We intentionally keep the grammar *tiny* so the regex path is safe
+# against math delimiters — only patterns that cannot occur inside
+# `\(...\)` / `\[...\]` / `$$...$$` are rewritten. Bold/italic live in
+# the non-math prose segments split by `_MATH_BLOCK_RE` above.
+_MD_BOLD_RE = re.compile(r"\*\*([^\s*][^*\n]*?)\*\*")
+_MD_ITALIC_RE = re.compile(r"(?<![*\w])\*([^\s*][^*\n]*?)\*(?!\w)")
+_MD_UNDERSCORE_BOLD_RE = re.compile(r"__([^\s_][^_\n]*?)__")
+
+
+def _markdown_inline_to_html(text: str) -> str:
+    """Rewrite Markdown bold/italic into HTML tags.
+
+    Runs per non-math segment produced by `_MATH_BLOCK_RE`. Order matters:
+    `**bold**` before `*italic*` so the inner asterisks of bold aren't
+    misread as italic markers.
+    """
+    if not text or "*" not in text and "_" not in text:
+        return text
+    text = _MD_BOLD_RE.sub(r"<strong>\1</strong>", text)
+    text = _MD_UNDERSCORE_BOLD_RE.sub(r"<strong>\1</strong>", text)
+    text = _MD_ITALIC_RE.sub(r"<em>\1</em>", text)
+    return text
 
 
 # Base URL for the WebView. Restricted to data/images/ so a malicious

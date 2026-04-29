@@ -296,6 +296,147 @@ def _011_retire_legacy_quant_imports_2026_04():
     )
 
 
+def _012_synthetic_provenance_2026_04():
+    """Schema scaffolding for the synthetic-question generation pipeline.
+
+    Adds four columns to `question` so the pipeline can record per-item
+    audit data (full pipeline blob, SME notes, generation timestamp, run
+    correlation id) without dropping anything onto the LLM-free imported
+    rows. Existing rows pick up the column defaults via SQLite's ALTER
+    TABLE semantics.
+
+    Companion table `syntheticgenerationrun` is created by
+    `db.create_tables(ALL_TABLES, safe=True)` in `init_db()`; this
+    migration only handles the column-add side.
+
+    Idempotent: each ALTER tolerates a re-run via `_is_benign_schema_error`.
+    """
+    db = _get_db()
+    column_stmts = (
+        "ALTER TABLE question ADD COLUMN provenance_json TEXT NOT NULL DEFAULT '{}'",
+        "ALTER TABLE question ADD COLUMN review_notes TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE question ADD COLUMN generated_at DATETIME",
+        "ALTER TABLE question ADD COLUMN run_id VARCHAR(64) NOT NULL DEFAULT ''",
+    )
+    for stmt in column_stmts:
+        try:
+            db.execute_sql(stmt)
+        except OperationalError as e:
+            if not _is_benign_schema_error(e):
+                raise
+    # Index on run_id for cheap "show me this batch's items" lookups in
+    # the SME review queue. Peewee creates this implicitly for `index=True`
+    # fields on fresh tables, but ALTER doesn't trigger that, so we add it
+    # explicitly.
+    try:
+        db.execute_sql(
+            "CREATE INDEX IF NOT EXISTS idx_question_run_id ON question(run_id)"
+        )
+    except OperationalError as e:
+        if not _is_benign_schema_error(e):
+            raise
+
+
+def _013_question_lifecycle_2026_05():
+    """R5 — full candidate -> pretest -> live lifecycle for synthetic items.
+
+    The Phase-1 synthetic pipeline drops new items at status='candidate'
+    instead of the pre-existing 'draft' (which legacy import scripts use
+    for hand-edited rows). Once an SME approves the candidate it moves
+    to 'pretest' and gets seeded into Quick Drill at low frequency; this
+    migration adds the columns the IRT estimator (Phase 2) reads to
+    decide when to promote 'pretest' -> 'live'.
+
+    Schema delta:
+      - pretest_started_at        DATETIME (NULL = not yet pretesting)
+      - pretest_n_responses       INTEGER DEFAULT 0
+      - pretest_p_correct         FLOAT
+      - pretest_disc_proxy        FLOAT  (point-biserial proxy)
+      - irt_b_estimate            FLOAT  (difficulty parameter b)
+      - irt_a_estimate            FLOAT  (discrimination parameter a)
+      - promotion_at              DATETIME
+
+    Status enum widened to include 'candidate' and 'pretest' alongside
+    the existing draft/review/pilot/live/retired set. SQLite stores
+    `status` as a free-form CHAR so this is a code-level change in the
+    Peewee model + a partial index for the heavy "show me pretest items"
+    query.
+
+    Index: idx_question_status_pretest is partial — only rows with
+    status='pretest' appear in it, which keeps it tiny for the lifetime
+    of the bank.
+
+    Idempotent.
+    """
+    db = _get_db()
+    column_stmts = (
+        "ALTER TABLE question ADD COLUMN pretest_started_at DATETIME",
+        "ALTER TABLE question ADD COLUMN pretest_n_responses "
+        "INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE question ADD COLUMN pretest_p_correct FLOAT",
+        "ALTER TABLE question ADD COLUMN pretest_disc_proxy FLOAT",
+        "ALTER TABLE question ADD COLUMN irt_b_estimate FLOAT",
+        "ALTER TABLE question ADD COLUMN irt_a_estimate FLOAT",
+        "ALTER TABLE question ADD COLUMN promotion_at DATETIME",
+    )
+    for stmt in column_stmts:
+        try:
+            db.execute_sql(stmt)
+        except OperationalError as e:
+            if not _is_benign_schema_error(e):
+                raise
+    # Partial index over only status='pretest' rows. Lookup pattern:
+    # "give me the next pretest candidate to slot into Quick Drill" hits
+    # this index thousands of times an hour during pretesting.
+    try:
+        db.execute_sql(
+            "CREATE INDEX IF NOT EXISTS idx_question_status_pretest "
+            "ON question(status, pretest_n_responses) "
+            "WHERE status = 'pretest'"
+        )
+    except OperationalError as e:
+        if not _is_benign_schema_error(e):
+            raise
+
+
+def _014_source_anchor_2026_04():
+    """Add ``source_anchor`` column to ``question`` for idempotent extractor
+    upserts.
+
+    Princeton + Kaplan extractors stamp each row with the publisher's
+    per-item locator (e.g. ``"QST41"``) so a re-run of the extraction
+    pipeline doesn't duplicate rows — the upsert key is
+    ``(source, source_anchor)``. Legacy rows default to empty string so
+    existing behaviour is unchanged.
+
+    Note on overlap with migration 012: migration 012 already added the
+    ``review_notes`` column. Princeton's original plan was a single 012
+    that added both ``source_anchor`` + ``review_notes``; during
+    consolidation we kept synthetic's 012 and moved ``source_anchor``
+    into this new 014 to avoid column-collision.
+
+    Idempotent via ``_is_benign_schema_error``.
+    """
+    db = _get_db()
+    try:
+        db.execute_sql(
+            "ALTER TABLE question ADD COLUMN source_anchor "
+            "VARCHAR(255) NOT NULL DEFAULT ''"
+        )
+    except OperationalError as e:
+        if not _is_benign_schema_error(e):
+            raise
+    # Covering index for upsert lookups by (source, source_anchor).
+    try:
+        db.execute_sql(
+            "CREATE INDEX IF NOT EXISTS idx_question_source_anchor "
+            "ON question(source, source_anchor)"
+        )
+    except OperationalError as e:
+        if not _is_benign_schema_error(e):
+            raise
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -311,6 +452,12 @@ MIGRATIONS = [
      _010_retire_orphan_rc_stim_2026_04),
     ("011_retire_legacy_quant_imports_2026_04",
      _011_retire_legacy_quant_imports_2026_04),
+    ("012_synthetic_provenance_2026_04",
+     _012_synthetic_provenance_2026_04),
+    ("013_question_lifecycle_2026_05",
+     _013_question_lifecycle_2026_05),
+    ("014_source_anchor_2026_04",
+     _014_source_anchor_2026_04),
 ]
 
 

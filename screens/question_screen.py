@@ -840,12 +840,23 @@ class QuestionScreen(wx.Panel):
              user still has to click "Submit" on the GitHub page (they
              sign in with their own account), so we don't need any
              developer tokens to ship with the app.
+          3. (Optional) Snap a PNG of the main app window BEFORE
+             opening the dialog, so the user can paste it into the
+             GitHub issue body with Cmd+V. We capture up-front because
+             the modal dialog would otherwise occlude the main window
+             in any screen-DC-based grab.
         """
         if not self._current_q:
             return
         qid = self._current_q.get("id")
         if qid is None:
             return
+        # Capture the main-window PNG now, before the dialog appears,
+        # so the dialog can't occlude what we're trying to snap. The
+        # returned bytes + file path are used later only if the user
+        # leaves the "include screenshot" checkbox on.
+        pending_screenshot = self._prepare_screenshot(qid)
+
         from widgets.flag_dialog import FlagQuestionDialog
         from services.question_bank import (
             flag_question, auto_retire_flagged_questions,
@@ -854,16 +865,80 @@ class QuestionScreen(wx.Panel):
         if dlg.ShowModal() == wx.ID_OK:
             reason = dlg.get_reason()
             note = dlg.get_note()
+            want_shot = dlg.wants_screenshot()
             if reason:
                 ok = flag_question(qid, reason, note=note, user_id="local")
                 if ok:
                     # Auto-retire after enough flags accumulate; this is a
                     # cheap query so running it inline is fine.
                     auto_retire_flagged_questions()
-                    self._open_github_report(qid, reason, note)
+                    attachment = self._finalize_screenshot(
+                        pending_screenshot, enabled=want_shot,
+                    )
+                    self._open_github_report(qid, reason, note, attachment)
         dlg.Destroy()
 
-    def _open_github_report(self, qid, reason, note):
+    def _prepare_screenshot(self, qid):
+        """Snap the main window now; defer clipboard + file-save until
+        we know the user actually submitted the report.
+
+        Returns the raw PNG bytes (or None on failure). We deliberately
+        don't hit the clipboard from here because the user might still
+        cancel the dialog — we don't want to clobber their clipboard
+        contents for a report they never sent.
+        """
+        try:
+            from services.report_screenshot import capture_main_window_png
+            import wx as _wx
+            # Import lazily so import-time wx pull isn't a hard
+            # dependency of this module's tests.
+            try:
+                from main_frame import MainFrame as _MainFrame
+            except Exception:
+                _MainFrame = None
+            png, _main = capture_main_window_png(
+                _wx.GetTopLevelWindows(),
+                main_frame_cls=_MainFrame,
+            )
+            return png
+        except Exception as exc:  # pragma: no cover — defensive
+            import logging
+            logging.getLogger(__name__).warning(
+                "main-window screenshot capture failed for q%s: %s",
+                qid, exc,
+            )
+            return None
+
+    def _finalize_screenshot(self, png_bytes, enabled: bool):
+        """Given pre-captured PNG bytes, copy to clipboard + save to disk.
+
+        Returns a dict of result flags (see services.report_screenshot)
+        or None if the user disabled the checkbox or capture failed.
+        """
+        if not enabled or not png_bytes:
+            return None
+        qid = self._current_q.get("id") if self._current_q else None
+        try:
+            from services.report_screenshot import (
+                copy_png_to_clipboard, save_png_to_file, screenshot_path_for,
+            )
+            dest = screenshot_path_for(qid)
+            saved_path = save_png_to_file(png_bytes, dest)
+            on_clipboard = copy_png_to_clipboard(png_bytes)
+            return {
+                "captured": True,
+                "clipboard": on_clipboard,
+                "file_path": saved_path,
+                "error": None if on_clipboard else "clipboard-locked",
+            }
+        except Exception as exc:  # pragma: no cover — defensive
+            import logging
+            logging.getLogger(__name__).warning(
+                "screenshot finalize failed: %s", exc,
+            )
+            return None
+
+    def _open_github_report(self, qid, reason, note, attachment=None):
         """Open a pre-filled GitHub Issues URL for the current question.
 
         Failures here are non-fatal — the DB row is already written, so
@@ -901,12 +976,30 @@ class QuestionScreen(wx.Panel):
             )
             return
 
+        # Build a screenshot-status hint for the Yes/No dialog so the
+        # user knows whether to paste and where the audit copy lives.
+        extra = ""
+        if attachment:
+            if attachment.get("clipboard"):
+                extra = (
+                    "\n\nA screenshot of the main window has been copied "
+                    "to your clipboard — paste it into the GitHub issue "
+                    "body with Cmd+V after the page opens."
+                )
+            elif attachment.get("file_path"):
+                extra = (
+                    "\n\nScreenshot couldn't be copied to the clipboard, "
+                    f"but a copy was saved to:\n  {attachment['file_path']}\n"
+                    "Drag the file into the GitHub issue body to attach it."
+                )
+
         resp = wx.MessageBox(
             "Thanks — your report was recorded locally.\n\n"
             "Your browser will open a pre-filled GitHub issue. Please "
             "click “Submit new issue” on that page to send it to the "
-            "developer (you'll be asked to sign in to GitHub once).\n\n"
-            "Open the GitHub issue now?",
+            "developer (you'll be asked to sign in to GitHub once)."
+            + extra
+            + "\n\nOpen the GitHub issue now?",
             "Send report to the developer?",
             wx.YES_NO | wx.ICON_QUESTION,
             parent=self,

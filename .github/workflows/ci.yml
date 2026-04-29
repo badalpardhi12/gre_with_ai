@@ -40,6 +40,9 @@ jobs:
           pip install -r requirements-ci.txt
           pip install pytest
 
+      - name: Verify shipped seed DB contains no user-state rows
+        run: python scripts/verify_seed_clean.py --db data/gre_mock.db
+
       - name: Initialise database
         run: python -c "from models.database import init_db; init_db()"
 

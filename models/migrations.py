@@ -437,6 +437,28 @@ def _014_source_anchor_2026_04():
             raise
 
 
+def _015_question_figure_refs_2026_04():
+    """Add ``question.figure_refs`` (JSON-serialized list of relative image
+    paths) so vision-reviewable items can carry their attached figure(s)
+    on the Question row itself.
+
+    Most Princeton items are text-only; the ~105 rows flagged
+    ``needs_vision=True`` by the consolidator need a persisted pointer at
+    the DB level so the vision review pipeline can locate the image
+    without going back through the extractor JSON every time.
+
+    Idempotent — ALTER ADD COLUMN fails benignly if the column exists.
+    """
+    db = _get_db()
+    try:
+        db.execute_sql(
+            "ALTER TABLE question ADD COLUMN figure_refs TEXT NOT NULL DEFAULT '[]'"
+        )
+    except OperationalError as e:
+        if not _is_benign_schema_error(e):
+            raise
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -458,6 +480,8 @@ MIGRATIONS = [
      _013_question_lifecycle_2026_05),
     ("014_source_anchor_2026_04",
      _014_source_anchor_2026_04),
+    ("015_question_figure_refs_2026_04",
+     _015_question_figure_refs_2026_04),
 ]
 
 

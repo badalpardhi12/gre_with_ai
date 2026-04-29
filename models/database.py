@@ -99,7 +99,9 @@ class Question(BaseModel):
     # Populated only when source='ai_synthetic'; legacy rows keep defaults.
     #   provenance_json — full pipeline blob: run_id, prompt_hash, judge scores
     #                      per axis per judge, adversarial agreement, etc.
-    #   review_notes    — SME free-text from the human review queue.
+    #   review_notes    — SME free-text from the human review queue. Also
+    #                      used by Kaplan + Princeton expert-review panels
+    #                      to persist a JSON-serialized verdict.
     #   generated_at    — timestamp when the LLM produced the draft.
     #   run_id          — FK-ish link to SyntheticGenerationRun.run_id
     #                      (kept as a string to avoid coupling Question to the
@@ -127,6 +129,23 @@ class Question(BaseModel):
     irt_b_estimate = FloatField(null=True)
     irt_a_estimate = FloatField(null=True)
     promotion_at = DateTimeField(null=True)
+
+    # NEW (migration _015_question_figure_refs_2026_04): JSON-serialized
+    # list of relative image paths under data/extracted/<source>/images/
+    # — populated for Princeton items flagged needs_vision by the
+    # consolidator. Empty list otherwise.
+    figure_refs = TextField(default="[]")
+
+    def get_figure_refs(self):
+        """Return parsed list of figure paths (never raises)."""
+        try:
+            val = json.loads(self.figure_refs) if self.figure_refs else []
+            return val if isinstance(val, list) else []
+        except (ValueError, TypeError):
+            return []
+
+    def set_figure_refs(self, refs):
+        self.figure_refs = json.dumps(list(refs))
 
     def get_provenance(self):
         try:

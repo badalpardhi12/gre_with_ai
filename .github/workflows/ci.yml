@@ -2,7 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # `ci-fix-**` runs the matrix on in-flight fix branches so we can
+    # validate a green CI before merging to main. Remove this pattern
+    # once the backlog of `ci-fix-*` branches is cleaned up.
+    branches: [main, "ci-fix-**"]
   pull_request:
     branches: [main]
 

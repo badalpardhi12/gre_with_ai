@@ -1,0 +1,152 @@
+{
+  "seed": 42,
+  "order": [
+    "awa",
+    "quant_s1",
+    "quant_s2",
+    "verbal_s1",
+    "verbal_s2"
+  ],
+  "sections": [
+    {
+      "section": "awa",
+      "count": 1,
+      "time_limit": 1800,
+      "subtypes": {
+        "tc": 1
+      },
+      "clusters": {},
+      "failures": []
+    },
+    {
+      "section": "quant_s1",
+      "count": 12,
+      "time_limit": 1260,
+      "subtypes": {
+        "qc": 4,
+        "mcq_single": 8
+      },
+      "clusters": {
+        "710": 3,
+        "815": 1,
+        "851": 1
+      },
+      "failures": []
+    },
+    {
+      "section": "quant_s2",
+      "count": 15,
+      "time_limit": 1560,
+      "subtypes": {
+        "mcq_single": 10,
+        "numeric_entry": 1,
+        "qc": 4
+      },
+      "clusters": {
+        "734": 1,
+        "908": 1,
+        "963": 3
+      },
+      "failures": []
+    },
+    {
+      "section": "verbal_s1",
+      "count": 12,
+      "time_limit": 1080,
+      "subtypes": {
+        "tc": 3,
+        "rc_single": 5,
+        "se": 3,
+        "rc_multi": 1
+      },
+      "clusters": {
+        "333": 1,
+        "404": 1,
+        "517": 1,
+        "531": 1,
+        "537": 1,
+        "620": 1
+      },
+      "failures": []
+    },
+    {
+      "section": "verbal_s2",
+      "count": 15,
+      "time_limit": 1380,
+      "subtypes": {
+        "tc": 4,
+        "se": 4,
+        "rc_single": 5,
+        "rc_multi": 2
+      },
+      "clusters": {
+        "342": 1,
+        "385": 1,
+        "418": 1,
+        "506": 1,
+        "536": 1,
+        "809": 1,
+        "816": 1
+      },
+      "failures": []
+    }
+  ],
+  "blueprint_ok": true,
+  "failures": [],
+  "all_non_awa_qids": [
+    1392,
+    1413,
+    1447,
+    1482,
+    1507,
+    1813,
+    1825,
+    1871,
+    1875,
+    1924,
+    1941,
+    1942,
+    1973,
+    1982,
+    2025,
+    2044,
+    2058,
+    2142,
+    2325,
+    2335,
+    2360,
+    2371,
+    2385,
+    2390,
+    2391,
+    2447,
+    2485,
+    2556,
+    2561,
+    2591,
+    2606,
+    2627,
+    2786,
+    2956,
+    2957,
+    2958,
+    2990,
+    3079,
+    3114,
+    3163,
+    3166,
+    3174,
+    3409,
+    3465,
+    3487,
+    3497,
+    3498,
+    3582,
+    3708,
+    3712,
+    3731,
+    3814,
+    3852,
+    3853
+  ]
+}

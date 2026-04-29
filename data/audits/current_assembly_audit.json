@@ -1,0 +1,133 @@
+{
+  "seed": 17,
+  "section_order": [
+    "awa",
+    "quant_s1",
+    "quant_s2",
+    "verbal_s1",
+    "verbal_s2"
+  ],
+  "sections": [
+    {
+      "section": "awa",
+      "measure": "awa",
+      "expected_count": 1,
+      "actual_count": 1,
+      "time_limit_s": 1800,
+      "subtype_histogram": {
+        "rc_single": 1
+      },
+      "difficulty_histogram": {
+        "2": 1
+      },
+      "cluster_sizes": {
+        "5": 1
+      },
+      "cluster_atomicity_violations": []
+    },
+    {
+      "section": "quant_s1",
+      "measure": "quant",
+      "expected_count": 12,
+      "actual_count": 12,
+      "time_limit_s": 1260,
+      "subtype_histogram": {
+        "mcq_single": 8,
+        "qc": 4
+      },
+      "difficulty_histogram": {
+        "3": 12
+      },
+      "cluster_sizes": {
+        "698": 1,
+        "710": 3,
+        "851": 1
+      },
+      "cluster_atomicity_violations": []
+    },
+    {
+      "section": "quant_s2",
+      "measure": "quant",
+      "expected_count": 15,
+      "actual_count": 15,
+      "time_limit_s": 1560,
+      "subtype_histogram": {
+        "mcq_single": 10,
+        "numeric_entry": 1,
+        "qc": 4
+      },
+      "difficulty_histogram": {
+        "3": 15
+      },
+      "cluster_sizes": {
+        "706": 1,
+        "801": 1,
+        "962": 3
+      },
+      "cluster_atomicity_violations": []
+    },
+    {
+      "section": "verbal_s1",
+      "measure": "verbal",
+      "expected_count": 12,
+      "actual_count": 12,
+      "time_limit_s": 1080,
+      "subtype_histogram": {
+        "tc": 3,
+        "rc_single": 5,
+        "se": 3,
+        "rc_multi": 1
+      },
+      "difficulty_histogram": {
+        "3": 12
+      },
+      "cluster_sizes": {
+        "318": 1,
+        "331": 1,
+        "401": 1,
+        "501": 1,
+        "566": 1,
+        "607": 1,
+        "687": 1
+      },
+      "cluster_atomicity_violations": []
+    },
+    {
+      "section": "verbal_s2",
+      "measure": "verbal",
+      "expected_count": 15,
+      "actual_count": 15,
+      "time_limit_s": 1380,
+      "subtype_histogram": {
+        "tc": 4,
+        "rc_single": 6,
+        "se": 4,
+        "rc_multi": 1
+      },
+      "difficulty_histogram": {
+        "3": 15
+      },
+      "cluster_sizes": {
+        "557": 1,
+        "565": 1,
+        "570": 3,
+        "619": 2
+      },
+      "cluster_atomicity_violations": []
+    }
+  ],
+  "library_live_counts": {
+    "verbal": {
+      "tc": 235,
+      "se": 128,
+      "rc_single": 373,
+      "rc_multi": 90
+    },
+    "quant": {
+      "mcq_single": 819,
+      "numeric_entry": 259,
+      "qc": 437,
+      "data_interp": 45
+    }
+  }
+}

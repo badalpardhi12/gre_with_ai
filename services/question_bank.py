@@ -23,6 +23,11 @@ CLUSTER_SUBTYPES = {
     "rc_single", "rc_multi", "rc_select_passage", "data_interp",
 }
 
+# Verbal-only subset of ``CLUSTER_SUBTYPES`` — the RC passage cluster.
+# Used by the blueprint smoke test and by callers that need to assert
+# passage atomicity without conflating with DI clusters.
+CLUSTERED_VERBAL_SUBTYPES = ("rc_single", "rc_multi", "rc_select_passage")
+
 # Source token used by the synthetic-question pipeline. Kept here (rather
 # than imported from `services.synthetic`) so the toggle plumbing has no
 # dependency on the pipeline package — the bank stays standalone if the
@@ -82,6 +87,16 @@ QUANT_COMPOSITION = {
     "data_interp": 0.20,         # ~2-3 per section
 }
 
+# ETS blueprint: every Quant section contains exactly one DI *set* of 3
+# questions sharing a single chart/table stimulus. We prefer real clusters
+# (rows whose ``stimulus.stimulus_type`` is graph/table/chart) even when the
+# child subtype is mcq_single / qc / numeric_entry. Legacy solo chart items
+# marked ``subtype='data_interp'`` with no stimulus fall through to the
+# final fallback.
+DI_STIMULUS_TYPES = ("graph", "table", "chart")
+DI_CLUSTER_TARGET_SIZE = 3
+DI_CLUSTER_MIN_SIZE = 2  # degrade gracefully when a 3-cluster is unavailable
+
 
 def get_recently_seen_ids(days_back: int = 14, user_id: str = "local"):
     """Return question IDs the user has answered in the last N days.
@@ -101,10 +116,19 @@ def _cluster_group(q):
     Cluster subtypes (RC / DI) group under their ``stimulus_id``; everything
     else is its own singleton cluster keyed by question id so the assembler
     can treat every selection uniformly.
+
+    Verbal RC subtypes (rc_single, rc_multi, rc_select_passage) that share
+    a stimulus are collapsed into a single cluster so the full passage
+    moves as one atomic unit; DI and other cluster subtypes remain
+    subtype-scoped.
     """
     subtype = getattr(q, "subtype", None)
     stim_id = getattr(q, "stimulus_id", None)
     if subtype in CLUSTER_SUBTYPES and stim_id:
+        if subtype in CLUSTERED_VERBAL_SUBTYPES:
+            # Collapse rc_single / rc_multi / rc_select_passage under one
+            # cluster key so the whole passage comes together.
+            return ("stim", stim_id, "rc")
         return ("stim", stim_id, subtype)
     return ("q", q.id)
 
@@ -359,20 +383,30 @@ class QuestionBankService:
         exclude = set(in_session_exclude) | set(dedup_exclude)
 
         # Compute target counts per subtype
-        targets = {}
-        running_sum = 0
-        sorted_subtypes = sorted(composition.items(), key=lambda x: -x[1])
-        for i, (subtype, ratio) in enumerate(sorted_subtypes):
-            if i == len(sorted_subtypes) - 1:
-                targets[subtype] = max(0, count - running_sum)
-            else:
-                t = round(count * ratio)
-                targets[subtype] = t
-                running_sum += t
+        targets = self._composition_targets(composition, count)
 
         selected_ids = []
         # Track per-subtype shortfall so we can re-broaden the pool below.
         per_subtype_deficit = {}
+
+        # ETS blueprint step 1: every Quant section anchors one DI set
+        # (2-3 sibling questions under a graph/table stimulus). Pull the
+        # cluster up-front so the rest of the composition targets assemble
+        # around it. The ``data_interp`` subtype quota is reduced by the
+        # cluster size so we don't double-count the DI slot.
+        if measure == "quant":
+            di_cluster = self._select_di_cluster(difficulty_band, exclude)
+            if di_cluster:
+                selected_ids.extend(di_cluster)
+                exclude.update(di_cluster)
+                targets["data_interp"] = max(
+                    0, targets.get("data_interp", 0) - len(di_cluster))
+            else:
+                logger.warning(
+                    "DI-cluster gap: no graph/table stimulus with >=%d live "
+                    "quant siblings at band=%s; section falls through to solo "
+                    "data_interp items.", DI_CLUSTER_MIN_SIZE, difficulty_band,
+                )
 
         for subtype, target_count in targets.items():
             if target_count == 0:
@@ -448,6 +482,24 @@ class QuestionBankService:
         # already assembled them cluster-at-a-time in pick order.
         return selected_ids[:count]
 
+    @staticmethod
+    def _composition_targets(composition, count):
+        """Round composition proportions to integer quotas per subtype
+        so the quotas sum to ``count``. Largest ratio absorbs the
+        rounding residual.
+        """
+        targets = {}
+        running_sum = 0
+        sorted_subtypes = sorted(composition.items(), key=lambda x: -x[1])
+        for i, (subtype, ratio) in enumerate(sorted_subtypes):
+            if i == len(sorted_subtypes) - 1:
+                targets[subtype] = max(0, count - running_sum)
+            else:
+                t = round(count * ratio)
+                targets[subtype] = t
+                running_sum += t
+        return targets
+
     def _take_cluster_aware(self, measure, subtype, target, difficulty_band,
                              exclude):
         """Pick up to ``target`` question IDs, pulling full clusters atomically.
@@ -505,13 +557,22 @@ class QuestionBankService:
             if key[0] == "stim":
                 stim_id = key[1]
                 subtype_key = key[2]
-                full_siblings = [
-                    q.id for q in Question.select(Question.id).where(
-                        (Question.stimulus == stim_id) &
-                        (Question.subtype == subtype_key) &
-                        (Question.status == "live")
+                sibling_query = Question.select(Question.id).where(
+                    (Question.stimulus == stim_id) &
+                    (Question.status == "live")
+                )
+                if subtype_key == "rc":
+                    # RC passages mix rc_single + rc_multi children; the
+                    # whole passage-cluster must move together or the reader
+                    # loses context.
+                    sibling_query = sibling_query.where(
+                        Question.subtype.in_(list(CLUSTERED_VERBAL_SUBTYPES))
                     )
-                ]
+                else:
+                    sibling_query = sibling_query.where(
+                        Question.subtype == subtype_key
+                    )
+                full_siblings = [q.id for q in sibling_query]
                 # Skip cluster entirely if any sibling is excluded — we
                 # refuse to split it.
                 if any(sid in exclude for sid in full_siblings):
@@ -558,6 +619,103 @@ class QuestionBankService:
         if clause is not None:
             query = query.where(clause)
         return [q.id for q in query]
+
+    def _select_di_cluster(self, difficulty_band, exclude_ids):
+        """Pick one Data-Interpretation set for a Quant section.
+
+        Prefers a real 3-question cluster under a graph/table/chart
+        stimulus (children can be any quant subtype — real DI sets mix
+        mcq_single / qc / numeric_entry). Falls back to a 2-question
+        cluster, then (last resort) to solo ``data_interp`` items.
+
+        Atomicity: if any sibling is already in ``exclude_ids``, the
+        whole cluster is skipped rather than split.
+
+        Returns a list of question IDs (0..DI_CLUSTER_TARGET_SIZE items),
+        empty when nothing is available.
+        """
+        exclude_list = list(exclude_ids) if exclude_ids else []
+        cand = (
+            Question.select(Question.stimulus_id,
+                            fn.COUNT(Question.id).alias("n"))
+            .join(Stimulus, on=(Stimulus.id == Question.stimulus_id))
+            .where((Question.measure == "quant") &
+                   (Question.status == "live") &
+                   (Stimulus.stimulus_type.in_(list(DI_STIMULUS_TYPES))))
+            .group_by(Question.stimulus_id)
+            .having(fn.COUNT(Question.id) >= DI_CLUSTER_MIN_SIZE)
+        )
+        clause = _exclude_synthetic_clause()
+        if clause is not None:
+            cand = cand.where(clause)
+
+        triples, pairs = [], []
+        for row in cand:
+            n = row.n
+            if n >= DI_CLUSTER_TARGET_SIZE:
+                triples.append(row.stimulus_id)
+            elif n >= DI_CLUSTER_MIN_SIZE:
+                pairs.append(row.stimulus_id)
+
+        random.shuffle(triples)
+        random.shuffle(pairs)
+
+        for stim_id in triples + pairs:
+            siblings = list(
+                Question.select(Question.id)
+                .where((Question.stimulus_id == stim_id) &
+                       (Question.measure == "quant") &
+                       (Question.status == "live"))
+            )
+            sibling_ids = [q.id for q in siblings]
+            # Drop cluster entirely if any sibling is already excluded.
+            if exclude_ids and any(qid in exclude_ids for qid in sibling_ids):
+                continue
+            # Difficulty band: require at least one sibling in band;
+            # keeping a full DI cluster together matches real test behavior.
+            if difficulty_band == "easy":
+                if not self._any_sibling_matches(sibling_ids, "<=", 2):
+                    continue
+            elif difficulty_band == "hard":
+                if not self._any_sibling_matches(sibling_ids, ">=", 4):
+                    continue
+
+            random.shuffle(sibling_ids)
+            return sibling_ids[:DI_CLUSTER_TARGET_SIZE]
+
+        # Final fallback: solo items tagged ``data_interp`` (legacy seed).
+        solo = (Question.select(Question.id).where(
+            Question.measure == "quant",
+            Question.subtype == "data_interp",
+            Question.status == "live",
+        ))
+        if difficulty_band == "easy":
+            solo = solo.where(Question.difficulty_target <= 2)
+        elif difficulty_band == "hard":
+            solo = solo.where(Question.difficulty_target >= 4)
+        if exclude_list:
+            solo = solo.where(Question.id.not_in(exclude_list))
+        clause = _exclude_synthetic_clause()
+        if clause is not None:
+            solo = solo.where(clause)
+        solo_ids = [q.id for q in solo]
+        random.shuffle(solo_ids)
+        return solo_ids[:DI_CLUSTER_TARGET_SIZE]
+
+    @staticmethod
+    def _any_sibling_matches(sibling_ids, op, threshold):
+        """True iff at least one sibling's ``difficulty_target`` matches
+        the band test (``<=`` for easy, ``>=`` for hard).
+        """
+        if not sibling_ids:
+            return False
+        q = Question.select(fn.COUNT(Question.id)).where(
+            Question.id.in_(list(sibling_ids)))
+        if op == "<=":
+            q = q.where(Question.difficulty_target <= threshold)
+        elif op == ">=":
+            q = q.where(Question.difficulty_target >= threshold)
+        return (q.scalar() or 0) > 0
 
     def select_awa_prompt(self):
         """Select a random AWA prompt. Returns [prompt_id]."""

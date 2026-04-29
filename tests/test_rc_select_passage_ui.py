@@ -5,8 +5,17 @@ The screen's passage-annotation / sentence-extraction helpers are plain text
 processing (no wx event loop needed); we only pay the wx import cost for the
 class namespace. If this file becomes a performance hazard the helpers can
 be lifted to a module-level function — they already don't touch `self`.
+
+The whole module is skipped on headless CI (no wxPython installed) because
+QuestionScreen subclasses wx.Panel and can't be imported without wx.
 """
 import pytest
+
+# Skip the entire file when wxPython is absent (headless CI). Evaluated
+# at collection time so pytest records "skipped" rather than "error"
+# when the wx-dependent `from screens.question_screen import …` in
+# qs_module would otherwise blow up.
+pytest.importorskip("wx", reason="QuestionScreen requires wxPython")
 
 
 @pytest.fixture(scope="module")

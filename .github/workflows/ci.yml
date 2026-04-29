@@ -2,7 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # `ci-fix-**` runs the matrix on in-flight fix branches so we can
+    # validate a green CI before merging to main. Remove this pattern
+    # once the backlog of `ci-fix-*` branches is cleaned up.
+    branches: [main, "ci-fix-**"]
   pull_request:
     branches: [main]
 
@@ -40,6 +43,22 @@ jobs:
           pip install -r requirements-ci.txt
           pip install pytest
 
+      - name: Verify LFS resolved the shipped DB
+        # The seed DB is tracked via Git LFS (~35 MB). If the LFS
+        # bandwidth quota is exhausted, actions/checkout@v4 silently
+        # leaves the pointer file (~133 bytes) in place and downstream
+        # tests error out with "file is not a database". Fail fast with
+        # a clear diagnostic instead — the runtime fix is either to
+        # unblock LFS quota or to vendor the DB differently.
+        run: |
+          db_size=$(stat -f%z data/gre_mock.db 2>/dev/null || stat -c%s data/gre_mock.db)
+          echo "data/gre_mock.db size: $db_size bytes"
+          if [ "$db_size" -lt 1024 ]; then
+            echo "::error::data/gre_mock.db is only $db_size bytes — Git LFS content did not resolve. Check bandwidth quota."
+            head -c 500 data/gre_mock.db
+            exit 1
+          fi
+
       - name: Verify shipped seed DB contains no user-state rows
         run: python scripts/verify_seed_clean.py --db data/gre_mock.db
 
@@ -47,7 +66,43 @@ jobs:
         run: python -c "from models.database import init_db; init_db()"
 
       - name: Run test suite
-        run: pytest tests/ -v --tb=short
+        run: |
+          set +e
+          pytest tests/ -v --tb=long -rA 2>&1 | tee pytest.out
+          rc=${PIPESTATUS[0]}
+
+          # Surface the failure summary as workflow annotations — those
+          # ARE exposed via /check-runs/<id>/annotations without auth.
+          # Each line becomes a separate annotation; limit to the
+          # FAILED/ERROR summary lines pytest prints at the end.
+          if [ "$rc" -ne 0 ]; then
+            grep -E '^(FAILED|ERROR) tests/' pytest.out | head -40 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            # Also dump the final-summary line (e.g. "2 failed, 494 passed").
+            grep -E '^[= ]+[0-9]+ (passed|failed|error)' pytest.out | tail -3 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+          fi
+
+          # Mirror the last 30 KB of output into GITHUB_STEP_SUMMARY.
+          {
+            echo "### pytest exit $rc (python ${{ matrix.python }} on ${{ matrix.os }})"
+            echo ""
+            echo '```'
+            tail -c 30000 pytest.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+      - name: Upload pytest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-log-${{ matrix.os }}-py${{ matrix.python }}
+          path: pytest.out
+          if-no-files-found: ignore
+          retention-days: 3
 
       # The audit's exit code is 0 when no critical-corruption rows
       # are live; we baseline at 0 because PR 1 + PR 2 retired every

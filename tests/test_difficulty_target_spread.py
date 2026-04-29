@@ -26,6 +26,16 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 def _live_difficulty_counts(db_path: Path) -> dict:
     if not db_path.exists():
         pytest.skip(f"DB not present: {db_path}")
+    # An unresolved Git LFS pointer file is <1 KB and isn't a valid
+    # SQLite DB — sqlite3.connect would raise "file is not a database"
+    # on the first query. Skip instead, with a message that points at
+    # the likely cause (LFS bandwidth quota exhausted on CI).
+    if db_path.stat().st_size < 1024:
+        pytest.skip(
+            f"DB at {db_path} is only {db_path.stat().st_size} bytes — "
+            "likely an unresolved Git LFS pointer. Check LFS quota / "
+            "`actions/checkout@v4 with lfs: true`."
+        )
     conn = sqlite3.connect(str(db_path))
     try:
         rows = conn.execute(
@@ -64,6 +74,11 @@ def test_difficulty_spread_per_affected_source():
     db = PROJECT_ROOT / "data" / "gre_user.db"
     if not db.exists():
         pytest.skip(f"DB not present: {db}")
+    if db.stat().st_size < 1024:
+        pytest.skip(
+            f"DB at {db} is only {db.stat().st_size} bytes — "
+            "likely an unresolved Git LFS pointer."
+        )
     conn = sqlite3.connect(str(db))
     try:
         for source in ("princeton_2012", "manhattan_5lb_2018", "ai_generated"):

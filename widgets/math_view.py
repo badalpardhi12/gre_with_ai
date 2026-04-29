@@ -1,17 +1,33 @@
 """
 Math rendering widget using wx.html2.WebView and KaTeX (or MathJax fallback).
 Displays formatted math expressions and rich HTML content.
+
+The two pure-Python helpers at the top of this module
+(`_normalise_plain_math`, `_newlines_to_html`) are exercised by the
+headless test suite on CI, which installs every requirement EXCEPT
+wxPython. We therefore guard the wx import chain so the module stays
+collectable without wx; the `MathView` class is only defined when wx
+is available (it is a wx.Panel subclass — defining the class needs
+`wx.Panel` at class-creation time). Out-of-app callers never need the
+class, so the guard is a pure no-op for runtime users.
 """
 import re
 from pathlib import Path
 
-import wx
-import wx.html2
+try:  # pragma: no cover — the False branch only runs on headless CI.
+    import wx
+    import wx.html2
+    _WX_AVAILABLE = True
+except ModuleNotFoundError:
+    wx = None  # type: ignore[assignment]
+    _WX_AVAILABLE = False
 
 from config import RESOURCES_DIR, DATA_DIR
-from widgets import ui_scale
+
+# html_sanitizer is pure-Python (bleach only); safe to import
+# unconditionally. ui_scale and theme both import wx at module top,
+# so they are imported lazily inside the wx-dependent class below.
 from widgets.html_sanitizer import safe_html
-from widgets.theme import Color, hex_str
 
 
 # Plain-ASCII math notation that imported / older-LLM-generated content
@@ -224,12 +240,29 @@ document.addEventListener("DOMContentLoaded", function() {{
 </html>"""
 
 
-class MathView(wx.Panel):
+class MathView(wx.Panel if _WX_AVAILABLE else object):
     """
     Renders HTML content with LaTeX math support via KaTeX.
+
+    Requires wxPython. The class still exists on headless CI (so
+    pytest collection and `from widgets.math_view import MathView`
+    both succeed), but instantiating it without wx raises a clear
+    error instead of the cryptic `object() takes no arguments` from
+    `super().__init__(parent, size=size)`.
     """
 
     def __init__(self, parent, size=(-1, -1)):
+        if not _WX_AVAILABLE:
+            raise RuntimeError(
+                "MathView requires wxPython. Install the wxPython "
+                "requirement from requirements.txt to use the GUI."
+            )
+        # Lazy-import wx-dependent widget helpers — they all import
+        # `wx` at module top, so importing them on headless CI would
+        # blow up. Kept here so the class body stays flat.
+        from widgets import ui_scale
+        from widgets.theme import Color, hex_str
+
         super().__init__(parent, size=size)
 
         self.webview = wx.html2.WebView.New(self)
@@ -238,6 +271,11 @@ class MathView(wx.Panel):
         self.SetSizer(sizer)
 
         self._current_html = ""
+        # Stash the rendering helpers so `set_content` doesn't need
+        # to re-import them on every call.
+        self._ui_scale = ui_scale
+        self._Color = Color
+        self._hex_str = hex_str
 
     def set_content(self, html_body):
         """Set the HTML content (with optional LaTeX delimiters).
@@ -258,6 +296,9 @@ class MathView(wx.Panel):
         normalised = _newlines_to_html(normalised)
         sanitized = safe_html(normalised)
         self._current_html = sanitized
+        Color = self._Color
+        hex_str = self._hex_str
+        ui_scale = self._ui_scale
         # Pull all colors from the central palette so the WebView matches
         # the native widgets without per-screen overrides.
         full_html = HTML_TEMPLATE.format(

@@ -829,7 +829,18 @@ class QuestionScreen(wx.Panel):
         dlg.Destroy()
 
     def _on_report_question(self, _):
-        """Open a small dialog to report a problem with this question."""
+        """Open a small dialog to report a problem with this question.
+
+        Two side-effects on submit, in order:
+          1. Persist a `QuestionFlag` row locally — this powers
+             auto-retire-after-N-flags and keeps an offline audit trail
+             even if the user never actually files the GitHub issue.
+          2. Open a pre-filled GitHub "New Issue" URL in the user's
+             default browser so the dev sees the report centrally. The
+             user still has to click "Submit" on the GitHub page (they
+             sign in with their own account), so we don't need any
+             developer tokens to ship with the app.
+        """
         if not self._current_q:
             return
         qid = self._current_q.get("id")
@@ -849,11 +860,65 @@ class QuestionScreen(wx.Panel):
                     # Auto-retire after enough flags accumulate; this is a
                     # cheap query so running it inline is fine.
                     auto_retire_flagged_questions()
-                    wx.MessageBox(
-                        "Thanks — your report was recorded. We'll review it.",
-                        "Reported", wx.OK | wx.ICON_INFORMATION, parent=self,
-                    )
+                    self._open_github_report(qid, reason, note)
         dlg.Destroy()
+
+    def _open_github_report(self, qid, reason, note):
+        """Open a pre-filled GitHub Issues URL for the current question.
+
+        Failures here are non-fatal — the DB row is already written, so
+        worst case the user can re-file manually from the review screen.
+        """
+        import webbrowser
+        try:
+            from services.issue_reporter import build_issue_url
+            from models.database import Question
+            # Re-read `source` off the row (the in-memory payload drops
+            # it) so triage can filter Kaplan vs Princeton vs synthetic
+            # reports on GitHub.
+            payload = dict(self._current_q)
+            q_row = Question.get_or_none(Question.id == qid)
+            if q_row is not None:
+                payload["source"] = q_row.source
+                payload["status"] = q_row.status
+            combined_comment = note or ""
+            if reason:
+                prefix = f"[reason: {reason}]"
+                combined_comment = (
+                    f"{prefix}\n\n{combined_comment}".strip()
+                    if combined_comment
+                    else prefix
+                )
+            url = build_issue_url(payload, combined_comment)
+        except Exception as exc:  # pragma: no cover — defensive
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to build issue URL for q%s: %s", qid, exc
+            )
+            wx.MessageBox(
+                "Thanks — your report was recorded locally.",
+                "Reported", wx.OK | wx.ICON_INFORMATION, parent=self,
+            )
+            return
+
+        resp = wx.MessageBox(
+            "Thanks — your report was recorded locally.\n\n"
+            "Your browser will open a pre-filled GitHub issue. Please "
+            "click “Submit new issue” on that page to send it to the "
+            "developer (you'll be asked to sign in to GitHub once).\n\n"
+            "Open the GitHub issue now?",
+            "Send report to the developer?",
+            wx.YES_NO | wx.ICON_QUESTION,
+            parent=self,
+        )
+        if resp == wx.YES:
+            try:
+                webbrowser.open(url, new=2)
+            except Exception as exc:  # pragma: no cover — platform-dependent
+                import logging
+                logging.getLogger(__name__).warning(
+                    "webbrowser.open failed: %s", exc
+                )
 
     # ── Select-in-passage helpers ─────────────────────────────────────
 

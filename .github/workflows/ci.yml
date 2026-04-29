@@ -43,34 +43,34 @@ jobs:
           pip install -r requirements-ci.txt
           pip install pytest
 
+      - name: Verify LFS resolved the shipped DB
+        # The seed DB is tracked via Git LFS (~35 MB). If the LFS
+        # bandwidth quota is exhausted, actions/checkout@v4 silently
+        # leaves the pointer file (~133 bytes) in place and downstream
+        # tests error out with "file is not a database". Fail fast with
+        # a clear diagnostic instead — the runtime fix is either to
+        # unblock LFS quota or to vendor the DB differently.
+        run: |
+          db_size=$(stat -f%z data/gre_mock.db 2>/dev/null || stat -c%s data/gre_mock.db)
+          echo "data/gre_mock.db size: $db_size bytes"
+          if [ "$db_size" -lt 1024 ]; then
+            echo "::error::data/gre_mock.db is only $db_size bytes — Git LFS content did not resolve. Check bandwidth quota."
+            head -c 500 data/gre_mock.db
+            exit 1
+          fi
+
       - name: Initialise database
         run: python -c "from models.database import init_db; init_db()"
-
-      # Diagnostic: show what's installed and whether pytest can
-      # collect the full suite before actually running it. If a run
-      # fails at "Run test suite" with exit code 2, this step surfaces
-      # the collection error in the log instead of hiding it behind
-      # the matrix aggregate.
-      - name: Diagnostic — pip freeze + pytest --collect-only
-        run: |
-          python --version
-          pip freeze | sort
-          pytest tests/ --collect-only -q 2>&1 | tail -80
 
       - name: Run test suite
         run: |
           set +e
           pytest tests/ -v --tb=long -rA 2>&1 | tee pytest.out
           rc=${PIPESTATUS[0]}
-          echo "---"
-          echo "pytest-exit-code: $rc"
-          echo "--- last 60 lines of captured output ---"
-          tail -60 pytest.out
-
-          # Mirror the failure summary into the job summary so anyone
-          # (including anonymous API clients) can see it via
-          # /repos/.../actions/runs/<id>/summary. Truncated to 30KB to
-          # avoid overflowing GitHub's 1MB cap.
+          # Mirror the last 30 KB of output into GITHUB_STEP_SUMMARY so
+          # anonymous API callers can read the failure tail — job logs
+          # require auth, summaries are part of the public check-run
+          # output.
           {
             echo "### pytest exit $rc (python ${{ matrix.python }} on ${{ matrix.os }})"
             echo ""

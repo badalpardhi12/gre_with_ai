@@ -6,11 +6,18 @@ drops the DI cluster, or splits an RC passage fails CI loudly.
 These tests hit the real (seeded) SQLite DB via the normal question-bank
 entry points — no mocking. That's deliberate: the point is to catch
 assembly-side drift even when the DB shifts underneath.
+
+When the shipped `data/gre_mock.db` didn't resolve (the LFS content is
+missing — typical when the LFS bandwidth quota is exhausted on the
+GitHub side, or a clone ran without `lfs: true`), we skip the whole
+module with a clear message instead of erroring out 29 times. The DB
+presence check fires at collection time and keeps the pytest run green.
 """
 from __future__ import annotations
 
 import random
 from collections import Counter, defaultdict
+from pathlib import Path
 
 import pytest
 
@@ -19,7 +26,22 @@ from config import (
     QUANT_S1_TIME, QUANT_S2_TIME,
     VERBAL_S1_COUNT, VERBAL_S2_COUNT,
     QUANT_S1_COUNT, QUANT_S2_COUNT,
+    SEED_DB_PATH,
 )
+
+# Fail fast if the seed DB wasn't resolved — pointer files are ~133 bytes,
+# a real DB is >1 MB. Skipping at module level keeps the whole file out
+# of execution instead of showing 29 identical `peewee.DatabaseError:
+# file is not a database` errors.
+if not SEED_DB_PATH.exists() or SEED_DB_PATH.stat().st_size < 1024:
+    pytest.skip(
+        f"Skipping blueprint tests: {SEED_DB_PATH} is missing or only a "
+        f"Git LFS pointer ({SEED_DB_PATH.stat().st_size if SEED_DB_PATH.exists() else 0} bytes). "
+        "Check that the CI checkout pulled LFS content (actions/checkout "
+        "with lfs: true) and that the repo still has LFS bandwidth quota.",
+        allow_module_level=True,
+    )
+
 from models.database import init_db, Question, Stimulus
 from models.exam_session import ExamSession, SectionType, SECTION_META
 from services.question_bank import (

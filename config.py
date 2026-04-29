@@ -117,7 +117,13 @@ def load_llm_config():
                 overrides = json.load(f)
             if not isinstance(overrides, dict):
                 raise ValueError("llm_config.json is not a JSON object")
-            config.update({k: v for k, v in overrides.items() if v})
+            # Drop empty strings/None (legacy hygiene), but preserve falsey
+            # booleans so a saved `include_ai_synthetic=False` survives the
+            # round-trip. Anything that isn't None or "" wins.
+            for k, v in overrides.items():
+                if v is None or v == "":
+                    continue
+                config[k] = v
         except (ValueError, OSError) as exc:
             # Avoid importing services.log here to keep config.py importable
             # before the data dir exists. stderr is acceptable for startup.
@@ -127,12 +133,20 @@ def load_llm_config():
     return config
 
 
-def save_llm_config(api_key=None, base_url=None, model=None, max_tokens=None):
+def save_llm_config(api_key=None, base_url=None, model=None, max_tokens=None,
+                    include_ai_synthetic=None):
     """Persist runtime LLM settings to JSON.
 
     Writes atomically (temp file + os.replace) so an interrupted save can't
     corrupt the file. Restricts permissions to 0600 so other local users
     can't read the API key.
+
+    `include_ai_synthetic` is a UI-level toggle that controls whether items
+    with `Question.source='ai_synthetic'` show up in test assembly. We
+    co-locate it in `llm_config.json` rather than introducing a new
+    UserPreferences table — this app is single-user, the file already has
+    safe atomic writes, and the toggle naturally lives next to the
+    settings dialog that exposes it.
     """
     import json
     import os
@@ -155,6 +169,8 @@ def save_llm_config(api_key=None, base_url=None, model=None, max_tokens=None):
         data["model"] = model
     if max_tokens is not None:
         data["max_tokens"] = max_tokens
+    if include_ai_synthetic is not None:
+        data["include_ai_synthetic"] = bool(include_ai_synthetic)
 
     tmp_path = LLM_CONFIG_PATH.with_suffix(LLM_CONFIG_PATH.suffix + ".tmp")
     with open(tmp_path, "w") as f:
@@ -165,3 +181,36 @@ def save_llm_config(api_key=None, base_url=None, model=None, max_tokens=None):
     except OSError:
         # Best-effort on platforms (e.g. Windows) where chmod semantics differ.
         pass
+
+
+# ── User preferences (UI toggles) ────────────────────────────────────
+# Keep narrow surface; add new keys here as they appear in settings.
+USER_PREF_DEFAULTS = {
+    "include_ai_synthetic": True,   # show synthetic items in mock tests
+}
+
+
+def load_user_prefs():
+    """Return UI preference flags, falling back to USER_PREF_DEFAULTS.
+
+    Reads the same `llm_config.json` that backs `load_llm_config` — see
+    `save_llm_config` for the rationale on co-locating these. We re-read
+    on every call so a Settings-dialog change takes effect without an
+    app restart (matches the LLM-config behavior).
+    """
+    cfg = load_llm_config()
+    out = dict(USER_PREF_DEFAULTS)
+    for key in USER_PREF_DEFAULTS:
+        if key in cfg:
+            out[key] = cfg[key]
+    return out
+
+
+def save_user_pref(key, value):
+    """Persist a single preference key. Wraps `save_llm_config`."""
+    if key not in USER_PREF_DEFAULTS:
+        raise KeyError(f"Unknown user pref: {key!r}")
+    if key == "include_ai_synthetic":
+        save_llm_config(include_ai_synthetic=value)
+    else:  # pragma: no cover — guarded above
+        raise KeyError(f"No save handler for pref: {key!r}")

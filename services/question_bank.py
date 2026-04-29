@@ -23,6 +23,34 @@ CLUSTER_SUBTYPES = {
     "rc_single", "rc_multi", "rc_select_passage", "data_interp",
 }
 
+# Source token used by the synthetic-question pipeline. Kept here (rather
+# than imported from `services.synthetic`) so the toggle plumbing has no
+# dependency on the pipeline package — the bank stays standalone if the
+# pipeline isn't shipped.
+SYNTHETIC_SOURCE = "ai_synthetic"
+
+
+def _exclude_synthetic_clause():
+    """Return a Peewee `WHERE` fragment that hides synthetic items, or
+    `None` if the user has the toggle on (default).
+
+    Re-reads `load_user_prefs` on every call so a Settings-dialog change
+    takes effect immediately — the rest of the app already assumes
+    `llm_config.json` is hot-reloaded between calls.
+
+    Callers should:
+
+        clause = _exclude_synthetic_clause()
+        if clause is not None:
+            query = query.where(clause)
+    """
+    # Local import: config imports must stay lazy because some test
+    # fixtures swap `config.DB_PATH` after this module is already loaded.
+    from config import load_user_prefs
+    if load_user_prefs().get("include_ai_synthetic", True):
+        return None
+    return Question.source != SYNTHETIC_SOURCE
+
 # Default dedup windows (days). Tunable by callers of
 # ``select_questions_composed``.
 DEFAULT_RECENT_SEEN_DAYS = 30
@@ -189,9 +217,14 @@ class QuestionBankService:
         from peewee import fn
 
         # All live questions for this subtopic
-        all_qs = list(Question.select(Question.id, Question.difficulty_target)
-                      .where((Question.subtopic == subtopic) &
-                             (Question.status == "live")))
+        all_qs_query = (Question
+                        .select(Question.id, Question.difficulty_target)
+                        .where((Question.subtopic == subtopic) &
+                               (Question.status == "live")))
+        clause = _exclude_synthetic_clause()
+        if clause is not None:
+            all_qs_query = all_qs_query.where(clause)
+        all_qs = list(all_qs_query)
         if not all_qs:
             return []
 
@@ -268,6 +301,10 @@ class QuestionBankService:
 
         if exclude_ids:
             query = query.where(Question.id.not_in(exclude_ids))
+
+        clause = _exclude_synthetic_clause()
+        if clause is not None:
+            query = query.where(clause)
 
         available = [q.id for q in query]
         random.shuffle(available)
@@ -437,6 +474,10 @@ class QuestionBankService:
         if exclude:
             query = query.where(Question.id.not_in(list(exclude)))
 
+        clause = _exclude_synthetic_clause()
+        if clause is not None:
+            query = query.where(clause)
+
         candidates = list(query)
         if not candidates:
             return []
@@ -513,6 +554,9 @@ class QuestionBankService:
             query = query.where(Question.difficulty_target >= 4)
         if exclude_ids:
             query = query.where(Question.id.not_in(list(exclude_ids)))
+        clause = _exclude_synthetic_clause()
+        if clause is not None:
+            query = query.where(clause)
         return [q.id for q in query]
 
     def select_awa_prompt(self):

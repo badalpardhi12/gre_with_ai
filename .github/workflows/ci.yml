@@ -67,10 +67,22 @@ jobs:
           set +e
           pytest tests/ -v --tb=long -rA 2>&1 | tee pytest.out
           rc=${PIPESTATUS[0]}
-          # Mirror the last 30 KB of output into GITHUB_STEP_SUMMARY so
-          # anonymous API callers can read the failure tail — job logs
-          # require auth, summaries are part of the public check-run
-          # output.
+
+          # Surface the failure summary as workflow annotations — those
+          # ARE exposed via /check-runs/<id>/annotations without auth.
+          # Each line becomes a separate annotation; limit to the
+          # FAILED/ERROR summary lines pytest prints at the end.
+          if [ "$rc" -ne 0 ]; then
+            grep -E '^(FAILED|ERROR) tests/' pytest.out | head -40 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            # Also dump the final-summary line (e.g. "2 failed, 494 passed").
+            grep -E '^[= ]+[0-9]+ (passed|failed|error)' pytest.out | tail -3 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+          fi
+
+          # Mirror the last 30 KB of output into GITHUB_STEP_SUMMARY.
           {
             echo "### pytest exit $rc (python ${{ matrix.python }} on ${{ matrix.os }})"
             echo ""

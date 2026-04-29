@@ -101,3 +101,123 @@ will re-materialize naturally once the draft siblings are promoted.
   N–M" header but live question count < marker span. Strip the
   header. Leave 5 intact clusters alone (qcount already matches
   marker).
+
+---
+
+## Remediation applied — 2026-04-29T16:01:50Z
+
+Ran `scripts/fix_rc_cluster_integrity.py` against `data/gre_user.db`
+(pre-run snapshot at `data/gre_user.db.pre-rc-integrity.bak`,
+gitignored).
+
+### Case A — dedupe_stimuli
+- groups merged: 10
+- stimuli deleted: 15
+- questions relinked: 15
+
+| canonical | duplicates deleted | questions relinked |
+|----------:|--------------------|-------------------:|
+| 280 | [281] | 1 |
+| 282 | [283] | 1 |
+| 284 | [285, 286] | 1 |
+| 289 | [290] | 1 |
+| 291 | [292, 293, 294, 295] | 4 |
+| 296 | [979] | 2 |
+| 302 | [1005] | 2 |
+| 303 | [1008] | 2 |
+| 580 | [600, 605] | 0 |
+| 693 | [695] | 1 |
+
+### Case B — relink_orphans
+- candidates examined: 48
+- relinked: 0 (no deterministic matches available)
+- left as genuine-RC orphan: 0
+- misclassified (quant/SE/TC mis-tagged as rc_*): 48
+
+These 48 questions need a subtype-repair pass (out of scope for this
+ticket). None of them actually present as RC in the current exam
+flows, so the user impact is already bounded.
+
+### Case C — strip_cluster_marker
+- examined: 13
+- stripped: 8
+- preserved (intact cluster): 5
+
+Stripped (live qcount < marker span):
+- stim 1039 (live=0, span=3)
+- stim 1041 (live=0, span=2)
+- stim 1043 (live=1, span=4)
+- stim 1044 (live=1, span=2)
+- stim 1048 (live=1, span=3)  ← **user-reported Max Planck case**
+- stim 1049 (live=3, span=4)
+- stim 1050 (live=1, span=2)
+- stim 1051 (live=2, span=4)
+
+Preserved (marker matches live qcount — intact cluster):
+- stim 1042 (live=3, span=3)
+- stim 1046 (live=1, span=1)
+- stim 1047 (live=1, span=1)
+- stim 1052 (live=3, span=3)
+- stim 1053 (live=3, span=3)
+
+### Cluster-size histogram before vs after
+
+| qcount | before | after |
+|-------:|-------:|------:|
+| 0 | 332 | 317 |
+| 1 | 448 | 448 |
+| 2 | 49 | 49 |
+| 3 | 27 | 27 |
+| 4 | 5 | 5 |
+| 5 | 5 | 5 |
+| 7 | 4 | 4 |
+
+Passage stimulus rows: 870 → 855. The qcount=0 bucket dropped by 15
+(all 15 deleted duplicates were orphaned from a live-question
+perspective — they only had retired or draft children). The live
+buckets (qcount=1..7) are unchanged, confirming no user-visible
+question disappeared.
+
+### Max Planck-specific verification
+
+```sql
+SELECT q.id, q.subtype, q.status, q.stimulus_id
+FROM question q JOIN stimulus s ON s.id = q.stimulus_id
+WHERE s.content LIKE '%Max Planck%';
+```
+Result after remediation:
+
+| qid | subtype | status | stim_id |
+|----:|---------|--------|--------:|
+| 4917 | rc_select_passage | live | 1048 |
+| 4918 | rc_single | draft | 1048 |
+| 4919 | rc_single | draft | 1048 |
+
+All three questions are now attached to a single canonical stimulus
+(1048), and the stimulus content no longer begins with
+`<b>Questions 8–10 are based on the passage below.</b>`. When the
+user encounters qid 4917 as a standalone item in Verbal 1, the
+passage renders as a clean self-contained paragraph. If qids 4918
+and 4919 are promoted from draft in a later sweep, they will
+automatically form a 3-question cluster on the same stim — no
+further schema change needed.
+
+### Idempotency
+
+A second run of the script (dry-run) reports 0 groups merged and 0
+markers to strip; the surviving 5 marker-bearing stimuli are all
+legitimate intact clusters. Safe to re-run.
+
+### Outstanding items (not fixed by this pass)
+
+- **48 misclassified RC orphans** (45 `rc_multi`, 3 `rc_single`).
+  These are quant "select all that apply" and SE/TC fill-in-blank
+  questions that somehow received an `rc_*` subtype label. Fixing
+  their subtype requires checking the source prompt shape and
+  reassigning to `quant`/`se`/`tc` — handle in a separate ticket.
+- **Draft siblings** under cluster stimuli 1043, 1044, 1048, 1049,
+  1050, 1051. These are legitimate Kaplan RC questions sitting in
+  draft; the cluster text (minus the header) is consistent with them.
+  A future promotion pass can move them to `live`, which will
+  re-form the intended N-question clusters.
+

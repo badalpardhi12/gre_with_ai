@@ -69,6 +69,25 @@ def _load_gateway():
     # main-repo gateway even when running from the worktree.
     import importlib.util
     gw_path = Path(_MAIN_REPO) / "services" / "_llm_gateway.py"
+    # On CI / a fresh clone the gateway isn't present (it's gitignored
+    # by design). Return a stub that exposes the MODEL_* constants the
+    # audit runner reads; tests monkey-patch the judge factory so
+    # nothing ever reaches the stub's raising `get_client`.
+    if not gw_path.exists():
+        class _GatewayStub:
+            MODEL_OPUS = "anthropic-opus-placeholder"
+            MODEL_SONNET = "anthropic-sonnet-placeholder"
+            MODEL_HAIKU = "anthropic-haiku-placeholder"
+
+            @staticmethod
+            def get_client():
+                raise RuntimeError(
+                    "services/_llm_gateway.py is not present on this "
+                    "checkout; real LLM calls are unavailable. This "
+                    "stub only exists to keep the audit runner import-"
+                    "safe for unit tests that inject their own judge."
+                )
+        return _GatewayStub
     spec = importlib.util.spec_from_file_location(
         "_figure_mispair_gateway", str(gw_path),
     )

@@ -50,9 +50,16 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # The EPUB lives in the main checkout's gitignored `data/ebooks/`. When
 # this script runs from a worktree, walk up from PROJECT_ROOT to find it.
-def _resolve_epub_path() -> str:
+# On CI / fresh clones the EPUB isn't present at all; `_resolve_epub_path`
+# returns None and any caller that actually needs the path (the CLI) must
+# check before use. The module-level `EPUB_PATH = _resolve_epub_path()`
+# assignment used to raise at import time, which broke pytest collection
+# of tests/test_extract_kaplan.py in environments without the EPUB.
+def _resolve_epub_path() -> Optional[str]:
     """Find the Kaplan EPUB by walking up from the worktree to the
-    main checkout. Falls back to the local `data/ebooks/` if present."""
+    main checkout. Returns None if no candidate directory contains a
+    Kaplan-prefixed .epub — callers that need the path must check and
+    raise their own error with whatever context they have."""
     candidates: List[str] = []
     local = os.path.join(PROJECT_ROOT, "data", "ebooks")
     candidates.append(local)
@@ -69,9 +76,7 @@ def _resolve_epub_path() -> str:
         for f in os.listdir(d):
             if f.startswith("(Kaplan") and f.endswith(".epub"):
                 return os.path.join(d, f)
-    raise FileNotFoundError(
-        "Kaplan EPUB not found. Looked in:\n  " + "\n  ".join(candidates)
-    )
+    return None
 
 
 EPUB_PATH = _resolve_epub_path()

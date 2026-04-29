@@ -15,6 +15,20 @@ from services.log import get_logger
 logger = get_logger("question_bank")
 
 
+# Subtypes whose questions are grouped into atomic clusters sharing a
+# Stimulus. When the assembler picks any one of these, it must also pull
+# every sibling under the same stimulus_id so the user always sees the
+# full passage/chart alongside its questions.
+CLUSTER_SUBTYPES = {
+    "rc_single", "rc_multi", "rc_select_passage", "data_interp",
+}
+
+# Default dedup windows (days). Tunable by callers of
+# ``select_questions_composed``.
+DEFAULT_RECENT_SEEN_DAYS = 30
+DEFAULT_MASTERY_COOLDOWN_DAYS = 60
+
+
 # Threshold of distinct flag-submitting users at which a question is
 # auto-retired by `auto_retire_flagged_questions`. Conservative because
 # the local-only app today has only one user — set to 1 in single-user
@@ -51,6 +65,112 @@ def get_recently_seen_ids(days_back: int = 14, user_id: str = "local"):
         Response.created_at >= cutoff
     ).distinct()
     return set(r.question_id for r in rows)
+
+
+def _cluster_group(q):
+    """Return the cluster key for a question.
+
+    Cluster subtypes (RC / DI) group under their ``stimulus_id``; everything
+    else is its own singleton cluster keyed by question id so the assembler
+    can treat every selection uniformly.
+    """
+    subtype = getattr(q, "subtype", None)
+    stim_id = getattr(q, "stimulus_id", None)
+    if subtype in CLUSTER_SUBTYPES and stim_id:
+        return ("stim", stim_id, subtype)
+    return ("q", q.id)
+
+
+def _user_recent_seen(user_id: str = "local",
+                      days: int = DEFAULT_RECENT_SEEN_DAYS):
+    """Question IDs the user has touched within the last ``days`` days.
+
+    The app is single-user today, so ``user_id`` is informational; every
+    response in the DB is this user's. Kept as a parameter so the helper
+    grows cleanly when multi-user arrives.
+    """
+    if days is None or days <= 0:
+        return set()
+    cutoff = datetime.now() - timedelta(days=days)
+    rows = (Response
+            .select(Response.question_id)
+            .where(Response.created_at >= cutoff)
+            .distinct())
+    return set(r.question_id for r in rows)
+
+
+def _user_mastery_last_correct(user_id: str = "local"):
+    """Return ``{question_id: last_correct_datetime}``.
+
+    Derived from the append-only ``Response`` log. We take the most recent
+    correct answer per question; spaced-repetition logic in
+    ``select_questions_composed`` uses this to damp items the user has
+    already mastered recently.
+    """
+    rows = (Response
+            .select(Response.question_id,
+                    fn.MAX(Response.created_at).alias("last_correct"))
+            .where(Response.is_correct == True)  # noqa: E712
+            .group_by(Response.question_id))
+    out = {}
+    for r in rows:
+        out[r.question_id] = r.last_correct
+    return out
+
+
+def _dedup_exclusions(user_id: str,
+                      recent_days: int,
+                      mastery_cooldown_days: int):
+    """Combined dedup set used by ``select_questions_composed``.
+
+    Returns a ``set[int]`` of question IDs to leave out of the pool:
+      * anything the user touched in the last ``recent_days`` days, plus
+      * anything the user answered correctly in the last
+        ``mastery_cooldown_days`` days (spaced-repetition cooldown).
+
+    Items the user got *wrong* are deliberately NOT added to the mastery
+    cooldown set — the learner should see those sooner for review.
+    """
+    recent = _user_recent_seen(user_id=user_id, days=recent_days)
+    mastered = set()
+    if mastery_cooldown_days and mastery_cooldown_days > 0:
+        cutoff = datetime.now() - timedelta(days=mastery_cooldown_days)
+        for qid, last_correct in _user_mastery_last_correct(user_id).items():
+            if last_correct and last_correct >= cutoff:
+                mastered.add(qid)
+    return recent | mastered
+
+
+def user_stats(user_id: str = "local",
+               recent_days: int = DEFAULT_RECENT_SEEN_DAYS,
+               mastery_cooldown_days: int = DEFAULT_MASTERY_COOLDOWN_DAYS):
+    """UX helper: how much of the pool has the user chewed through?
+
+    Returns a dict ``{seen_count, total_pool, dedup_days_active,
+    mastery_cooldown_days, dedup_active_count}`` so the app can render a
+    "you've seen 487 of 1544 items" nudge.
+    """
+    total_pool = (Question
+                  .select(fn.COUNT(Question.id))
+                  .where(Question.status == "live")
+                  .scalar()) or 0
+    # "seen" — any response ever, not just in the dedup window.
+    seen_rows = (Response
+                 .select(Response.question_id)
+                 .distinct())
+    seen_count = sum(1 for _ in seen_rows)
+    dedup_active = _dedup_exclusions(
+        user_id=user_id,
+        recent_days=recent_days,
+        mastery_cooldown_days=mastery_cooldown_days,
+    )
+    return {
+        "seen_count": seen_count,
+        "total_pool": total_pool,
+        "dedup_days_active": recent_days,
+        "mastery_cooldown_days": mastery_cooldown_days,
+        "dedup_active_count": len(dedup_active),
+    }
 
 
 class QuestionBankService:
@@ -154,12 +274,28 @@ class QuestionBankService:
         return available[:count]
 
     def select_questions_composed(self, measure, count, difficulty_band="medium",
-                                   exclude_ids=None):
+                                   exclude_ids=None,
+                                   exclude_user_seen=None,
+                                   recent_seen_days=DEFAULT_RECENT_SEEN_DAYS,
+                                   mastery_cooldown_days=DEFAULT_MASTERY_COOLDOWN_DAYS):
         """
-        Select `count` question IDs respecting real GRE question-type composition.
+        Select `count` question IDs respecting real GRE question-type composition
+        and keeping RC/DI clusters atomic.
 
         Verbal: 35% rc_single, 10% rc_multi, 5% rc_select_passage, 25% tc, 25% se
         Quant: 30% qc, 40% mcq_single, 5% mcq_multi, 5% numeric_entry, 20% data_interp
+
+        Cluster-aware: when a selected RC/DI question shares a ``stimulus_id``
+        with siblings, every sibling is pulled in together. If the full cluster
+        would overflow the remaining budget, the assembler skips that cluster
+        and tries the next candidate — partial clusters are never shipped.
+
+        Cross-session dedup: when ``exclude_user_seen`` is a user_id, items
+        touched within ``recent_seen_days`` and items answered correctly
+        within ``mastery_cooldown_days`` are filtered out. If the dedup-
+        adjusted pool can't satisfy the section, a warning is logged and
+        the assembler falls back to the full pool (sans in-session exclusions)
+        for the shortfall.
 
         Deficits in any subtype are filled with the most flexible neighbor
         (rc_single for verbal, mcq_single for quant), then any remaining shortfall
@@ -175,7 +311,15 @@ class QuestionBankService:
             return self.select_questions(
                 measure, count, difficulty_band, exclude_ids=exclude_ids)
 
-        exclude = set(exclude_ids or [])
+        in_session_exclude = set(exclude_ids or [])
+        dedup_exclude = set()
+        if exclude_user_seen:
+            dedup_exclude = _dedup_exclusions(
+                user_id=exclude_user_seen,
+                recent_days=recent_seen_days,
+                mastery_cooldown_days=mastery_cooldown_days,
+            )
+        exclude = set(in_session_exclude) | set(dedup_exclude)
 
         # Compute target counts per subtype
         targets = {}
@@ -189,47 +333,172 @@ class QuestionBankService:
                 targets[subtype] = t
                 running_sum += t
 
-        # Pull pool per subtype
         selected_ids = []
-        deficit = 0
+        # Track per-subtype shortfall so we can re-broaden the pool below.
+        per_subtype_deficit = {}
 
         for subtype, target_count in targets.items():
             if target_count == 0:
                 continue
-            pool = self._pool_for_subtype(measure, subtype, difficulty_band, exclude)
-            random.shuffle(pool)
-            taken = pool[:target_count]
+            taken = self._take_cluster_aware(
+                measure=measure,
+                subtype=subtype,
+                target=target_count,
+                difficulty_band=difficulty_band,
+                exclude=exclude,
+            )
             selected_ids.extend(taken)
             exclude.update(taken)
-            deficit += target_count - len(taken)
+            per_subtype_deficit[subtype] = target_count - len(taken)
 
-        # Fill deficit with the flexible subtype
+        deficit = sum(per_subtype_deficit.values())
+
+        # Fill deficit with the flexible subtype, still cluster-aware
         if deficit > 0:
-            extra_pool = self._pool_for_subtype(
-                measure, fill_subtype, difficulty_band, exclude)
-            random.shuffle(extra_pool)
-            extra = extra_pool[:deficit]
+            extra = self._take_cluster_aware(
+                measure=measure,
+                subtype=fill_subtype,
+                target=deficit,
+                difficulty_band=difficulty_band,
+                exclude=exclude,
+            )
             selected_ids.extend(extra)
             exclude.update(extra)
             deficit -= len(extra)
 
-        # Final fallback: any matching question
+        # Final fallback: any matching question. Respects clustering too —
+        # if a candidate is RC/DI we still pull siblings together.
         if deficit > 0:
-            fallback_query = Question.select(Question.id).where(
-                Question.measure == measure,
-                Question.status == "live",
-                Question.id.not_in(list(exclude)),
+            extra = self._take_cluster_aware(
+                measure=measure,
+                subtype=None,  # any subtype
+                target=deficit,
+                difficulty_band=difficulty_band,
+                exclude=exclude,
             )
-            if difficulty_band == "easy":
-                fallback_query = fallback_query.where(Question.difficulty_target <= 2)
-            elif difficulty_band == "hard":
-                fallback_query = fallback_query.where(Question.difficulty_target >= 4)
-            fallback = [q.id for q in fallback_query]
-            random.shuffle(fallback)
-            selected_ids.extend(fallback[:deficit])
+            selected_ids.extend(extra)
+            exclude.update(extra)
+            deficit -= len(extra)
 
-        random.shuffle(selected_ids)
+        # Pool-exhaustion fallback: ignore dedup (but not in-session exclusions)
+        # and try once more so we never ship a short section.
+        if deficit > 0 and dedup_exclude:
+            logger.warning(
+                "select_questions_composed: %s pool exhausted after dedup "
+                "(%d-item shortfall); relaxing dedup filter",
+                measure, deficit,
+            )
+            relaxed_exclude = set(in_session_exclude) | set(selected_ids)
+            extra = self._take_cluster_aware(
+                measure=measure,
+                subtype=None,
+                target=deficit,
+                difficulty_band=difficulty_band,
+                exclude=relaxed_exclude,
+            )
+            selected_ids.extend(extra)
+            deficit -= len(extra)
+
+        if deficit > 0:
+            logger.warning(
+                "select_questions_composed: %s genuinely short %d items "
+                "after all fallbacks",
+                measure, deficit,
+            )
+
+        # Do NOT fully shuffle — cluster siblings must stay adjacent so the
+        # UI can render the passage once at the top of its cluster. We
+        # already assembled them cluster-at-a-time in pick order.
         return selected_ids[:count]
+
+    def _take_cluster_aware(self, measure, subtype, target, difficulty_band,
+                             exclude):
+        """Pick up to ``target`` question IDs, pulling full clusters atomically.
+
+        ``subtype=None`` means "any subtype for this measure". Questions are
+        grouped by ``_cluster_group`` (stimulus_id for RC/DI, q.id otherwise).
+        A cluster is admitted only if it fits in the remaining budget; if the
+        next candidate cluster is too large, we skip it and look for a smaller
+        one instead of truncating.
+        """
+        if target <= 0:
+            return []
+
+        query = (Question
+                 .select(Question.id, Question.subtype, Question.stimulus)
+                 .where((Question.measure == measure) &
+                        (Question.status == "live")))
+        if subtype is not None:
+            query = query.where(Question.subtype == subtype)
+        if difficulty_band == "easy":
+            query = query.where(Question.difficulty_target <= 2)
+        elif difficulty_band == "hard":
+            query = query.where(Question.difficulty_target >= 4)
+        if exclude:
+            query = query.where(Question.id.not_in(list(exclude)))
+
+        candidates = list(query)
+        if not candidates:
+            return []
+
+        # Group by cluster key
+        clusters = {}
+        for q in candidates:
+            key = _cluster_group(q)
+            clusters.setdefault(key, []).append(q.id)
+
+        # Shuffle cluster order (seeds) but keep ids inside each cluster
+        # stable — the full sibling set lands together.
+        cluster_keys = list(clusters.keys())
+        random.shuffle(cluster_keys)
+
+        picked = []
+        remaining = target
+        skipped_oversized = []
+
+        for key in cluster_keys:
+            cluster_ids = clusters[key]
+            # Cluster types (RC/DI) may have additional siblings in the DB
+            # that got filtered out by exclude/difficulty above. Re-fetch the
+            # FULL sibling set so we never ship a partial cluster.
+            if key[0] == "stim":
+                stim_id = key[1]
+                subtype_key = key[2]
+                full_siblings = [
+                    q.id for q in Question.select(Question.id).where(
+                        (Question.stimulus == stim_id) &
+                        (Question.subtype == subtype_key) &
+                        (Question.status == "live")
+                    )
+                ]
+                # Skip cluster entirely if any sibling is excluded — we
+                # refuse to split it.
+                if any(sid in exclude for sid in full_siblings):
+                    continue
+                cluster_ids = full_siblings
+
+            size = len(cluster_ids)
+            if size == 0:
+                continue
+            if size <= remaining:
+                picked.extend(cluster_ids)
+                remaining -= size
+                if remaining == 0:
+                    break
+            else:
+                skipped_oversized.append((size, cluster_ids))
+
+        # If we still have budget and skipped some oversized clusters,
+        # there's nothing to do — we refuse to ship partial clusters.
+        # Log for visibility.
+        if remaining > 0 and skipped_oversized:
+            logger.info(
+                "_take_cluster_aware: %s/%s left %d slot(s) unfilled to "
+                "avoid splitting %d oversized cluster(s)",
+                measure, subtype, remaining, len(skipped_oversized),
+            )
+
+        return picked
 
     def _pool_for_subtype(self, measure, subtype, difficulty_band, exclude_ids):
         """Get all live question IDs for a measure/subtype with difficulty filter."""

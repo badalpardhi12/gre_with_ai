@@ -22,7 +22,7 @@ class FlagQuestionDialog(wx.Dialog):
         super().__init__(
             parent,
             title="Report a Problem",
-            size=(440, 360),
+            size=(440, 410),
             style=wx.DEFAULT_DIALOG_STYLE,
         )
         self._question_id = question_id
@@ -59,6 +59,23 @@ class FlagQuestionDialog(wx.Dialog):
         )
         outer.Add(self._note, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 12)
 
+        # Optional: capture a screenshot of the main app window and
+        # copy it to the clipboard so the user can paste it straight into
+        # the GitHub issue body. Defaults to ON — a picture of the
+        # broken render is almost always more useful than just the JSON.
+        self._screenshot_cb = wx.CheckBox(
+            self, label="Include screenshot of app window"
+        )
+        self._screenshot_cb.SetValue(True)
+        self._screenshot_cb.SetToolTip(
+            "Captures the test window (not this dialog). The image is "
+            "copied to the clipboard so you can paste it into the GitHub "
+            "issue body with Cmd+V."
+        )
+        outer.Add(
+            self._screenshot_cb, 0, wx.LEFT | wx.RIGHT | wx.TOP, 12,
+        )
+
         # Standard OK / Cancel
         btn_sizer = wx.StdDialogButtonSizer()
         ok_btn = wx.Button(self, wx.ID_OK, "Submit Report")
@@ -79,3 +96,10 @@ class FlagQuestionDialog(wx.Dialog):
 
     def get_note(self) -> str:
         return (self._note.GetValue() or "").strip()
+
+    def wants_screenshot(self) -> bool:
+        """Return True iff the user left the screenshot checkbox on."""
+        try:
+            return bool(self._screenshot_cb.GetValue())
+        except Exception:
+            return False

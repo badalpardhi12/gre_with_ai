@@ -240,6 +240,20 @@ def test_exam_assembler_filters_live_only(user_conn):
         f"test fixture points at {config.DB_PATH!r}, not gre_user.db"
     )
 
+    # The `temp_db` fixture in conftest.py monkeypatches `config.DB_PATH` for
+    # other tests and evicts `models` / `services` modules from sys.modules
+    # when it runs. If such a test ran earlier in the same session, any
+    # already-imported `models.database.db` (and all downstream services
+    # that captured `from models.database import db`) now point at a
+    # tmp_path DB. Force-evict them so our re-import binds to the real
+    # runtime DB.
+    for prefix in ("models", "services"):
+        for mod in [
+            m for m in list(sys.modules)
+            if m.startswith(prefix + ".") or m == prefix
+        ]:
+            del sys.modules[mod]
+
     from models.database import init_db
 
     init_db()

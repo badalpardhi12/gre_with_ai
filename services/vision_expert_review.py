@@ -388,7 +388,7 @@ def _make_anthropic_vision_judge(
     model_id: str, max_tokens: int = 1200,
 ) -> VisionJudgeCall:
     gw = _import_gateway()
-    client = gw.FloodgateClient()
+    client = gw.get_client() if hasattr(gw, "get_client") else gw.Client()
 
     def _call(system: str, user: str, image_bytes: bytes,
               media_type: str) -> str:
@@ -420,7 +420,7 @@ def _make_gemini_vision_judge(
     model_id: str, max_tokens: int = 1500,
 ) -> VisionJudgeCall:
     gw = _import_gateway()
-    client = gw.FloodgateClient()
+    client = gw.get_client() if hasattr(gw, "get_client") else gw.Client()
 
     def _call(system: str, user: str, image_bytes: bytes,
               media_type: str) -> str:

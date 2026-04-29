@@ -242,6 +242,30 @@ def test_select_in_passage_correct():
     assert ScoringEngine.check_answer(q, {"selected_sentence": "2"}) is True
 
 
+def test_select_in_passage_incorrect():
+    q = {
+        "subtype": "rc_select_passage",
+        "options": [
+            {"label": "1", "text": "...", "is_correct": False},
+            {"label": "2", "text": "...", "is_correct": True},
+            {"label": "3", "text": "...", "is_correct": False},
+        ],
+    }
+    assert ScoringEngine.check_answer(q, {"selected_sentence": 1}) is False
+    assert ScoringEngine.check_answer(q, {"selected_sentence": 3}) is False
+
+
+def test_select_in_passage_empty_response_is_incorrect():
+    q = {
+        "subtype": "rc_select_passage",
+        "options": [
+            {"label": "1", "text": "...", "is_correct": True},
+        ],
+    }
+    assert ScoringEngine.check_answer(q, {}) is False
+    assert ScoringEngine.check_answer(q, {"selected_sentence": None}) is False
+
+
 # ── estimate_scaled_score robustness ──
 
 def test_estimate_scaled_score_handles_nonint():

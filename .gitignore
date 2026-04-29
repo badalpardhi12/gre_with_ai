@@ -25,6 +25,8 @@ data/*.db-wal
 # tracked seed file and block `git pull` for the next sync.
 data/gre_user.db
 data/gre_user.db-*
+data/gre_user.db.*.bak
+data/gre_user.db.pre-*.bak
 # Autosave / crash-recovery artifacts (per-run, never useful in version control)
 data/autosave_journal.jsonl
 data/autosave_journal.*.jsonl.bak

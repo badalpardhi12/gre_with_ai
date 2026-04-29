@@ -57,7 +57,11 @@ def _exclude_synthetic_clause():
     return Question.source != SYNTHETIC_SOURCE
 
 # Default dedup windows (days). Tunable by callers of
-# ``select_questions_composed``.
+# ``select_questions_composed``. The historical values (30/60) were a
+# naive heuristic; see ``data/audits/spaced_repetition_research_2026_04_28.md``
+# for the learning-science backing of the current values. Cluster cooldown
+# is NOT configured here — it lives in ``services.scheduler`` because it
+# is keyed on ``stimulus_id``, not ``question_id``.
 DEFAULT_RECENT_SEEN_DAYS = 30
 DEFAULT_MASTERY_COOLDOWN_DAYS = 60
 
@@ -172,13 +176,21 @@ def _user_mastery_last_correct(user_id: str = "local"):
 
 def _dedup_exclusions(user_id: str,
                       recent_days: int,
-                      mastery_cooldown_days: int):
+                      mastery_cooldown_days: int,
+                      include_cluster_cooldown: bool = True):
     """Combined dedup set used by ``select_questions_composed``.
 
-    Returns a ``set[int]`` of question IDs to leave out of the pool:
+    Returns a ``set[int]`` of question IDs to leave out of the pool. Two
+    filters always apply:
       * anything the user touched in the last ``recent_days`` days, plus
       * anything the user answered correctly in the last
         ``mastery_cooldown_days`` days (spaced-repetition cooldown).
+
+    When ``include_cluster_cooldown`` is True (default), the scheduler in
+    ``services.scheduler`` additionally suppresses every child question
+    under a DI chart / RC passage whose cluster was recently served —
+    even if that specific qid was never individually seen. This is the
+    core fix for "why does the same DI chart keep coming back?".
 
     Items the user got *wrong* are deliberately NOT added to the mastery
     cooldown set — the learner should see those sooner for review.
@@ -190,7 +202,31 @@ def _dedup_exclusions(user_id: str,
         for qid, last_correct in _user_mastery_last_correct(user_id).items():
             if last_correct and last_correct >= cutoff:
                 mastered.add(qid)
-    return recent | mastered
+
+    combined = recent | mastered
+
+    if include_cluster_cooldown:
+        # Cluster-aware layer (DI/RC). Uses scheduler defaults from
+        # ``data/llm_config.json`` so the operator can tune them without
+        # code changes. Imported lazily to keep this module importable
+        # before scheduler config lands.
+        try:
+            from services.scheduler import (
+                scheduler_exclusions, stim_ids_to_qids,
+            )
+        except ImportError:  # pragma: no cover — defensive
+            logger.warning("scheduler module unavailable; falling back to "
+                           "item-only dedup")
+            return combined
+        _hard, cluster_stims = scheduler_exclusions(
+            user_id=user_id,
+            recent_seen_days=recent_days,
+            mastery_cooldown_days=mastery_cooldown_days,
+        )
+        if cluster_stims:
+            combined = combined | stim_ids_to_qids(cluster_stims)
+
+    return combined
 
 
 def user_stats(user_id: str = "local",
@@ -198,9 +234,17 @@ def user_stats(user_id: str = "local",
                mastery_cooldown_days: int = DEFAULT_MASTERY_COOLDOWN_DAYS):
     """UX helper: how much of the pool has the user chewed through?
 
-    Returns a dict ``{seen_count, total_pool, dedup_days_active,
-    mastery_cooldown_days, dedup_active_count}`` so the app can render a
-    "you've seen 487 of 1544 items" nudge.
+    Returns a dict with:
+      * ``seen_count`` / ``total_pool`` — raw coverage
+      * ``dedup_days_active`` / ``mastery_cooldown_days`` — the cooldown
+        windows currently in force
+      * ``dedup_active_count`` — items currently suppressed by item-level
+        cooldowns
+      * ``cluster_cooled_count`` — DI/RC clusters currently cooled; a
+        single cluster suppresses every child question in the bank
+      * ``cluster_cooled_qid_count`` — expanded count of suppressed child
+        questions (useful for the "you've seen 487 / 2990" banner so
+        users know why certain types are scarce right now)
     """
     total_pool = (Question
                   .select(fn.COUNT(Question.id))
@@ -215,13 +259,29 @@ def user_stats(user_id: str = "local",
         user_id=user_id,
         recent_days=recent_days,
         mastery_cooldown_days=mastery_cooldown_days,
+        include_cluster_cooldown=False,
     )
+    cluster_cooled_count = 0
+    cluster_cooled_qids = 0
+    try:
+        from services.scheduler import scheduler_exclusions, stim_ids_to_qids
+        _hard, cluster_stims = scheduler_exclusions(
+            user_id=user_id,
+            recent_seen_days=recent_days,
+            mastery_cooldown_days=mastery_cooldown_days,
+        )
+        cluster_cooled_count = len(cluster_stims)
+        cluster_cooled_qids = len(stim_ids_to_qids(cluster_stims))
+    except ImportError:
+        pass
     return {
         "seen_count": seen_count,
         "total_pool": total_pool,
         "dedup_days_active": recent_days,
         "mastery_cooldown_days": mastery_cooldown_days,
         "dedup_active_count": len(dedup_active),
+        "cluster_cooled_count": cluster_cooled_count,
+        "cluster_cooled_qid_count": cluster_cooled_qids,
     }
 
 

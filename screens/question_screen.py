@@ -2,6 +2,8 @@
 Question screen — unified screen for Verbal and Quantitative sections.
 Handles all GRE question types with appropriate UI controls.
 """
+import re
+
 import wx
 import wx.html2
 
@@ -325,7 +327,15 @@ class QuestionScreen(wx.Panel):
 
         # Passage / stimulus
         if q.get("stimulus"):
-            self.passage_view.set_content(q["stimulus"]["content"])
+            passage_html = q["stimulus"]["content"] or ""
+            # For select-in-passage questions, convert `<sent id='N'>...</sent>`
+            # markers into visible, numbered spans so the reader can match the
+            # radio options on the right to sentences on the left. Questions
+            # without `<sent>` tags fall back to a sentence-splitter so the UI
+            # still shows numbered sentences the user can count off.
+            if q["subtype"] == "rc_select_passage":
+                passage_html = self._annotate_passage_sentences(passage_html)
+            self.passage_view.set_content(passage_html)
             self.passage_panel.Show()
             if not self.content_splitter.IsSplit():
                 # SplitVertically with sashPos=0 tells wx to use a
@@ -379,7 +389,44 @@ class QuestionScreen(wx.Panel):
         subtype = q["subtype"]
         options = q.get("options", [])
 
-        if subtype in ("rc_single", "mcq_single", "qc", "data_interp", "rc_select_passage"):
+        if subtype == "rc_select_passage":
+            # Each option's label is a sentence index (e.g. "1", "2", …)
+            # matching the `[N]` markers rendered in the passage. Prefer
+            # the actual sentence text (parsed from the stimulus) as the
+            # radio label so the user can select by reading the sentence
+            # instead of counting markers. Falls back to "Sentence N"
+            # when the passage has no `<sent>` tags.
+            sentences = self._extract_passage_sentences(
+                (q.get("stimulus") or {}).get("content") or ""
+            )
+            hint = wx.StaticText(
+                self.answer_panel,
+                label="Select the sentence from the passage that best answers the question.",
+            )
+            hint.SetForegroundColour(wx.Colour(0, 100, 180))
+            self.answer_sizer.Add(hint, 0, wx.LEFT | wx.BOTTOM, 6)
+
+            for opt in options:
+                label_idx = opt["label"]
+                sentence_text = sentences.get(str(label_idx))
+                if sentence_text:
+                    shown = sentence_text
+                    if len(shown) > 200:
+                        shown = shown[:200].rstrip() + "…"
+                    label_text = f"[{label_idx}] {shown}"
+                else:
+                    # No marker-wrapped passage — show stored option text
+                    # (e.g. "Sentence 3") as the fallback.
+                    label_text = f"[{label_idx}] {opt['text']}"
+                radio = self._add_wrapping_option(
+                    label_text=label_text,
+                    control_type="radio",
+                    is_first=(opt is options[0]),
+                    on_change=self._on_answer_change,
+                )
+                self._answer_controls.append(("radio", opt["label"], radio))
+
+        elif subtype in ("rc_single", "mcq_single", "qc", "data_interp"):
             # Radio buttons for single-select — split control + wrappable
             # text so long option labels don't get clipped at the panel
             # boundary on narrow layouts.
@@ -807,6 +854,59 @@ class QuestionScreen(wx.Panel):
                         "Reported", wx.OK | wx.ICON_INFORMATION, parent=self,
                     )
         dlg.Destroy()
+
+    # ── Select-in-passage helpers ─────────────────────────────────────
+
+    # Matches `<sent id='N'>text</sent>` (or double-quoted id) as stored
+    # in the stimulus for rc_select_passage questions. Captured groups:
+    # (1) sentence index, (2) sentence text.
+    _SENT_TAG_RE = re.compile(
+        r"<sent\s+id=['\"](\d+)['\"]\s*>(.*?)</sent>",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    @classmethod
+    def _extract_passage_sentences(cls, passage_html):
+        """Return ``{index_str: sentence_text}`` parsed from `<sent>` tags.
+
+        Returns an empty dict when the passage has no marker tags — the
+        UI falls back to the stored option text in that case.
+        """
+        if not passage_html:
+            return {}
+        out = {}
+        for m in cls._SENT_TAG_RE.finditer(passage_html):
+            idx = m.group(1)
+            # Strip inner HTML tags (e.g. `<em>`) so the radio label is
+            # plain text; the StaticText widget can't render HTML.
+            raw = m.group(2)
+            text = re.sub(r"<[^>]+>", "", raw).strip()
+            if text:
+                out[idx] = text
+        return out
+
+    @classmethod
+    def _annotate_passage_sentences(cls, passage_html):
+        """Replace `<sent id='N'>...</sent>` with a visible `[N]` marker
+        followed by the sentence text, so the user can match the radio
+        options on the right to a specific sentence on the left.
+
+        The sanitizer strips the unknown `<sent>` tag, so without this
+        rewrite the passage would render with no visual indication of
+        where one sentence ends and another begins.
+        """
+        if not passage_html:
+            return passage_html
+
+        def _sub(m):
+            idx = m.group(1)
+            text = m.group(2)
+            return (
+                f'<span class="sentence-num">'
+                f'<strong>[{idx}]</strong></span> {text}'
+            )
+
+        return cls._SENT_TAG_RE.sub(_sub, passage_html)
 
     @staticmethod
     def _escape_html(text):

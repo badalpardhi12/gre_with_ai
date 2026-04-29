@@ -208,7 +208,16 @@ def classify_batch(client, batch: List[Dict[str, Any]],
                    allowlist: Dict[str, Dict[str, Any]],
                    measure: str) -> Dict[int, str]:
     """Classify one batch via Haiku; returns qid → subtopic."""
-    from services._llm_gateway import MODEL_HAIKU
+    # `_llm_gateway` is gitignored (carries an Apple-internal model id).
+    # On any env that hasn't built the gateway — CI, a fresh clone — the
+    # import would fail and drag the unit tests down with it. The tests
+    # inject a fake client that ignores the model string, and production
+    # callers only reach this function via the `__main__` path below
+    # which imports and constructs a real FloodgateClient first.
+    try:
+        from services._llm_gateway import MODEL_HAIKU
+    except ModuleNotFoundError:
+        MODEL_HAIKU = "haiku"  # sentinel: never hits a real endpoint
     system = ("You are a GRE item classifier. Return strictly valid JSON; "
               "no markdown fences, no preamble.")
     user = build_prompt(batch, allowlist, measure)

@@ -93,6 +93,22 @@ class Question(BaseModel):
     created_at = DateTimeField(default=datetime.now)
     updated_at = DateTimeField(default=datetime.now)
 
+    # JSON-serialized list of relative image paths under
+    # data/extracted/<source>/images/ — populated for Princeton items
+    # flagged needs_vision by the consolidator. Empty list otherwise.
+    figure_refs = TextField(default="[]")
+
+    def get_figure_refs(self):
+        """Return parsed list of figure paths (never raises)."""
+        try:
+            val = json.loads(self.figure_refs) if self.figure_refs else []
+            return val if isinstance(val, list) else []
+        except (ValueError, TypeError):
+            return []
+
+    def set_figure_refs(self, refs):
+        self.figure_refs = json.dumps(list(refs))
+
     def get_tags(self):
         # Defensive parse — a manually-edited DB or an old row with malformed
         # JSON shouldn't crash every screen that reads the field.

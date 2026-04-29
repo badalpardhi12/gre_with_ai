@@ -162,12 +162,17 @@ class ExamSession:
         self.ended_at = None
         self._journal_path = DATA_DIR / "autosave_journal.jsonl"
 
-    def build_full_mock(self, question_bank):
+    def build_full_mock(self, question_bank, user_id="local"):
         """
         Assemble a full mock exam from the question bank service.
         Args:
             question_bank: a QuestionBankService instance with .select_questions()
+            user_id: used for cross-session dedup — items this user has seen
+                     recently (or mastered) are filtered from the pool.
         """
+        # Remember for S2 deferred loading.
+        self._user_id = user_id
+
         # AWA always first
         self.section_order = [SectionType.AWA]
 
@@ -186,6 +191,10 @@ class ExamSession:
         # Store question bank for deferred S2 loading
         self._question_bank = question_bank
 
+        # Track IDs already picked across sections so S1-Verbal doesn't
+        # collide with S1-Quant and vice versa.
+        seen_across_sections = set()
+
         # Assemble questions for each section (S2 deferred until S1 completes)
         for sec_type in self.section_order:
             measure, sec_idx, time_limit, q_count = SECTION_META[sec_type]
@@ -197,7 +206,10 @@ class ExamSession:
                     measure=measure,
                     count=q_count,
                     difficulty_band="medium",
+                    exclude_ids=list(seen_across_sections),
+                    exclude_user_seen=user_id,
                 )
+                seen_across_sections.update(q_ids)
             else:
                 # S2 questions are deferred — loaded after S1 adaptation
                 q_ids = []
@@ -208,9 +220,10 @@ class ExamSession:
                 time_limit=time_limit,
             )
 
-    def build_section_test(self, measure, question_bank):
+    def build_section_test(self, measure, question_bank, user_id="local"):
         """Build a section-only test (Verbal or Quant)."""
         self._question_bank = question_bank
+        self._user_id = user_id
         if measure == "verbal":
             self.section_order = [SectionType.VERBAL_S1, SectionType.VERBAL_S2]
         else:
@@ -221,6 +234,7 @@ class ExamSession:
             if sec_idx == 1:
                 q_ids = question_bank.select_questions_composed(
                     measure=m, count=q_count, difficulty_band="medium",
+                    exclude_user_seen=user_id,
                 )
             else:
                 q_ids = []  # deferred until S1 completes
@@ -321,6 +335,7 @@ class ExamSession:
                 count=q_count,
                 difficulty_band=band,
                 exclude_ids=s1_ids,
+                exclude_user_seen=getattr(self, "_user_id", "local"),
             )
             self.sections[s2_type].question_ids = q_ids
 

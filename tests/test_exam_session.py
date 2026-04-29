@@ -19,7 +19,7 @@ class StubBank:
         self.calls = []
 
     def select_questions_composed(self, measure, count, difficulty_band,
-                                   exclude_ids=None):
+                                   exclude_ids=None, **kwargs):
         self.calls.append((measure, count, difficulty_band))
         # Return predictable IDs in the requested range, offset by measure to
         # avoid collisions.

@@ -93,6 +93,13 @@ class Question(BaseModel):
     created_at = DateTimeField(default=datetime.now)
     updated_at = DateTimeField(default=datetime.now)
 
+    # Free-form human- or reviewer-authored notes attached to the item.
+    # Populated by expert-review pipelines (Kaplan text panel, Princeton
+    # vision panel) with a JSON-serialized verdict blob so downstream
+    # renderers can show per-judge score breakdowns without touching the
+    # explanation body. Added to the schema in migration 013.
+    review_notes = TextField(default="")
+
     # JSON-serialized list of relative image paths under
     # data/extracted/<source>/images/ — populated for Princeton items
     # flagged needs_vision by the consolidator. Empty list otherwise.

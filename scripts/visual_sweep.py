@@ -301,15 +301,40 @@ def estimate_cost(n_sonnet: int, n_opus: int) -> float:
     return sonnet_cost + opus_cost
 
 
+def _db_retry(fn, attempts: int = 4):
+    """Retry a DB callable through transient 'malformed' / 'locked' errors."""
+    last_err = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as e:  # peewee.DatabaseError, OperationalError, etc.
+            msg = str(e).lower()
+            last_err = e
+            if "malformed" in msg or "locked" in msg or "busy" in msg:
+                try:
+                    db.close()
+                except Exception:
+                    pass
+                try:
+                    db.connect(reuse_if_open=True)
+                    db.execute_sql("REINDEX;")
+                except Exception:
+                    pass
+                time.sleep(1 + i * 2)
+                continue
+            raise
+    raise last_err  # type: ignore[misc]
+
+
 def load_question_row(qid: int) -> dict | None:
-    q = Question.get_or_none(Question.id == qid)
+    q = _db_retry(lambda: Question.get_or_none(Question.id == qid))
     if q is None:
         return None
-    opts = list(
+    opts = _db_retry(lambda: list(
         QuestionOption.select()
         .where(QuestionOption.question == q)
         .order_by(QuestionOption.option_label)
-    )
+    ))
     opts_dict = [
         {
             "option_label": o.option_label,
@@ -320,7 +345,7 @@ def load_question_row(qid: int) -> dict | None:
     ]
     stim = None
     if q.stimulus_id:
-        s = Stimulus.get_or_none(Stimulus.id == q.stimulus_id)
+        s = _db_retry(lambda: Stimulus.get_or_none(Stimulus.id == q.stimulus_id))
         if s is not None:
             stim = {
                 "stimulus_type": s.stimulus_type,
@@ -472,40 +497,48 @@ def ensure_review_notes_append(q: Question, note: str) -> None:
 
 def demote_question(qid: int, verdict: dict, issues: list[str],
                     dry_run: bool) -> bool:
-    q = Question.get_or_none(Question.id == qid)
-    if q is None or q.status != "live":
-        return False
-    note_payload = {
-        "source": "visual_sweep_2026_04_28",
-        "action": "live→draft",
-        "issues": issues,
-        "sonnet": verdict["sonnet"],
-        "opus": verdict.get("opus"),
-        "timestamp": verdict["judged_at"],
-    }
-    note = "[visual_sweep 2026-04-28] " + json.dumps(note_payload,
-                                                    ensure_ascii=False)
-    if dry_run:
+    def _do():
+        q = Question.get_or_none(Question.id == qid)
+        if q is None or q.status != "live":
+            return False
+        note_payload = {
+            "source": "visual_sweep_2026_04_28",
+            "action": "live→draft",
+            "issues": issues,
+            "sonnet": verdict["sonnet"],
+            "opus": verdict.get("opus"),
+            "timestamp": verdict["judged_at"],
+        }
+        note = "[visual_sweep 2026-04-28] " + json.dumps(note_payload,
+                                                        ensure_ascii=False)
+        if dry_run:
+            return True
+        with db.atomic():
+            q.status = "draft"
+            ensure_review_notes_append(q, note)
+            q.updated_at = datetime.utcnow()
+            q.save()
         return True
-    with db.atomic():
-        q.status = "draft"
-        ensure_review_notes_append(q, note)
-        q.updated_at = datetime.utcnow()
-        q.save()
-    return True
+    return _db_retry(_do)
 
 
 def pick_live_qids() -> list[int]:
-    qids = [
+    qids = _db_retry(lambda: [
         q.id for q in Question.select(Question.id)
         .where(Question.status == "live")
         .order_by(Question.id)
-    ]
+    ])
     return qids
 
 
 def run_sweep(args) -> int:
     db.connect(reuse_if_open=True)
+    # Proactively rebuild indices — a sibling worktree may have produced
+    # transient corruption that surfaces mid-sweep otherwise.
+    try:
+        db.execute_sql("REINDEX;")
+    except Exception as e:
+        flush_progress(f"[warn] REINDEX failed: {e}")
 
     all_qids = pick_live_qids()
     total = len(all_qids)

@@ -19,6 +19,9 @@ build/
 data/*.db-journal
 data/*.db-shm
 data/*.db-wal
+# Ad-hoc DB backups created during maintenance sweeps (never tracked).
+data/*.db.bak
+data/*.db.pre-*.bak
 # Per-user runtime DB — bootstrapped from the shipped data/gre_mock.db
 # seed on first launch by config._bootstrap_user_db. Never tracked, so
 # user state (sessions, responses, mastery, flags) doesn't churn the

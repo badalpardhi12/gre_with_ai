@@ -51,9 +51,11 @@ PROMOTE_MIN_SCORE = 4                # axis floor for live
 PROMOTE_MIN_AGREE = 2                # N judges must hit the floor
 DISAGREEMENT_SPREAD = 2              # spread > 2 => escalated to draft
 
-# Per-call budget. 90s is generous for a 5-axis rubric + a 20 KB image.
+# Per-call budget. 150s is generous for a 5-axis rubric + a small GIF;
+# Gemini is meaningfully slower than Claude on multi-modal prompts
+# right now, and losing a judge to a timeout routes everything to draft.
 JUDGE_CALL_TIMEOUT_SEC = float(
-    os.environ.get("VISION_REVIEW_JUDGE_TIMEOUT", "90")
+    os.environ.get("VISION_REVIEW_JUDGE_TIMEOUT", "150")
 )
 
 
@@ -140,27 +142,37 @@ def _parse_vision_response(judge: str, raw: str) -> JudgeReport:
         text = "\n".join(lines)
     obj: Optional[Dict[str, Any]] = None
     # Brace-balanced scan so stray prose before/after doesn't sink us.
+    # CRITICAL: every code path that does NOT advance `obj` MUST advance
+    # `i`, otherwise a response with an unbalanced '{' will spin forever.
     i = 0
-    while i < len(text):
-        if text[i] == "{":
-            depth = 0
-            for j in range(i, len(text)):
-                ch = text[j]
-                if ch == "{":
-                    depth += 1
-                elif ch == "}":
-                    depth -= 1
-                    if depth == 0:
-                        try:
-                            obj = json.loads(text[i:j + 1])
-                            break
-                        except json.JSONDecodeError:
-                            i = j + 1
-                            break
-            if obj is not None:
-                break
+    n = len(text)
+    while i < n:
+        if text[i] != "{":
+            i += 1
             continue
-        i += 1
+        depth = 0
+        closed = False
+        for j in range(i, n):
+            ch = text[j]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        obj = json.loads(text[i:j + 1])
+                        closed = True
+                        break
+                    except json.JSONDecodeError:
+                        # this candidate didn't parse; skip past it.
+                        i = j + 1
+                        closed = True
+                        break
+        if obj is not None:
+            break
+        if not closed:
+            # Unbalanced `{` — no terminating `}` found. Stop scanning.
+            break
     if obj is None:
         report.error = "no_json"
         return report
@@ -399,7 +411,7 @@ def _make_anthropic_vision_judge(
                 ],
             }],
             max_tokens=max_tokens,
-            max_retries=5,
+            max_retries=2,
         )
     return _call
 
@@ -412,6 +424,21 @@ def _make_gemini_vision_judge(
 
     def _call(system: str, user: str, image_bytes: bytes,
               media_type: str) -> str:
+        # Gemini's vision API accepts PNG/JPEG/WebP but NOT GIF. Convert
+        # GIF -> PNG on the fly so the single-format pipeline upstream
+        # doesn't have to care.
+        if media_type == "image/gif":
+            try:
+                from io import BytesIO
+
+                from PIL import Image
+                img = Image.open(BytesIO(image_bytes))
+                out = BytesIO()
+                img.convert("RGB").save(out, format="PNG")
+                image_bytes = out.getvalue()
+                media_type = "image/png"
+            except Exception as exc:
+                logger.warning("GIF->PNG conversion failed: %s", exc)
         image_part = {
             "inlineData": {
                 "mimeType": media_type,
@@ -426,7 +453,7 @@ def _make_gemini_vision_judge(
             }],
             system_instruction=system,
             max_output_tokens=max_tokens,
-            max_retries=5,
+            max_retries=2,
         )
     return _call
 
@@ -467,23 +494,45 @@ def vision_expert_review(
     media_type: str = "image/gif",
     judges: Optional[Sequence[Dict[str, Any]]] = None,
     system_prompt: Optional[str] = None,
+    sequential: bool = False,
 ) -> Dict[str, Any]:
     """Run the 3-judge vision panel and return a verdict dict.
 
     Each judge receives the stem + marked correct label + (optional)
     explanation as text, and the attached image as a second content
-    block. Calls are threaded so the wall time is bounded by the slowest
-    judge + the per-call timeout, not the sum.
+    block.
+
+    By default judges run in parallel daemon threads; pass
+    ``sequential=True`` (or set ``VISION_REVIEW_SEQUENTIAL=1`` in the
+    environment) to run them serially, which is handy when debugging a
+    hung panel from a backgrounded shell where inter-thread TLS handshake
+    contention can keep the main thread compute-bound.
 
     Returns the same shape as ``services.expert_review.aggregate_verdict``
     plus a ``reviewer_notes`` string and a per-judge ``read_options``
-    map showing what each judge actually saw in the image (useful for
-    catching mis-paired figures).
+    map showing what each judge actually saw in the image.
     """
     sys_prompt = system_prompt or VISION_SYSTEM_PROMPT
     user_msg = build_vision_user_message(question_dict)
     if judges is None:
         judges = build_default_vision_judges()
+
+    if sequential or os.environ.get("VISION_REVIEW_SEQUENTIAL") == "1":
+        reports: List[JudgeReport] = []
+        for j in judges:
+            name = j["name"]
+            try:
+                raw = j["call"](sys_prompt, user_msg, image_bytes, media_type)
+                reports.append(_parse_vision_response(name, raw))
+            except Exception as exc:
+                reports.append(JudgeReport(
+                    judge=name, raw="",
+                    error=f"call_failed: {exc!r}",
+                ))
+        verdict = aggregate_vision_panel(reports)
+        verdict["reviewer_notes"] = render_reviewer_notes(verdict)
+        verdict.setdefault("cost_estimate_usd", 0.08 * max(1, len(reports)))
+        return verdict
 
     result_boxes: List[Dict[str, Any]] = []
     threads: List[threading.Thread] = []
@@ -510,7 +559,7 @@ def vision_expert_review(
         remaining = max(0.1, deadline - time.time())
         th.join(remaining)
 
-    reports: List[JudgeReport] = []
+    reports = []
     for box, th in zip(result_boxes, threads):
         name = box["judge"]
         if th.is_alive():

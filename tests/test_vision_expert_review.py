@@ -89,6 +89,28 @@ def test_parse_clamps_out_of_range_scores():
     assert all(rep.scores[ax] == 5 for ax in vr.VISION_AXES)
 
 
+def test_parse_does_not_spin_on_unbalanced_brace():
+    # Regression: Gemini occasionally truncates mid-JSON leaving an
+    # opening '{' with no matching '}'. Earlier brace scan spun forever
+    # because the outer while never advanced `i` on that path.
+    truncated = '{"scores": {"correctness": 4'
+    rep = vr._parse_vision_response("gemini", truncated)
+    assert rep.error == "no_json"
+
+
+def test_parse_skips_failed_candidate_then_finds_valid():
+    # A leading "{}" that fails score validation plus a trailing valid
+    # object should still yield a parsed report — we must not get stuck
+    # on the first unparseable candidate.
+    raw = (
+        "garbage {not json} more garbage "
+        + json.dumps({"scores": {ax: 4 for ax in vr.VISION_AXES}})
+    )
+    rep = vr._parse_vision_response("opus", raw)
+    assert rep.error is None
+    assert all(rep.scores[ax] == 4 for ax in vr.VISION_AXES)
+
+
 # ── aggregation ──────────────────────────────────────────────────────
 
 

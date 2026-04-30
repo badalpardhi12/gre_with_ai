@@ -90,3 +90,4 @@ setup.log
 
 # Blueprint PDF (large binary)
 *.pdf
+.claude/worktrees/

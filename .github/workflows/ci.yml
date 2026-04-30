@@ -20,10 +20,8 @@ jobs:
         python: ["3.10", "3.11", "3.12"]
 
     steps:
-      - name: Checkout (with LFS for shipped DB)
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          lfs: true
 
       - name: Set up Python ${{ matrix.python }}
         uses: actions/setup-python@v5
@@ -43,21 +41,23 @@ jobs:
           pip install -r requirements-ci.txt
           pip install pytest
 
-      - name: Verify LFS resolved the shipped DB
-        # The seed DB is tracked via Git LFS (~35 MB). If the LFS
-        # bandwidth quota is exhausted, actions/checkout@v4 silently
-        # leaves the pointer file (~133 bytes) in place and downstream
-        # tests error out with "file is not a database". Fail fast with
-        # a clear diagnostic instead — the runtime fix is either to
-        # unblock LFS quota or to vendor the DB differently.
+      - name: Verify shipped seed DB
+        # The seed DB ships as a regular tracked blob. If somehow the
+        # bytes didn't land (partial clone, shallow fetch weirdness),
+        # downstream tests error out with "file is not a database".
+        # Fail fast here with a clear diagnostic.
         run: |
           db_size=$(stat -f%z data/gre_mock.db 2>/dev/null || stat -c%s data/gre_mock.db)
           echo "data/gre_mock.db size: $db_size bytes"
           if [ "$db_size" -lt 1024 ]; then
-            echo "::error::data/gre_mock.db is only $db_size bytes — Git LFS content did not resolve. Check bandwidth quota."
+            echo "::error::data/gre_mock.db is only $db_size bytes — clone did not fetch the seed DB."
             head -c 500 data/gre_mock.db
             exit 1
           fi
+          head -c 16 data/gre_mock.db | grep -q "SQLite format 3" || {
+            echo "::error::data/gre_mock.db does not have a SQLite header."
+            exit 1
+          }
 
       - name: Initialise database
         run: python -c "from models.database import init_db; init_db()"

@@ -6,7 +6,7 @@ lessons and study plans, and per-question tutoring backed by Claude Opus 4.7.
 
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
 ![wxPython](https://img.shields.io/badge/GUI-wxPython%204.2-orange)
-![SQLite](https://img.shields.io/badge/database-SQLite%20+%20LFS-green)
+![SQLite](https://img.shields.io/badge/database-SQLite-green)
 ![Tests](https://img.shields.io/badge/tests-45%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -25,11 +25,11 @@ python app.py
 ```
 
 `setup.sh` is idempotent: it installs Python (via Homebrew on macOS or apt on
-Debian/Ubuntu) and Git LFS if missing, runs `git lfs pull` to fetch the
-shipped 8.7 MB question/vocab/lessons database, builds the venv, installs
-every dep including `bleach` and `pytest`, applies the on-launch schema
-migrations, and runs the test suite as a smoke check. Re-run it after every
-`git pull` to refresh deps and DB.
+Debian/Ubuntu) if missing, verifies the shipped ~21 MB question / vocab /
+lessons database is present, builds the venv, installs every dep including
+`bleach` and `pytest`, applies the on-launch schema migrations, and runs
+the test suite as a smoke check. Re-run it after every `git pull` to
+refresh deps.
 
 ---
 
@@ -248,10 +248,8 @@ gre_with_ai/
 │   └── cleanup_broken_questions.py
 │
 ├── data/
-│   ├── gre_mock.db                     # SQLite, ~8.7 MB, ships via Git LFS
-│   ├── images/                         # Rendered DI chart PNGs
-│   ├── extracted/                      # Intermediate extraction JSON (gitignored)
-│   ├── external/                       # Source CSVs for vocab imports
+│   ├── gre_mock.db                     # Shipped SQLite seed, ~21 MB
+│   ├── gre_user.db                     # Per-user DB (gitignored; bootstrapped from seed on first launch)
 │   └── llm_config.json                 # User's API key (0o600, gitignored)
 │
 └── resources/
@@ -272,9 +270,10 @@ gre_with_ai/
    through `services/llm_service.py` (httpx timeout + wx.CallAfter
    marshalling). May be offline; the rest of the app degrades gracefully
    (drills, mock tests, vocab review all work without an API key).
-3. **Build-time data generation** — scripts in `scripts/` were used once
-   to build the database that ships in this repo via Git LFS. End users
-   never invoke them.
+3. **Build-time data generation** — the extraction / synthetic-generation /
+   expert-review pipelines that built the shipped `data/gre_mock.db` live
+   out-of-tree. They're not part of the public repo; end users never
+   invoke them.
 
 ### Data flow
 
@@ -310,8 +309,8 @@ First launch
 
 ### Database
 
-SQLite + Peewee with Git-LFS-shipped content. Schema migrations are applied
-on every launch via `models/migrations.py`:
+SQLite + Peewee; the seed DB ships as a regular tracked blob. Schema
+migrations are applied on every launch via `models/migrations.py`:
 
 | # | Migration | What it does |
 |---|---|---|
@@ -451,8 +450,8 @@ table.
 > you forced `PYTHON=python3.13`.
 
 **Empty dashboard / "no questions"**
-> The database ships via Git LFS. Re-run `./setup.sh` (or
-> `git lfs install && git lfs pull`) to fetch `data/gre_mock.db`.
+> The seed DB `data/gre_mock.db` didn't land during clone. Re-run
+> `git clone` from scratch, or `git checkout HEAD -- data/gre_mock.db`.
 
 **AWA score shows N/A / AI tutor doesn't open**
 > Configure your OpenRouter key via the Settings dialog (or
@@ -460,8 +459,9 @@ table.
 > "Run coach now" button when no key is configured.
 
 **Database reset**
-> `rm data/gre_mock.db*` then `git lfs pull` to restore the shipped DB,
-> or relaunch to start with an empty DB.
+> `git checkout HEAD -- data/gre_mock.db` to restore the shipped seed,
+> or `rm data/gre_user.db` to wipe your personal state and relaunch
+> (the app re-bootstraps `gre_user.db` from the seed on first launch).
 
 **Wizard re-appears every launch**
 > If you skipped onboarding but want it gone permanently:

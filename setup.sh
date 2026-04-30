@@ -11,16 +11,16 @@
 #      dependencies via brew (macOS) or apt (Debian/Ubuntu) where possible.
 #   2. Verifies Python 3.9+ is available; installs it via brew on macOS if
 #      missing.
-#   3. Installs Git LFS and runs `git lfs install` + `git lfs pull` so the
-#      shipped question / vocab / lessons database is fetched.
+#   3. Verifies the shipped seed SQLite DB (tracked as a regular blob)
+#      is present and valid.
 #   4. Creates the venv at ./venv and installs every dependency in
 #      requirements.txt (plus pytest for the test suite).
 #   5. Runs the test suite as a smoke check.
 #   6. Prints clear next-step instructions (how to launch, how to add an
 #      OpenRouter API key, how to re-run setup).
 #
-# Idempotent — safe to re-run after pulling new commits to refresh deps,
-# fetch new LFS objects, and re-run tests.
+# Idempotent — safe to re-run after pulling new commits to refresh deps
+# and re-run tests.
 #
 # Logging: every line of stdout/stderr is echoed to the terminal AND
 # appended to ./setup.log (timestamped) so failed installs leave a forensic
@@ -117,7 +117,7 @@ elif [[ "$PLATFORM" == "linux" ]]; then
         ok "dnf detected"
     else
         warn "No supported package manager detected. You may need to install"
-        warn "Python 3.9+ and git-lfs manually."
+        warn "Python 3.9+ manually."
     fi
 fi
 
@@ -169,62 +169,21 @@ fi
 PY_VERSION=$("$PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")')
 ok "Python $PY_VERSION ($PYTHON)"
 
-# ── 2. Git LFS ────────────────────────────────────────────────────────────
-step "Setting up Git LFS for the shipped database"
+# ── 2. Shipped database sanity check ──────────────────────────────────────
+# The seed SQLite DB ships as a regular tracked blob (no Git LFS). Verify
+# it actually landed during clone — a missing or empty file here means
+# the clone was partial, and the app won't launch.
+step "Verifying the shipped seed database"
 
-ensure_lfs() {
-    if command -v git-lfs &>/dev/null || git lfs version &>/dev/null; then
-        return 0
-    fi
-    return 1
-}
-
-if ! ensure_lfs; then
-    if [[ "$PKG_MGR" == "brew" ]]; then
-        info "Installing git-lfs via Homebrew (verbose)..."
-        brew install --verbose git-lfs || brew install git-lfs
-    elif [[ "$PKG_MGR" == "apt" ]]; then
-        info "Installing git-lfs via apt (sudo will prompt; verbose)..."
-        sudo apt-get install -y git-lfs
-    elif [[ "$PKG_MGR" == "dnf" ]]; then
-        info "Installing git-lfs via dnf (verbose)..."
-        sudo dnf install -y git-lfs
-    else
-        fail "git-lfs is required. Install it from https://git-lfs.com and re-run."
-    fi
-    ensure_lfs || fail "git-lfs install completed but the binary isn't on PATH."
-fi
-ok "git-lfs $(git lfs version | head -1)"
-
-# Initialise once per machine (idempotent — safe to re-run).
-info "Running: git lfs install --local"
-git lfs install --local
-ok "git lfs install --local"
-
-# Only pull if the local DB is the LFS pointer placeholder rather than the
-# real SQLite file. SQLite files start with "SQLite format 3"; LFS pointers
-# start with "version https://git-lfs.github.com/spec/v1".
 DB_PATH="$PROJECT_DIR/data/gre_mock.db"
-if [[ -f "$DB_PATH" ]]; then
-    HEAD_BYTES="$(head -c 16 "$DB_PATH" 2>/dev/null || true)"
-    if [[ "$HEAD_BYTES" == "SQLite format 3" || "$HEAD_BYTES" == SQLite* ]]; then
-        ok "Database already populated ($(du -h "$DB_PATH" | awk '{print $1}'))"
-    else
-        info "Database is an LFS pointer; pulling real content (verbose)..."
-        GIT_TRACE=1 git lfs pull
-        ok "Database pulled ($(du -h "$DB_PATH" | awk '{print $1}'))"
-    fi
-else
-    info "No database file yet; pulling from LFS (verbose)..."
-    GIT_TRACE=1 git lfs pull
-    if [[ -f "$DB_PATH" ]]; then
-        ok "Database pulled ($(du -h "$DB_PATH" | awk '{print $1}'))"
-    else
-        warn "git lfs pull completed but $DB_PATH is missing."
-        warn "The app will create an empty DB on first launch; you'll need to"
-        warn "run the import scripts in scripts/ to seed it."
-    fi
+if [[ ! -f "$DB_PATH" ]]; then
+    fail "Seed database missing at $DB_PATH. Re-run \`git clone\` — the blob didn't land."
 fi
+HEAD_BYTES="$(head -c 16 "$DB_PATH" 2>/dev/null || true)"
+if [[ "$HEAD_BYTES" != "SQLite format 3"* ]]; then
+    fail "Seed database at $DB_PATH is not a valid SQLite file (got: $HEAD_BYTES). Your clone is corrupted."
+fi
+ok "Seed database present ($(du -h "$DB_PATH" | awk '{print $1}'))"
 
 # Legacy-layout migration: if the previous version of the app (which
 # used data/gre_mock.db as both seed AND user-writable DB) left local

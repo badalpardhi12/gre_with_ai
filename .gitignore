@@ -64,6 +64,43 @@ sample_review_tmp/
 kaplan_sample_review_tmp/
 princeton_sample_review_tmp/
 
+# Data-extraction / verification / review tooling and their outputs are
+# never tracked. The public repo ships only the application + the
+# pre-seeded SQLite DB; the pipelines that *built* that DB (ebook
+# extraction, synthetic generation, expert-review gates, QC audits, and
+# the sample-review markdown + asset dumps they produce) live locally.
+princeton_sample_review_assets/
+kaplan_sample_review_assets/
+manhattan_sample_review_assets/
+synthetic_sample_review_assets/
+*_sample_review_assets/
+*_sample_review.md
+synthetic_sample_review.md
+services/synthetic/
+services/expert_review.py
+services/extraction_verification.py
+services/image_pipeline.py
+services/image_classifier.py
+services/vision_render.py
+services/figure_captions.py
+tests/synthetic/
+tests/test_extraction_verification.py
+tests/test_figure_captions.py
+
+# Internal data-QC / forensic changelog — not a user-facing release
+# doc; lives locally next to the audits it references.
+CHANGES.md
+data/audits/
+
+# Seed bootstrap helper — the shipped data/gre_mock.db already contains
+# the sample bank, so this script is only useful when rebuilding the DB
+# from scratch (a local-only workflow).
+scripts/seed_data.py
+
+# Dev-only automation (Claude Code issue-triage hooks, scratch notes,
+# worktrees). The public repo tracks only the application + DB.
+.claude/issue-fix-hooks/
+
 # Coverage / profiling artifacts
 *.profraw
 *.profdata

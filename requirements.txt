@@ -1,9 +1,8 @@
 annotated-types==0.7.0
 anyio==4.12.1
-# beautifulsoup4: parses EPUB XHTML chapters in scripts/extract_kaplan.py
-# and scripts/extract_princeton.py, which are imported by their test
-# modules (tests/test_extract_kaplan.py, tests/test_extract_princeton.py).
-# Required for pytest collection to succeed on CI.
+# beautifulsoup4: parses EPUB XHTML chapters in build-time extraction
+# tooling (kept out of tracked scripts). Required for pytest collection
+# on CI because legacy test helpers still import it.
 beautifulsoup4==4.14.3
 bleach==6.1.0
 certifi==2026.2.25
@@ -29,12 +28,11 @@ numpy>=2.0.2,<3
 openai==2.30.0
 peewee==4.0.4
 # json-repair: tolerates malformed LLM JSON (unescaped inner quotes,
-# missing commas, LaTeX-backslash escape mistakes). Build-time only —
-# imported lazily inside scripts/extract_manhattan.py's parser.
+# missing commas, LaTeX-backslash escape mistakes). Build-time only.
 json-repair>=0.40,<1
-# PyMuPDF: build-time only (scripts/extract_manhattan.py renders PDF
-# pages to PNG when a question references a figure). Lazy-imported so
-# the runtime app doesn't fail if the wheel isn't installed.
+# PyMuPDF: build-time only (renders PDF pages to PNG when a question
+# references a figure). Lazy-imported so the runtime app doesn't fail
+# if the wheel isn't installed.
 pymupdf>=1.24,<2
 pydantic==2.12.5
 pydantic_core==2.41.5

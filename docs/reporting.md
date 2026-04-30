@@ -57,8 +57,7 @@ Each issue lands with the labels `user-report` and `question-bug`, plus:
 
 - **qid** — the internal question ID, so the dev can jump straight to the
   row in the seed database.
-- **source** — which bank the question came from (`kaplan_2024`,
-  `princeton_2012`, `ai_synthetic`, etc.).
+- **source** — which bank the question came from (internal source tag).
 - **subtype** — question type (`mcq_single`, `numeric_entry`,
   `rc_select_passage`, etc.).
 - **correct_label** — the answer the app currently marks as correct.

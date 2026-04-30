@@ -132,7 +132,7 @@ manual mistake-coach trigger + full test history.
   mnemonics, theme tags
 - **308 Latin/Greek roots** linked to vocabulary words
 - **49 subtopic lessons + 8 strategy guides** auto-generated from
-  Kaplan + Princeton ebook content
+  curated prep material
 - **136 AWA issue prompts**
 
 ---
@@ -235,8 +235,6 @@ gre_with_ai/
 │
 ├── scripts/                            # Build-time data tools (not invoked at runtime)
 │   ├── seed_data.py                    # Initial DB seed
-│   ├── extract_kaplan.py               # EPUB → questions
-│   ├── extract_princeton.py            # EPUB → questions (1,014)
 │   ├── retag_questions.py              # LLM re-tagging to subtopic taxonomy
 │   ├── generate_questions.py           # AI gen → fill subtopic gaps (atomic)
 │   ├── generate_lessons.py             # AI lesson + strategy generation
@@ -252,7 +250,6 @@ gre_with_ai/
 ├── data/
 │   ├── gre_mock.db                     # SQLite, ~8.7 MB, ships via Git LFS
 │   ├── images/                         # Rendered DI chart PNGs
-│   ├── ebooks/                         # Source Kaplan + Princeton EPUBs (gitignored)
 │   ├── extracted/                      # Intermediate extraction JSON (gitignored)
 │   ├── external/                       # Source CSVs for vocab imports
 │   └── llm_config.json                 # User's API key (0o600, gitignored)

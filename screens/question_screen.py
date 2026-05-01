@@ -540,7 +540,15 @@ class QuestionScreen(wx.Panel):
 
         row.Add(ctrl, 0, wx.RIGHT | wx.ALIGN_TOP, 6)
 
-        text = wx.StaticText(self.answer_panel, label=label_text)
+        # Options render as plain wx.StaticText (no KaTeX WebView) so we
+        # normalise LaTeX inline-math into readable Unicode here —
+        # otherwise items with ``\(\frac{1}{6}\)`` / ``\(6y + 6x = 7\)``
+        # etc. show up as raw macros on the label (GitHub #8, #9).
+        # ``latex_inline_to_text`` is idempotent + is a no-op for text
+        # that has no ``\``/``^``/``_``, so it's safe to run on every label.
+        from widgets.latex_inline_text import latex_inline_to_text
+        text = wx.StaticText(self.answer_panel,
+                             label=latex_inline_to_text(label_text))
         text.SetFont(wx.Font(11, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                               wx.FONTWEIGHT_NORMAL))
         text.Bind(wx.EVT_LEFT_DOWN,

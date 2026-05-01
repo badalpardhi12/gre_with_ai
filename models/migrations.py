@@ -459,6 +459,70 @@ def _015_question_figure_refs_2026_04():
             raise
 
 
+# ── User-reported issue batch 2026-05-01 (GitHub #3–#9) ────────────────
+#
+# 9 Princeton-2012 data_interp items whose stimulus_type is ``graph``
+# but carry no figure_refs, no render_spec, and no inlined image —
+# literally unanswerable in the app (no chart ever shown). Users reported
+# #6 and #7; a DB sweep found the other seven in the same bucket (all
+# four-question Princeton graph clusters where the graph asset was
+# never extracted).
+_UNRENDERABLE_PRINCETON_GRAPH_QIDS_2026_05 = (
+    4627, 4628, 4639, 4646, 4648, 4650, 4656, 4674, 4675,
+)
+
+
+# 3 Manhattan-5lb items whose LaTeX prompt has adjacent exponents with
+# an implicit (printed-book) multiplication that KaTeX renders as a
+# visual gap ("If 125^{14} 48^8 is written out..."). Readers can't tell
+# whether the two terms multiply or concatenate. User reported #3 for
+# qid 3267; sweep found the same pattern in qid 3253 and qid 3260.
+_MANHATTAN_MISSING_TIMES_FIXES_2026_05 = (
+    # (qid, original prompt substring, replacement substring)
+    (3253,
+     r"\(\frac{20^{-5} 5^{10} 8^6}{10^8 25^{-2}} = ?\)",
+     r"\(\frac{20^{-5} \times 5^{10} \times 8^6}{10^8 \times 25^{-2}} = ?\)"),
+    (3260,
+     r"\(\frac{2^{-4} 3^{-20}}{4^{-1} 9^{-6}} =\)",
+     r"\(\frac{2^{-4} \times 3^{-20}}{4^{-1} \times 9^{-6}} =\)"),
+    (3267,
+     r"\(125^{14} 48^8\)",
+     r"\(125^{14} \times 48^8\)"),
+)
+
+
+def _016_fix_user_reported_2026_05():
+    """Retire 9 Princeton DI items with no extractable graph and insert
+    explicit ``\\times`` into 3 Manhattan exponent prompts.
+
+    Idempotent: retiring already-retired rows is a no-op; the prompt
+    rewrite is skipped when the replacement substring is already present
+    (so re-running after a partial-apply recovery is safe).
+    """
+    db = _get_db()
+    placeholders = ",".join("?" for _ in _UNRENDERABLE_PRINCETON_GRAPH_QIDS_2026_05)
+    db.execute_sql(
+        f"UPDATE question SET status='retired' "
+        f"WHERE id IN ({placeholders}) AND status != 'retired'",
+        _UNRENDERABLE_PRINCETON_GRAPH_QIDS_2026_05,
+    )
+    for qid, old_sub, new_sub in _MANHATTAN_MISSING_TIMES_FIXES_2026_05:
+        row = db.execute_sql(
+            "SELECT prompt FROM question WHERE id=?", (qid,)
+        ).fetchone()
+        if row is None:
+            continue
+        prompt = row[0] or ""
+        if new_sub in prompt:
+            continue  # already fixed
+        if old_sub not in prompt:
+            continue  # prompt diverged from the shipped seed; skip
+        db.execute_sql(
+            "UPDATE question SET prompt=? WHERE id=?",
+            (prompt.replace(old_sub, new_sub), qid),
+        )
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -482,6 +546,8 @@ MIGRATIONS = [
      _014_source_anchor_2026_04),
     ("015_question_figure_refs_2026_04",
      _015_question_figure_refs_2026_04),
+    ("016_fix_user_reported_2026_05",
+     _016_fix_user_reported_2026_05),
 ]
 
 

@@ -83,18 +83,21 @@ def _normalise_plain_math(html: str) -> str:
 # stored in the bank use `\n` / `\n\n` separators (e.g. "Quantity A: …\n
 # Quantity B: …"); without this conversion the browser collapses them
 # into a single line and quantity labels run together. Skips inputs that
-# already look like HTML (contain block-level tags) so we don't double-
-# break inside `<p>`-wrapped content.
-_BLOCK_TAG_RE = re.compile(
-    r"<(?:p|div|br|h[1-6]|ul|ol|li|table|tr|td|blockquote|pre)\b",
+# already ship their own line-break markup (`<br>` or `<p>`) so we don't
+# double-break author-formatted content. A bare `<div>` wrapper around
+# plain-text-with-newlines IS still converted — `<div>` is a layout
+# wrapper, not a line-break carrier, and skipping on it caused all 411
+# live QC prompts to collapse into a single visual row (GitHub #4, #5).
+_PREFORMATTED_BREAK_RE = re.compile(
+    r"<(?:br|p)\b",
     re.IGNORECASE,
 )
 
 
 def _newlines_to_html(text: str) -> str:
     """Map plain-text newlines to HTML line breaks unless the input
-    already contains block-level HTML tags."""
-    if not text or _BLOCK_TAG_RE.search(text):
+    already ships its own line-break markup (``<br>`` or ``<p>``)."""
+    if not text or _PREFORMATTED_BREAK_RE.search(text):
         return text
     # Two-or-more consecutive newlines = paragraph break (blank line).
     # A single newline = soft line break.

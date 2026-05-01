@@ -97,6 +97,17 @@ def test_input_with_existing_br_left_alone():
     assert _newlines_to_html(raw) == raw
 
 
+def test_div_wrapper_does_not_block_newline_conversion():
+    """GitHub #4, #5: QC prompts land in ``<div class="prompt">`` before
+    the newline pass; the old guard treated `<div>` as a line-break
+    carrier and collapsed every `\\n` in the QC question bank (411 live
+    items). A bare `<div>` wrapper around plain-text-with-newlines must
+    still convert."""
+    raw = '<div class="prompt">Quantity A: x\nQuantity B: y</div>'
+    out = _newlines_to_html(raw)
+    assert out == '<div class="prompt">Quantity A: x<br>Quantity B: y</div>'
+
+
 def test_empty_input_pass_through():
     assert _newlines_to_html("") == ""
     assert _newlines_to_html(None) is None

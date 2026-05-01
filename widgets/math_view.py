@@ -307,6 +307,14 @@ class MathView(wx.Panel if _WX_AVAILABLE else object):
         self.SetSizer(sizer)
 
         self._current_html = ""
+        # Auto-height state — `set_content_auto_height` sets these, the
+        # LOADED handler reads them on the next page-ready event, then
+        # clears `_auto_height_active` so subsequent non-auto callers
+        # aren't affected.
+        self._auto_height_active = False
+        self._auto_height_min = 0
+        self._auto_height_max = 0
+        self.webview.Bind(wx.html2.EVT_WEBVIEW_LOADED, self._on_webview_loaded)
         # Stash the rendering helpers so `set_content` doesn't need
         # to re-import them on every call.
         self._ui_scale = ui_scale
@@ -355,6 +363,60 @@ class MathView(wx.Panel if _WX_AVAILABLE else object):
             warning_text="#ffeaa7",
         )
         self.webview.SetPage(full_html, PROJECT_BASE_URL)
+
+    def set_content_auto_height(self, html_body, min_h=80, max_h=400):
+        """Render *html_body* and resize the panel's min-height to match
+        the actual content height after the page loads.
+
+        Solves GitHub #10, #11 where a fixed-height prompt view (220px)
+        left ~150px of dead whitespace below single-line DI prompts,
+        which users read as a "gap between the question and the table".
+
+        * ``min_h``: the floor — the panel never shrinks below this even
+          for one-line prompts, so the WebView has room for its own
+          body padding.
+        * ``max_h``: the ceiling — longer content scrolls inside the
+          WebView rather than pushing the answer panel off-screen.
+        """
+        self._auto_height_active = True
+        self._auto_height_min = int(min_h)
+        self._auto_height_max = int(max_h)
+        self.set_content(html_body)
+
+    def _on_webview_loaded(self, event):
+        event.Skip()
+        if not self._auto_height_active:
+            return
+        # One-shot: clear the flag before measuring so a second LOADED
+        # event (e.g. if the user re-focuses the page) doesn't re-trigger
+        # with stale bounds.
+        self._auto_height_active = False
+        try:
+            ok, out = self.webview.RunScript(
+                "(function(){"
+                "  var b = document.body;"
+                "  var d = document.documentElement;"
+                "  return String(Math.max("
+                "    b ? b.scrollHeight : 0,"
+                "    d ? d.scrollHeight : 0,"
+                "    b ? b.offsetHeight : 0,"
+                "    d ? d.offsetHeight : 0));"
+                "})();"
+            )
+            measured = int(out) if ok and out and out.isdigit() else 0
+        except Exception:
+            measured = 0
+        if measured <= 0:
+            return
+        clamped = max(self._auto_height_min, min(measured, self._auto_height_max))
+        # Add the body padding that KaTeX/CSS applies (14px top+bottom)
+        # so we don't clip the last line — `scrollHeight` includes
+        # padding but some WebKit versions return the viewport height
+        # until the scrollbar materialises.
+        self.SetMinSize((-1, clamped))
+        parent = self.GetParent()
+        if parent is not None:
+            parent.Layout()
 
     def set_passage(self, passage_html):
         """Display a reading comprehension passage."""

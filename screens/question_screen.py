@@ -91,11 +91,13 @@ class QuestionScreen(wx.Panel):
         self.question_panel = wx.Panel(self.content_splitter)
         self.question_sizer = wx.BoxSizer(wx.VERTICAL)
 
-        # Prompt view height: 220 covers a typical 3-line GRE stem on a
-        # narrow column ("If the statements above are true, which of the
-        # following is most strongly supported by them?"). The WebView
-        # scrolls if a question is longer.
-        self.prompt_view = MathView(self.question_panel, size=(-1, 220))
+        # Prompt view — start tall enough for the ~3-line RC stem
+        # ("If the statements above are true, which of the following
+        # is most strongly supported by them?") and then shrink to the
+        # measured content height after each load so short one-line
+        # DI prompts don't leave ~150px of dead whitespace between the
+        # prompt text and the options (GitHub #10, #11).
+        self.prompt_view = MathView(self.question_panel, size=(-1, 120))
         self.question_sizer.Add(self.prompt_view, 0, wx.EXPAND | wx.ALL, 4)
 
         # Subtype label
@@ -355,8 +357,15 @@ class QuestionScreen(wx.Panel):
                 self.content_splitter.Unsplit(self.passage_panel)
             self.passage_panel.Hide()
 
-        # Prompt
-        self.prompt_view.set_content(f'<div class="prompt">{q["prompt"]}</div>')
+        # Prompt — rendered via auto-height so a one-line DI prompt
+        # doesn't leave a huge gap above the options (GitHub #10, #11).
+        # Floor at 80px so even an empty prompt reserves a visible slot;
+        # ceiling at 320px so a multi-paragraph stem doesn't push the
+        # options off-screen (the WebView scrolls inside if it's taller).
+        self.prompt_view.set_content_auto_height(
+            f'<div class="prompt">{q["prompt"]}</div>',
+            min_h=80, max_h=320,
+        )
 
         # Mark button state
         if qid in ss.marked:

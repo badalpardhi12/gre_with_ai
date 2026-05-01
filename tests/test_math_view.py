@@ -108,6 +108,73 @@ def test_div_wrapper_does_not_block_newline_conversion():
     assert out == '<div class="prompt">Quantity A: x<br>Quantity B: y</div>'
 
 
+# ── Markdown pipe-table → HTML (GitHub #12) ───────────────────────────
+
+from widgets.math_view import _markdown_tables_to_html
+
+
+def test_md_table_basic():
+    raw = (
+        "| h1 | h2 |\n"
+        "|---|---|\n"
+        "| a | b |\n"
+        "| c | d |\n"
+    )
+    out = _markdown_tables_to_html(raw)
+    assert "<table" in out
+    assert "<th" in out and "h1" in out and "h2" in out
+    assert "<td" in out and "a" in out and "b" in out and "c" in out and "d" in out
+    # No literal pipes leak into the output.
+    assert "|" not in out
+
+
+def test_md_table_alignment_hints():
+    raw = (
+        "| a | b | c |\n"
+        "|:---|:---:|---:|\n"
+        "| 1 | 2 | 3 |\n"
+    )
+    out = _markdown_tables_to_html(raw)
+    assert "text-align:left" in out
+    assert "text-align:center" in out
+    assert "text-align:right" in out
+
+
+def test_md_table_inside_div_wrapper():
+    """GitHub #12 (Q3610): the markdown table lives inside a stimulus
+    ``<div>...</div>`` wrapper followed by an ``<img>`` tag. The
+    converter must find the table block regardless of surrounding HTML."""
+    raw = (
+        '<div>caption text\n'
+        '\n'
+        '| col1 | col2 |\n'
+        '|---|---|\n'
+        '| 70 | 246 |\n'
+        '</div>'
+        '<div><img src="data:image/png;base64,AAA"/></div>'
+    )
+    out = _markdown_tables_to_html(raw)
+    assert "<table" in out
+    assert "caption text" in out
+    # The img survives too.
+    assert "<img" in out
+    # No pipe-table remnants.
+    assert "|---|" not in out
+
+
+def test_md_table_skipped_when_no_separator():
+    """A single ``| a | b |`` line without the ``|---|`` separator is
+    prose, not a table — leave it alone."""
+    raw = "See the chart (axes | x: time | y: revenue)."
+    assert _markdown_tables_to_html(raw) == raw
+
+
+def test_md_table_no_op_without_pipes():
+    assert _markdown_tables_to_html("plain prose") == "plain prose"
+    assert _markdown_tables_to_html("") == ""
+    assert _markdown_tables_to_html(None) is None  # type: ignore[arg-type]
+
+
 def test_empty_input_pass_through():
     assert _newlines_to_html("") == ""
     assert _newlines_to_html(None) is None

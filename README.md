@@ -125,15 +125,114 @@ manual mistake-coach trigger + full test history.
   per-question time spent
 
 ### Content
-- **~2,300 live questions** across 48 subtopics, tagged by topic +
-  subtopic + question_type, validated for difficulty + quality
-- **3,007 curated vocabulary words** in 3 frequency tiers, with
-  definitions, example sentences, synonyms, antonyms, root analysis,
-  mnemonics, theme tags
-- **308 Latin/Greek roots** linked to vocabulary words
+- **2,634 live questions** split **1,508 Quant / 1,126 Verbal**, tagged
+  by measure + subtype + topic + subtopic, validated for difficulty and
+  quality.
+- **9,647 curated vocabulary words** with definitions, example
+  sentences, synonyms, antonyms, root analysis, mnemonics, and theme
+  tags.
+- **308 Latin/Greek roots** linked to the vocabulary words.
 - **49 subtopic lessons + 8 strategy guides** auto-generated from
-  curated prep material
-- **136 AWA issue prompts**
+  curated prep material.
+- **136 AWA issue prompts**.
+- **1,121 stimuli** (870 RC passages, 231 graphs/charts, 20 standalone
+  tables) shared across questions.
+
+### Dataset metrics
+
+Snapshot of `data/gre_mock.db` at the current commit. "Live" means
+eligible for assembly into mock sections; items at status `draft`,
+`candidate`, or `retired` stay in the DB (for audit, re-promotion, or
+lifecycle tracking) but don't reach the test-taker.
+
+| Status | Count |
+|---|---:|
+| live | 2,634 |
+| retired | 1,584 |
+| draft | 989 |
+| candidate | 44 |
+| **total rows** | **5,251** |
+
+**Live questions by measure × subtype**
+
+| Measure | Subtype | Count |
+|---|---|---:|
+| Quant | `mcq_single` (multiple-choice, single answer) | 733 |
+| Quant | `qc` (quantitative comparison) | 451 |
+| Quant | `numeric_entry` | 285 |
+| Quant | `mcq_multi` (multi-answer) | 21 |
+| Quant | `data_interp` | 18 |
+| Verbal | `rc_single` (reading comprehension, single-select) | 446 |
+| Verbal | `tc` (text completion) | 348 |
+| Verbal | `se` (sentence equivalence) | 250 |
+| Verbal | `rc_multi` (reading comprehension, multi-select) | 82 |
+| **Total** | | **2,634** |
+
+**Live questions by source**
+
+| Source | Count |
+|---|---:|
+| `manhattan_5lb_2018` | 1,220 |
+| `ai_generated` | 728 |
+| `princeton_2012` | 370 |
+| `ai_synthetic` (expert-review-approved) | 180 |
+| `kaplan_2024` | 136 |
+
+**Live questions by difficulty** (1 = easiest, 5 = hardest)
+
+| Difficulty | Quant | Verbal | Total |
+|---:|---:|---:|---:|
+| 1 | 1 | 131 | 132 |
+| 2 | 294 | 210 | 504 |
+| 3 | 646 | 453 | 1,099 |
+| 4 | 528 | 235 | 763 |
+| 5 | 39 | 97 | 136 |
+
+**Top Verbal subtopics** (22 distinct non-empty subtopics total)
+
+| Subtopic | Count |
+|---|---:|
+| `rc_inference` | 67 |
+| `tc_2_blank` | 64 |
+| `rc_main_idea` | 63 |
+| `tc_1_blank` | 58 |
+| `rc_detail` | 44 |
+| `rc_tone_attitude` | 43 |
+| `tc_3_blank` | 37 |
+| `se_contrast` | 19 |
+| `se_synonyms` | 15 |
+| `rc_structure_function` | 10 |
+| *…12 more* | |
+| *(no subtopic tag yet)* | 622 |
+
+**Top Quant subtopics** (35 distinct non-empty subtopics total)
+
+| Subtopic | Count |
+|---|---:|
+| `word_problems` | 42 |
+| `triangles` | 32 |
+| `inequalities` | 30 |
+| `quadratics` | 29 |
+| `functions` | 27 |
+| `linear_equations_systems` | 27 |
+| `ratios_proportions` | 27 |
+| `fractions_decimals` | 22 |
+| `spread_distributions` | 21 |
+| `probability` | 20 |
+| `circles` | 19 |
+| `coordinate_geometry` | 19 |
+| `counting_combinatorics` | 19 |
+| `percents` | 19 |
+| `exponents_roots` | 18 |
+| `descriptive_stats` | 16 |
+| `quadrilaterals_polygons` | 15 |
+| *…18 more* | |
+| *(no subtopic tag yet)* | 968 |
+
+A sizable slice of the Manhattan 5lb corpus still sits at
+`topic=''`/`subtopic=''` — those items are live and render fine, but the
+drill flow currently skips them for subtopic-targeted practice. Closing
+the tagging gap is on the roadmap.
 
 ---
 

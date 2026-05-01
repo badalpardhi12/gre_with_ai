@@ -134,6 +134,95 @@ def _markdown_inline_to_html(text: str) -> str:
     return text
 
 
+# Markdown pipe-tables inside question stimuli. Manhattan-5lb DI items
+# occasionally ship a pipe-delimited table alongside the PNG chart
+# (``<div>... | head1 | head2 |\n|---|---|\n| r1c1 | r1c2 |\n ...
+# </div>``). The WebView has no markdown parser, so without this pass
+# the user sees literal pipes and dashes next to the correctly-rendered
+# image (GitHub #12, Q3610). The grammar targets the pattern that
+# actually appears in the bank:
+#
+#   header row  : ``| a | b | c |``  — one or more cells between pipes
+#   separator   : ``|---|---|---|``  — dashes, optional alignment colons
+#   data rows   : repeats of the header shape
+#
+# Matched blocks are swapped for a styled ``<table>`` that blends with
+# the HTML-table stimuli (Q2283, Q2288, etc.) so the two sources look
+# identical on screen. Runs BEFORE ``_normalise_plain_math`` so the
+# math-block detector doesn't mis-segment on table pipes.
+_MD_TABLE_BLOCK_RE = re.compile(
+    r"""
+    (?:^[ \t]*\|.*\|[ \t]*\n)      # header row
+    [ \t]*\|(?:[ \t]*:?-{2,}:?[ \t]*\|)+[ \t]*\n   # separator row
+    (?:[ \t]*\|.*\|[ \t]*\n?)+     # >=1 data rows
+    """,
+    re.MULTILINE | re.VERBOSE,
+)
+
+
+def _split_md_table_row(row: str) -> "list[str]":
+    """Split a ``| a | b | c |`` row into its cell text list."""
+    stripped = row.strip().strip("|")
+    return [c.strip() for c in stripped.split("|")]
+
+
+def _parse_md_alignment(sep_row: str) -> "list[str]":
+    """Return per-column CSS ``text-align`` hints from a ``|:---:|---:|``
+    separator row. Empty/missing colons default to ``left``."""
+    aligns = []
+    for cell in _split_md_table_row(sep_row):
+        left = cell.startswith(":")
+        right = cell.endswith(":")
+        if left and right:
+            aligns.append("center")
+        elif right:
+            aligns.append("right")
+        else:
+            aligns.append("left")
+    return aligns
+
+
+def _render_md_table(match: "re.Match[str]") -> str:
+    block = match.group(0)
+    lines = [ln for ln in block.split("\n") if ln.strip()]
+    if len(lines) < 2:
+        return block
+    header = _split_md_table_row(lines[0])
+    aligns = _parse_md_alignment(lines[1])
+    # Pad alignments to header width so a malformed separator doesn't
+    # drop cells.
+    if len(aligns) < len(header):
+        aligns += ["left"] * (len(header) - len(aligns))
+    data_rows = [_split_md_table_row(ln) for ln in lines[2:]]
+
+    def _cell(tag, text, align):
+        return (f'<{tag} style="padding:6px 12px; border:1px solid #444; '
+                f'text-align:{align}; color:#e8e8e8;">{text}</{tag}>')
+
+    def _row(cells, tag):
+        return "<tr>" + "".join(
+            _cell(tag, c, aligns[i] if i < len(aligns) else "left")
+            for i, c in enumerate(cells)
+        ) + "</tr>"
+
+    out = ['<table style="margin:12px auto; border-collapse:collapse;">']
+    out.append("<thead>" + _row(header, "th") + "</thead>")
+    if data_rows:
+        out.append("<tbody>" + "".join(_row(r, "td") for r in data_rows) + "</tbody>")
+    out.append("</table>")
+    return "".join(out)
+
+
+def _markdown_tables_to_html(text: str) -> str:
+    """Rewrite markdown pipe-tables inside *text* to styled HTML tables.
+
+    No-op if *text* is empty or contains no pipe-table separator row —
+    the trigger condition lets the regex skip most inputs cheaply."""
+    if not text or "|---" not in text:
+        return text
+    return _MD_TABLE_BLOCK_RE.sub(_render_md_table, text)
+
+
 # Base URL for the WebView. Restricted to data/images/ so a malicious
 # stimulus cannot use file:// to traverse upward into data/llm_config.json
 # or other in-tree files.
@@ -336,7 +425,8 @@ class MathView(wx.Panel if _WX_AVAILABLE else object):
         labels stored as "Quantity A: …\\nQuantity B: …" render on
         separate lines instead of collapsing to a single visual row.
         """
-        normalised = _normalise_plain_math(html_body or "")
+        normalised = _markdown_tables_to_html(html_body or "")
+        normalised = _normalise_plain_math(normalised)
         normalised = _newlines_to_html(normalised)
         sanitized = safe_html(normalised)
         self._current_html = sanitized

@@ -559,16 +559,18 @@ def _017_batch_ai_review_2026_05_01():
     )
 
 
-# 36 questions retired by the 2026-05-01 batch Opus review (wave 2 of
-# _017_batch_ai_review_2026_05_01). Reasons range from mismatched
-# passages (explanation is about a different passage than the stem),
-# unrecoverable stems, and figure-dependent items whose figures are
-# broken beyond repair.
+# 41 questions retired by the 2026-05-01/02 batch Opus review +
+# follow-up human triage (wave 2 of _017_batch_ai_review_2026_05_01).
+# Reasons range from mismatched passages (explanation is about a
+# different passage than the stem), unrecoverable stems, figure-
+# dependent items whose figures are broken beyond repair, and
+# image-text mismatches where the attached figure contradicts the
+# stem (e.g. image labels a value that never appears in the problem).
 _BATCH_REVIEW_RETIRES_2026_05 = (
-    2664, 2665, 2666, 2667, 2685, 2686, 2731, 2732, 2733, 2745, 2746,
-    2747, 2748, 2860, 2882, 2890, 2891, 2897, 2901, 2957, 3616, 3830,
-    3831, 3848, 3852, 4325, 4328, 4427, 4469, 5008, 5062, 5065, 5066,
-    5067, 5068, 5069,
+    2294, 2664, 2665, 2666, 2667, 2685, 2686, 2731, 2732, 2733, 2745,
+    2746, 2747, 2748, 2860, 2882, 2890, 2891, 2897, 2901, 2957, 3616,
+    3759, 3812, 3830, 3831, 3848, 3850, 3852, 4325, 4328, 4427, 4469,
+    4493, 5008, 5062, 5065, 5066, 5067, 5068, 5069,
 )
 
 

@@ -525,25 +525,51 @@ def _016_fix_user_reported_2026_05():
 
 def _017_batch_ai_review_2026_05_01():
     """Batch Opus-4.6 review of 3,667 questions (live + draft + candidate);
-    1,207 explanation rewrites applied directly to the shipped seed DB.
+    1,299 fixes applied directly to the shipped seed DB across two waves.
 
-    This migration is a **no-op for fresh clones** — the shipped
-    ``data/gre_mock.db`` already has the rewrites baked in. It's
-    registered here purely so ``apply_pending_migrations()`` marks it
-    as applied and won't try to re-run on startup.
+    Wave 1 (auto-applied high-confidence explanation rewrites): 1,207
+    ``fix_explanation`` verdicts with confidence >= 0.85. Strips
+    Princeton HTML residue (``<p class="tx1-1">``, etc.), fixes LaTeX
+    escape bugs (``\\times`` rendering as ``imes``), fills empty /
+    truncated explanations, replaces cross-wired paste-error
+    explanations.
 
-    Scope of what went into the seed (this is not replayable without
-    the original Floodgate outputs, which live out-of-tree per the
-    repo's "only app + DB" policy):
-      - 1,207 ``fix_explanation`` rewrites with confidence >= 0.85.
-      - Items that didn't touch answer keys, options, or prompts.
-      - 24 image-bearing items were deferred to a second-pass review
-        (not included in this migration batch).
-      - Zero retirements — all ``retire`` candidates were left for
-        human review.
+    Wave 2 (human-reviewed fixes on top): 92 additional verdicts:
+      - 24 ``fix_explanation`` rewrites a human operator eyeballed.
+      - 32 ``fix_prompt`` rewrites (e.g. removing dangling "as shown
+        in the figure below" when the figure isn't needed).
+      - 36 ``retire`` verdicts for items unfixable by the batch
+        review (mismatched passages, garbled stems, etc.). These qids
+        are listed in ``_BATCH_REVIEW_RETIRES_2026_05`` below so a
+        re-seeded DB reaches the same retired state.
+
+    Prompt / explanation rewrites live only in the shipped seed DB —
+    they're not replayable from this migration (the Floodgate outputs
+    that contain the rewrite text live out-of-tree per the repo's
+    "only app + DB" policy). Retires ARE replayable via the qid list.
+
+    Idempotent: the retire update skips already-retired rows.
     """
-    # Intentionally empty. See module docstring above.
-    pass
+    db = _get_db()
+    placeholders = ",".join("?" for _ in _BATCH_REVIEW_RETIRES_2026_05)
+    db.execute_sql(
+        f"UPDATE question SET status='retired' "
+        f"WHERE id IN ({placeholders}) AND status != 'retired'",
+        _BATCH_REVIEW_RETIRES_2026_05,
+    )
+
+
+# 36 questions retired by the 2026-05-01 batch Opus review (wave 2 of
+# _017_batch_ai_review_2026_05_01). Reasons range from mismatched
+# passages (explanation is about a different passage than the stem),
+# unrecoverable stems, and figure-dependent items whose figures are
+# broken beyond repair.
+_BATCH_REVIEW_RETIRES_2026_05 = (
+    2664, 2665, 2666, 2667, 2685, 2686, 2731, 2732, 2733, 2745, 2746,
+    2747, 2748, 2860, 2882, 2890, 2891, 2897, 2901, 2957, 3616, 3830,
+    3831, 3848, 3852, 4325, 4328, 4427, 4469, 5008, 5062, 5065, 5066,
+    5067, 5068, 5069,
+)
 
 
 MIGRATIONS = [

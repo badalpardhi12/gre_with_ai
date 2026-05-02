@@ -523,6 +523,29 @@ def _016_fix_user_reported_2026_05():
         )
 
 
+def _017_batch_ai_review_2026_05_01():
+    """Batch Opus-4.6 review of 3,667 questions (live + draft + candidate);
+    1,207 explanation rewrites applied directly to the shipped seed DB.
+
+    This migration is a **no-op for fresh clones** — the shipped
+    ``data/gre_mock.db`` already has the rewrites baked in. It's
+    registered here purely so ``apply_pending_migrations()`` marks it
+    as applied and won't try to re-run on startup.
+
+    Scope of what went into the seed (this is not replayable without
+    the original Floodgate outputs, which live out-of-tree per the
+    repo's "only app + DB" policy):
+      - 1,207 ``fix_explanation`` rewrites with confidence >= 0.85.
+      - Items that didn't touch answer keys, options, or prompts.
+      - 24 image-bearing items were deferred to a second-pass review
+        (not included in this migration batch).
+      - Zero retirements — all ``retire`` candidates were left for
+        human review.
+    """
+    # Intentionally empty. See module docstring above.
+    pass
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -548,6 +571,8 @@ MIGRATIONS = [
      _015_question_figure_refs_2026_04),
     ("016_fix_user_reported_2026_05",
      _016_fix_user_reported_2026_05),
+    ("017_batch_ai_review_2026_05_01",
+     _017_batch_ai_review_2026_05_01),
 ]
 
 

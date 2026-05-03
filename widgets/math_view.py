@@ -83,13 +83,21 @@ def _normalise_plain_math(html: str) -> str:
 # stored in the bank use `\n` / `\n\n` separators (e.g. "Quantity A: …\n
 # Quantity B: …"); without this conversion the browser collapses them
 # into a single line and quantity labels run together. Skips inputs that
-# already ship their own line-break markup (`<br>` or `<p>`) so we don't
-# double-break author-formatted content. A bare `<div>` wrapper around
-# plain-text-with-newlines IS still converted — `<div>` is a layout
-# wrapper, not a line-break carrier, and skipping on it caused all 411
-# live QC prompts to collapse into a single visual row (GitHub #4, #5).
+# already ship their own line-break markup (`<br>`, `<p>`) or block-level
+# elements that manage their own internal whitespace (`<table>`, `<tr>`,
+# `<td>`, `<th>`, `<li>`, `<ul>`, `<ol>`, `<h1>`–`<h6>`, `<blockquote>`)
+# so we don't double-break author-formatted content. A bare `<div>`
+# wrapper around plain-text-with-newlines IS still converted — `<div>`
+# is a layout wrapper, not a line-break carrier, and skipping on it
+# caused all 411 live QC prompts to collapse into a single visual row
+# (GitHub #4, #5). The table-tag guard fixes the inverse bug: raw
+# `<table>` stimuli with `\n` between `<tr>` and `<th>` had `<br>`
+# injected into the table, which browsers foster-parent OUT of the
+# table element, pushing the actual table ~1600px down and off the
+# visible panel (GitHub #16/#17/#19/#21/#22, Q2283/Q2288/Q2293 + 5
+# other Manhattan DI tables).
 _PREFORMATTED_BREAK_RE = re.compile(
-    r"<(?:br|p)\b",
+    r"<(?:br|p|table|tr|td|th|li|ul|ol|h[1-6]|blockquote)\b",
     re.IGNORECASE,
 )
 

@@ -164,6 +164,66 @@ def test_tc_single_blank_format():
     assert ScoringEngine.check_answer(q, {"selected": {}}) is False
 
 
+def test_tc_flat_two_blank_labels():
+    """REGRESSION (GitHub #15, Q5257 + 15 other items): two-blank TC
+    questions in the bank sometimes use flat A–F labels with no
+    ``blank1_`` / ``blank2_`` prefix. The authoring convention groups
+    A/B/C under blank 1 and D/E/F under blank 2. The UI re-letters the
+    second blank's radios to A/B/C, so the response payload says
+    ``{"blank1": "B", "blank2": "B"}`` when the user picks option "B"
+    under blank 1 and option "E" (the second group's 2nd radio, shown
+    as "B)") under blank 2. The scorer must see "E" as blank 2's "B"
+    to match."""
+    q = {
+        "subtype": "tc",
+        "options": [
+            {"label": "A", "text": "sharpened",  "is_correct": False},
+            {"label": "B", "text": "undermined", "is_correct": True},
+            {"label": "C", "text": "prolonged",  "is_correct": False},
+            {"label": "D", "text": "reportage",  "is_correct": False},
+            {"label": "E", "text": "melodrama",  "is_correct": True},
+            {"label": "F", "text": "satire",     "is_correct": False},
+        ],
+    }
+    # Correct: blank1=B (undermined), blank2=E ("B)" after re-lettering).
+    assert ScoringEngine.check_answer(
+        q, {"selected": {"blank1": "B", "blank2": "B"}}
+    ) is True
+    # Wrong blank2.
+    assert ScoringEngine.check_answer(
+        q, {"selected": {"blank1": "B", "blank2": "A"}}
+    ) is False
+    # Missing blank2.
+    assert ScoringEngine.check_answer(
+        q, {"selected": {"blank1": "B"}}
+    ) is False
+
+
+def test_tc_flat_three_blank_labels():
+    """Three-blank TC with flat A–I labels: groups of 3 per blank."""
+    q = {
+        "subtype": "tc",
+        "options": [
+            {"label": "A", "text": "w1", "is_correct": True},
+            {"label": "B", "text": "w2", "is_correct": False},
+            {"label": "C", "text": "w3", "is_correct": False},
+            {"label": "D", "text": "w4", "is_correct": False},
+            {"label": "E", "text": "w5", "is_correct": False},
+            {"label": "F", "text": "w6", "is_correct": True},
+            {"label": "G", "text": "w7", "is_correct": False},
+            {"label": "H", "text": "w8", "is_correct": True},
+            {"label": "I", "text": "w9", "is_correct": False},
+        ],
+    }
+    # A→blank1/A, F→blank2/C, H→blank3/B
+    assert ScoringEngine.check_answer(
+        q, {"selected": {"blank1": "A", "blank2": "C", "blank3": "B"}}
+    ) is True
+    assert ScoringEngine.check_answer(
+        q, {"selected": {"blank1": "A", "blank2": "C"}}
+    ) is False
+
+
 # ── Numeric entry ──
 
 def test_numeric_decimal_exact_match():

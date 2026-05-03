@@ -108,6 +108,35 @@ def test_div_wrapper_does_not_block_newline_conversion():
     assert out == '<div class="prompt">Quantity A: x<br>Quantity B: y</div>'
 
 
+def test_html_table_not_polluted_with_br():
+    """GitHub #16/#17/#19/#21/#22 (Q2283/Q2288/Q2293 + 5 other Manhattan
+    DI tables): raw ``<table>`` stimuli ship with ``\\n`` between ``<tr>``
+    and the first ``<th>`` / ``<td>``. The old guard skipped only on
+    ``<br>``/``<p>``, so every newline in the table got turned into a
+    ``<br>``. Browsers then foster-parent those stray ``<br>`` tags OUT
+    of the ``<table>`` element (per HTML5 table-parsing rules), stacking
+    30+ line-breaks above the table and pushing the actual data below
+    the visible stimulus panel — the user reported "the graph is not
+    coming along with the question". Tables manage their own vertical
+    layout; leave them alone."""
+    raw = (
+        '<div><h3>Title</h3>\n'
+        '<table>\n'
+        '<tr>\n<th>A</th>\n<th>B</th>\n</tr>\n'
+        '<tr>\n<td>1</td>\n<td>2</td>\n</tr>\n'
+        '</table></div>'
+    )
+    assert _newlines_to_html(raw) == raw
+
+
+def test_list_elements_skip_newline_conversion():
+    """Same guard now also protects ordered/unordered lists — a ``\\n``
+    between ``<li>`` tags must not become a ``<br>`` (browsers would
+    render the line-break outside the list's layout box)."""
+    raw = "<ul>\n<li>first</li>\n<li>second</li>\n</ul>"
+    assert _newlines_to_html(raw) == raw
+
+
 # ── Markdown pipe-table → HTML (GitHub #12) ───────────────────────────
 
 from widgets.math_view import _markdown_tables_to_html

@@ -470,16 +470,14 @@ class QuestionScreen(wx.Panel):
                 self._answer_controls.append(("check", opt["label"], cb))
 
         elif subtype == "tc":
-            # Text completion: group options by blank
+            # Text completion: group options by blank. Delegates to
+            # `services.scoring.normalize_tc_options` so the UI grouping
+            # and the scorer's correctness check see identical
+            # (blank, choice) pairs — GitHub #15, Q5257 regressed when
+            # they disagreed.
+            from services.scoring import normalize_tc_options
             blanks = {}
-            for opt in options:
-                parts = opt["label"].split("_", 1)
-                if len(parts) == 2:
-                    blank = parts[0]
-                    choice = parts[1]
-                else:
-                    blank = "blank1"
-                    choice = opt["label"]
+            for blank, choice, opt in normalize_tc_options(options):
                 blanks.setdefault(blank, []).append((choice, opt["text"]))
 
             for blank_name, choices in sorted(blanks.items()):
@@ -737,16 +735,34 @@ class QuestionScreen(wx.Panel):
 
         # Build correct answer text
         options = self._current_q.get("options", [])
+        subtype = self._current_q.get("subtype")
         correct_parts = []
-        for o in options:
-            if o.get("is_correct"):
-                # Strip blank prefix for display (blank1_A → A)
-                label = o["label"].split("_")[-1] if "_" in o["label"] else o["label"]
-                text = o.get("text", "")
-                if text:
-                    correct_parts.append(f"{label}) {text}")
-                else:
-                    correct_parts.append(label)
+        if subtype == "tc":
+            # Use the same normalizer as the radio-builder so the displayed
+            # correct letter matches the letter shown next to the radio the
+            # user clicked. Without this, flat-labelled multi-blank items
+            # (GitHub #15, Q5257) showed "E) melodrama" as correct when the
+            # UI had rendered that option as "B)" under Blank 2.
+            from services.scoring import normalize_tc_options
+            by_blank = {}
+            for blank, choice, opt in normalize_tc_options(options):
+                if opt.get("is_correct"):
+                    by_blank.setdefault(blank, []).append((choice, opt.get("text", "")))
+            for blank_name, picks in sorted(by_blank.items()):
+                display_blank = blank_name.replace("blank", "Blank ")
+                for choice, text in picks:
+                    tail = f"{choice}) {text}" if text else choice
+                    correct_parts.append(f"{display_blank}: {tail}")
+        else:
+            for o in options:
+                if o.get("is_correct"):
+                    # Strip blank prefix for display (blank1_A → A)
+                    label = o["label"].split("_")[-1] if "_" in o["label"] else o["label"]
+                    text = o.get("text", "")
+                    if text:
+                        correct_parts.append(f"{label}) {text}")
+                    else:
+                        correct_parts.append(label)
         na = self._current_q.get("numeric_answer")
         if na:
             if na.get("exact_value") is not None:

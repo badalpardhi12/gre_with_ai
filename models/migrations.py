@@ -601,6 +601,69 @@ _BATCH_REVIEW_RETIRES_2026_05 = (
 )
 
 
+# Q1554 shipped with a trap-D commentary that doesn't match the arithmetic
+# for D=11. The stem is ``|x+3| \leq 7`` → integers from -10 to 4 = 15
+# (answer C). Original explanation claimed "choice D forgets to subtract
+# 3 from the lower bound", but omitting that subtraction gives 12 integers,
+# not 11. Users reported the inconsistency (GitHub #20). Answer key is
+# correct; only the trap rationalisation was wrong.
+_Q1554_EXPLANATION_FIX = (
+    "Rewrite \\(|x+3| \\leq 7\\) as \\(-7 \\leq x+3 \\leq 7\\). "
+    "Subtract 3 from every part: \\(-10 \\leq x \\leq 4\\). "
+    "The integer count from \\(-10\\) to \\(4\\) inclusive is "
+    "\\(4 - (-10) + 1 = 15\\), so the answer is (C). Choice A (13) "
+    "drops both endpoints by reading the inequality as strict; choice B "
+    "(14) drops one endpoint; choice E (8) counts only the non-negative "
+    "solutions."
+)
+
+
+def _018_fix_user_reported_2026_05_03():
+    """Data fixes for user-reported issues GitHub #13 – #22 (2026-05-03
+    batch).
+
+    - **Q3485** (GitHub #13, #18): subtype was ``data_interp`` but the
+      question has no options and a ``numericanswer`` row (``exact_value
+      = 112.0``). The UI routed by subtype and built a zero-radio
+      answer panel, so the user saw "no options or blank box". Switch
+      to ``numeric_entry``; the existing ``numericanswer`` row is
+      already correct.
+    - **Q1554** (GitHub #20): replace the explanation so the distractor
+      commentary matches the actual arithmetic for each trap. Answer
+      key (C = 15) unchanged.
+
+    Other reports in the same batch are renderer bugs, not data bugs,
+    and are fixed by the ``widgets/math_view.py`` and
+    ``screens/question_screen.py`` changes shipped in the same commit:
+
+    - Q2283 / Q2288 / Q2293 (GitHub #16 / #17 / #19 / #21 / #22): raw
+      HTML-table stimuli lost their data off-screen because ``\\n``
+      inside ``<table>`` was turned into ``<br>`` and foster-parented
+      out by the browser.
+    - Q5257 (GitHub #15): two-blank TC with flat A–F labels folded
+      into a single "Blank 1:" group with no blank-2 radios.
+    - Q3760 (GitHub #14): already retired by migration 017.
+
+    Idempotent: both updates are no-ops if the shipped seed already
+    carries the fixes.
+    """
+    db = _get_db()
+    # Q3485: reclassify as numeric_entry so the UI builds a NumericEntry
+    # widget instead of an empty radio group.
+    db.execute_sql(
+        "UPDATE question SET subtype='numeric_entry' "
+        "WHERE id=3485 AND subtype='data_interp'"
+    )
+    # Q1554: replace the explanation. Using a scalar match on the old
+    # first sentence keeps re-runs safe — if the DB already has the new
+    # text, the UPDATE matches zero rows.
+    db.execute_sql(
+        "UPDATE question SET explanation=? "
+        "WHERE id=1554 AND explanation LIKE 'Rewrite%'",
+        (_Q1554_EXPLANATION_FIX,),
+    )
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -628,6 +691,8 @@ MIGRATIONS = [
      _016_fix_user_reported_2026_05),
     ("017_batch_ai_review_2026_05_01",
      _017_batch_ai_review_2026_05_01),
+    ("018_fix_user_reported_2026_05_03",
+     _018_fix_user_reported_2026_05_03),
 ]
 
 

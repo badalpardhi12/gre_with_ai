@@ -46,6 +46,66 @@ def _build_score_table():
 SCORE_TABLES = _build_score_table()
 
 
+def normalize_tc_options(options):
+    """Group TC options by blank. Returns a list of (blank_name, choice,
+    option_dict) tuples preserving input order within each blank.
+
+    Three label conventions exist in the bank:
+
+    1. Explicit prefix (``"blank1_A"``, ``"blank2_C"``): split on ``_``.
+       Authoritative; used verbatim.
+    2. Flat labels (A–F or A–I) for **multi-blank** TC — 6 or 9 one-letter
+       labels with no underscore. These are two- or three-blank items
+       where the authoring convention groups consecutive letters into
+       blanks of 3 (A/B/C → blank1, D/E/F → blank2, G/H/I → blank3).
+       The per-blank choice letter is renamed to A/B/C so each blank
+       shows "A) … B) … C) …" in the UI instead of random mid-alphabet
+       starts.
+    3. Flat labels otherwise (5-option A–E, etc.): single-blank TC.
+       All options go under ``blank1`` with their original letter.
+
+    Both the UI (``screens/question_screen.py``) and the scoring check
+    (``_check_text_completion``) call this so they stay in lock-step.
+    Prior bug (GitHub #15, Q5257 + 15 other multi-blank flat-label items):
+    the UI fell through to case 3 even for 6-option items, cramming all
+    six radios under "Blank 1:" with no way to answer blank 2.
+    """
+    has_prefix = any("_" in (o.get("label") or "") for o in options)
+    n = len(options)
+    result = []
+
+    if has_prefix:
+        for o in options:
+            parts = (o.get("label") or "").split("_", 1)
+            if len(parts) == 2:
+                result.append((parts[0], parts[1], o))
+            else:
+                result.append(("blank1", o.get("label", ""), o))
+        return result
+
+    is_flat_multi = (
+        n in (6, 9)
+        and all(
+            isinstance(o.get("label"), str)
+            and len(o["label"]) == 1
+            and o["label"].isalpha()
+            for o in options
+        )
+    )
+    if is_flat_multi:
+        sorted_opts = sorted(options, key=lambda o: o["label"])
+        per_blank = 3
+        choice_letters = ("A", "B", "C")
+        for i, o in enumerate(sorted_opts):
+            blank = f"blank{i // per_blank + 1}"
+            result.append((blank, choice_letters[i % per_blank], o))
+        return result
+
+    for o in options:
+        result.append(("blank1", o.get("label", ""), o))
+    return result
+
+
 class ScoringEngine:
     """Deterministic scoring for all GRE question types."""
 
@@ -127,32 +187,25 @@ class ScoringEngine:
 
     @staticmethod
     def _check_text_completion(options, response):
-        """TC: all blanks must be correct. options grouped per blank.
+        """TC: all blanks must be correct. Options are grouped per blank by
+        ``normalize_tc_options`` so the same blank→choice mapping is used
+        here and in the UI (``screens/question_screen.py``).
 
-        Two label conventions exist in the bank — they MUST stay in lock-step
-        with `screens/question_screen.py:_build_answer_controls`:
-        - multi-blank TC: labels are "blank1_A", "blank1_B", "blank2_A", …
-        - single-blank TC: labels are just "A", "B", "C" (no `blank1_`
-          prefix). The UI builds a single radio group keyed under "blank1"
-          for those, so the response payload is `{"selected": {"blank1": "A"}}`.
-
-        Earlier versions only handled the multi-blank form, which silently
-        marked every single-blank TC question wrong (~93 questions in the
-        shipped bank).
+        Earlier versions only handled the ``blank1_A`` prefix form, which
+        silently marked every single-blank TC question wrong (~93 items).
+        A later fix added fallback for flat 5-option labels. This version
+        additionally handles flat multi-blank labels (6 / 9 options)
+        where the authoring convention groups consecutive letters into
+        blanks of 3 — previously the scorer folded all correct options
+        under ``blank1``, overwriting later blanks (GitHub #15, Q5257).
         """
         selected = response.get("selected", {})
         if not isinstance(selected, dict):
             return False
         correct = {}
-        for o in options:
-            if not o.get("is_correct"):
-                continue
-            parts = o["label"].split("_", 1)
-            if len(parts) == 2:
-                correct[parts[0]] = parts[1]
-            else:
-                # Single-blank TC fallback — same convention the UI uses.
-                correct["blank1"] = o["label"]
+        for blank, choice, opt in normalize_tc_options(options):
+            if opt.get("is_correct"):
+                correct[blank] = choice
         if not correct:
             # No is_correct option marked at all. True data-corruption case;
             # distinct from a label-format mismatch (handled above).

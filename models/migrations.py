@@ -618,6 +618,74 @@ _Q1554_EXPLANATION_FIX = (
 )
 
 
+# Q3485 shipped with subtype='data_interp' but had no options and a
+# numericanswer row (``exact_value=112.0``). The UI routes by subtype,
+# so it built a zero-radio answer panel ("no options or blank box").
+# Reclassifying to ``numeric_entry`` makes the NumericEntry widget
+# render. Only a subtype fix; the numericanswer row is already correct.
+
+
+# ── Figure-reference prompt rewrites (GitHub #23, Q4542) ──────────────
+#
+# Five live items had figure-pointing phrases ("pictured above",
+# "In the figure above", "in the shape shown above", "chart above",
+# "options for the blank above") but either had no figure attached or
+# the phrase pointed at something that wasn't a figure. The batch
+# Opus-4.6 review (wave 2) rewrote three of them directly in the
+# shipped seed, but the rewrites never reached existing user DBs:
+# migrations 016/017 only replay retires, not prompt edits, and
+# ``config.py`` copies ``gre_mock.db`` → ``gre_user.db`` only on first
+# run. A user who ran the app before the rewrites shipped is stuck on
+# the old prompts — GitHub #23 (Q4542) is that case.
+#
+# The other two items (Q5121 / Q5181, ``ai_synthetic`` geometry) still
+# had the figure-pointing phrase in the shipped seed itself, paired
+# with a stimulus that's just the "Figure not drawn to scale." caption
+# and no actual image. Both stems are fully self-contained (every
+# length and right-angle position is given), so stripping the phrase
+# makes the items usable without needing to regenerate a figure.
+#
+# Each tuple is ``(qid, old_substring, new_substring)``. The rewrite
+# is applied only when ``old_substring`` is present — re-running after
+# a partial apply is a no-op, and items a future seed update has
+# already cleaned are skipped.
+_FIGURE_REFERENCE_PROMPT_FIXES_2026_05_04 = (
+    # Q4542 (GitHub #23, princeton_2012, numeric_entry): the stem gives
+    # AC=4 perpendicular to BD = 1.25·AC = 5, so area = ½·5·4 = 10. No
+    # figure needed. Seed has this rewrite; user DBs don't.
+    (4542,
+     "In triangle ABD pictured above,",
+     "In triangle ABD,"),
+    # Q5121 (ai_synthetic, mcq_single): right triangle with legs 9 and
+    # 12 and the altitude to the hypotenuse. Every length is given in
+    # the stem. Seed still has the "In the figure above" lead-in.
+    (5121,
+     r"In the figure above, triangle \(ABC\) has a right angle",
+     r"Triangle \(ABC\) has a right angle"),
+    # Q5181 (ai_synthetic, mcq_single): the "steel brackets" variant of
+    # Q5121 — same 9/12 right triangle, same altitude question, dressed
+    # up as a manufacturing word problem. Seed still has the "in the
+    # shape shown above" clause.
+    (5181,
+     "triangular steel brackets in the shape shown above.",
+     "triangular steel brackets."),
+    # Q3489 (manhattan_5lb_2018, data_interp): stimulus IS a table; the
+    # rewrite just swaps the noun from "chart" to "table" to match.
+    (3489,
+     "According to the chart above",
+     "According to the table above"),
+    # Q3489 follow-on — same prompt, second occurrence of "chart".
+    (3489,
+     "error in the chart;",
+     "error in the table;"),
+    # Q2861 (ai_generated tc-style): "above" pointed at the blank
+    # marker, not a figure; drop it so the stem reads naturally.
+    (2861,
+     "options for the blank above is",
+     "options for the blank is"),
+)
+
+
 def _018_fix_user_reported_2026_05_03():
     """Data fixes for user-reported issues GitHub #13 – #22 (2026-05-03
     batch).
@@ -664,6 +732,44 @@ def _018_fix_user_reported_2026_05_03():
     )
 
 
+def _019_fix_missing_figure_prompts_2026_05_04():
+    """Replay figure-reference prompt rewrites onto the user DB.
+
+    Context for GitHub #23 (Q4542): a user reported "FIGURE IS MISSING"
+    because their local ``gre_user.db`` still carried the pre-rewrite
+    prompt ("In triangle ABD pictured above, ..."). The shipped seed
+    was rewritten in wave 2 of the Opus-4.6 batch review to be fully
+    self-contained, but that edit never replayed against existing
+    user DBs — migration 017 only replays retires, and the seed →
+    user copy in ``config.py`` runs once on first launch. Every
+    pre-seed-rewrite user is stuck seeing figure-pointer phrases with
+    no figure.
+
+    This migration targets five figure-pointer prompts (Q4542, Q5121,
+    Q5181, Q3489, Q2861) with idempotent substring-replace updates.
+    All five stems are fully self-contained once the phrase is
+    stripped; none of them genuinely need a figure to be solvable.
+
+    Idempotent: each rewrite no-ops if ``old_substring`` is absent
+    (already applied) and likewise if the prompt has diverged from the
+    expected shape (protects hand-edited user DBs).
+    """
+    db = _get_db()
+    for qid, old_sub, new_sub in _FIGURE_REFERENCE_PROMPT_FIXES_2026_05_04:
+        row = db.execute_sql(
+            "SELECT prompt FROM question WHERE id=?", (qid,)
+        ).fetchone()
+        if row is None:
+            continue
+        prompt = row[0] or ""
+        if old_sub not in prompt:
+            continue  # already applied, or diverged — skip
+        db.execute_sql(
+            "UPDATE question SET prompt=? WHERE id=?",
+            (prompt.replace(old_sub, new_sub), qid),
+        )
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -693,6 +799,8 @@ MIGRATIONS = [
      _017_batch_ai_review_2026_05_01),
     ("018_fix_user_reported_2026_05_03",
      _018_fix_user_reported_2026_05_03),
+    ("019_fix_missing_figure_prompts_2026_05_04",
+     _019_fix_missing_figure_prompts_2026_05_04),
 ]
 
 

@@ -236,6 +236,37 @@ def test_verbal_section_ships_a_multi_q_rc_passage(temp_db):
             f"A={created['rc_multi_a']} B={created['rc_multi_b']}")
 
 
+def test_verbal_section_prefers_two_passages_when_budget_allows(temp_db):
+    """When the RC budget leaves ≥2 slots after the primary anchor, the
+    secondary anchor should pick a second multi-Q passage. The fixture
+    has A=3 + B=2 = 5 total multi-Q slots within a 6-slot rc_* budget
+    (12-Q section: rc_single=4 + rc_multi=1 + rc_select_passage=1); so
+    across many seeds, both A and B should land together most of the
+    time, matching the real-GRE "1 long + 1 short" pattern."""
+    from services.question_bank import QuestionBankService
+
+    created = _make_verbal_fixture(temp_db)
+    qb = QuestionBankService()
+    both_landed = 0
+    runs = 30
+    for seed in range(runs):
+        random.seed(seed)
+        ids = qb.select_questions_composed(
+            measure="verbal", count=12, difficulty_band="medium",
+        )
+        picked = set(ids)
+        a_ok = set(created["rc_multi_a"]).issubset(picked)
+        b_ok = set(created["rc_multi_b"]).issubset(picked)
+        if a_ok and b_ok:
+            both_landed += 1
+    # With the secondary-anchor pass both multi-Q clusters should land
+    # together in a substantial majority of seeds. Before the secondary
+    # anchor this was ~0 (only one passage per section).
+    assert both_landed >= runs // 2, (
+        f"secondary anchor ineffective: only {both_landed}/{runs} seeds "
+        f"shipped both A and B multi-Q passages together")
+
+
 def test_quant_section_hits_figure_floor(temp_db):
     """Every Quant section should contain at least
     ``QUANT_FIGURE_MIN_PER_SECTION`` figure-bearing items when the pool
@@ -243,7 +274,7 @@ def test_quant_section_hits_figure_floor(temp_db):
     only ~5% carry a figure yielded 0-1 figure items per section."""
     from models.database import Question, Stimulus
     from services.question_bank import (
-        QuestionBankService, QUANT_FIGURE_MIN_PER_SECTION,
+        QuestionBankService, _quant_figure_floor,
     )
 
     # Fixture: 10 figure-bearing QC singletons (image stimuli) + 20
@@ -288,6 +319,25 @@ def test_quant_section_hits_figure_floor(temp_db):
             stim = Stimulus.get_or_none(Stimulus.id == q.stimulus_id)
             if stim and "<img" in (stim.content or ""):
                 fig_count += 1
-        assert fig_count >= QUANT_FIGURE_MIN_PER_SECTION, (
+        floor = _quant_figure_floor(12)
+        assert fig_count >= floor, (
             f"seed {seed}: only {fig_count} figure-bearing items, "
-            f"expected >= {QUANT_FIGURE_MIN_PER_SECTION}")
+            f"expected >= {floor}")
+
+    # 15-Q section floor should scale up to 4.
+    for seed in range(10):
+        random.seed(seed)
+        ids = qb.select_questions_composed(
+            measure="quant", count=15, difficulty_band="medium",
+        )
+        fig_count = 0
+        for q in Question.select().where(Question.id.in_(ids)):
+            if q.stimulus_id is None:
+                continue
+            stim = Stimulus.get_or_none(Stimulus.id == q.stimulus_id)
+            if stim and "<img" in (stim.content or ""):
+                fig_count += 1
+        floor = _quant_figure_floor(15)
+        assert fig_count >= floor, (
+            f"seed {seed} (15Q): only {fig_count} figure-bearing items, "
+            f"expected >= {floor}")

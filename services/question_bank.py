@@ -110,7 +110,16 @@ DI_CLUSTER_MIN_SIZE = 2  # degrade gracefully when a 3-cluster is unavailable
 # hits a figure ~5% of the time per subtype slot and the user sees a
 # nearly figure-less section (GitHub: "no figure-based questions in
 # quants").
-QUANT_FIGURE_MIN_PER_SECTION = 3
+#
+# The floor scales with section length so the figure density stays in
+# the 25–33% band regardless of whether the caller asks for Q1 (12) or
+# Q2 (15): 3/12 ≈ 25%, 4/15 ≈ 27%.
+def _quant_figure_floor(count):
+    """Minimum figure-bearing items for a Quant section of size ``count``."""
+    if count <= 12:
+        return 3
+    return 4
+
 
 # Minimum multi-question RC passage anchor per Verbal section. Both
 # Kaplan and Princeton Review ship at least one passage with 3-4 linked
@@ -118,9 +127,12 @@ QUANT_FIGURE_MIN_PER_SECTION = 3
 # live multi-Q passages, but 82.9% of ``rc_single`` cluster keys are
 # single-child singletons, so a random shuffle almost always picks four
 # standalone passages instead of the real-GRE "1 long + 1-2 short"
-# shape. The anchor guarantees ≥1 multi-Q passage lands per section.
+# shape. A primary anchor guarantees ≥1 multi-Q passage lands per
+# section; a secondary anchor tries for a second (smaller) passage when
+# RC budget remains, matching the "2–3 passages per section" shape
+# Kaplan PT1 and Princeton diagnostic both ship.
 RC_ANCHOR_MIN_SIZE = 2
-RC_ANCHOR_PREFER_SIZE = 3  # prefer 3+ Q passages when the pool has them
+RC_ANCHOR_PREFER_SIZE = 3  # prefer 3+ Q passages for the primary anchor
 
 
 def get_recently_seen_ids(days_back: int = 14, user_id: str = "local"):
@@ -490,7 +502,7 @@ class QuestionBankService:
                 )
 
             # Figure-floor pass: ensure the section contains at least
-            # ``QUANT_FIGURE_MIN_PER_SECTION`` items whose stimulus carries
+            # ``_quant_figure_floor(count)`` items whose stimulus carries
             # an image or table. The DI cluster already contributed some;
             # top up with figure-bearing singletons (spread across QC /
             # MC / NE / DI subtypes) when the bank has no multi-sibling
@@ -498,7 +510,7 @@ class QuestionBankService:
             # remaining target so the composition ratios still balance.
             current_figure_count = self._count_figure_bearing(selected_ids)
             needed = max(
-                0, QUANT_FIGURE_MIN_PER_SECTION - current_figure_count)
+                0, _quant_figure_floor(count) - current_figure_count)
             if needed > 0:
                 figs = self._select_quant_figure_singletons(
                     count=needed,
@@ -522,10 +534,36 @@ class QuestionBankService:
                 difficulty_band=difficulty_band,
                 exclude=exclude,
                 max_size=rc_target_sum,
+                prefer_size=RC_ANCHOR_PREFER_SIZE,
             )
             if rc_anchor:
-                # Reallocate the rc_* budget: the anchor already
-                # satisfies the "≥1 multi-Q passage" that the rc_multi
+                selected_ids.extend(rc_anchor)
+                exclude.update(rc_anchor)
+                rc_budget_left = rc_target_sum - len(rc_anchor)
+
+                # Secondary anchor: try for a second (smaller) passage
+                # when budget allows. Kaplan PT1 / Princeton diagnostic
+                # both ship 2-4 passages per Verbal section. A primary
+                # long (3-4 Q) + secondary short (2 Q) + leftover
+                # singletons matches that shape. Only attempt if at
+                # least RC_ANCHOR_MIN_SIZE budget remains so we don't
+                # bisect a cluster; prefer 2-Q passages (``prefer_size
+                # =2``) so we don't accidentally stack two long ones.
+                if rc_budget_left >= RC_ANCHOR_MIN_SIZE:
+                    secondary = self._select_rc_passage_anchor(
+                        difficulty_band=difficulty_band,
+                        exclude=exclude,
+                        max_size=rc_budget_left,
+                        prefer_size=RC_ANCHOR_MIN_SIZE,
+                        min_size=RC_ANCHOR_MIN_SIZE,
+                    )
+                    if secondary:
+                        selected_ids.extend(secondary)
+                        exclude.update(secondary)
+                        rc_budget_left -= len(secondary)
+
+                # Reallocate the rc_* budget: the anchors already
+                # satisfy the "≥1 multi-Q passage" that the rc_multi
                 # and rc_select_passage quotas exist to enforce, so
                 # zero those and roll the leftover into rc_single.
                 # Without this, the per-subtype targets still sum to
@@ -534,13 +572,9 @@ class QuestionBankService:
                 # a cluster picked later by the subtype=None fallback
                 # (breaks cluster atomicity — see
                 # tests/test_cluster_aware_assembly.py).
-                anchor_size = len(rc_anchor)
-                rc_budget = max(0, rc_target_sum - anchor_size)
-                targets["rc_single"] = rc_budget
+                targets["rc_single"] = max(0, rc_budget_left)
                 targets["rc_multi"] = 0
                 targets["rc_select_passage"] = 0
-                selected_ids.extend(rc_anchor)
-                exclude.update(rc_anchor)
             else:
                 logger.warning(
                     "RC-passage-anchor gap: no verbal stimulus with >=%d "
@@ -1041,17 +1075,19 @@ class QuestionBankService:
         random.shuffle(table_bearing)
         return (image_bearing + table_bearing)[:count]
 
-    def _select_rc_passage_anchor(self, difficulty_band, exclude, max_size):
+    def _select_rc_passage_anchor(self, difficulty_band, exclude, max_size,
+                                   prefer_size=RC_ANCHOR_PREFER_SIZE,
+                                   min_size=RC_ANCHOR_MIN_SIZE):
         """Pick one multi-question RC passage cluster for a Verbal section.
 
-        Mirrors ``_select_di_cluster``: queries stimuli that host ≥2 live
-        Verbal RC children, prefers 3+ Q passages before 2-Q fallbacks,
-        respects the difficulty band, and refuses to split siblings. The
-        returned list is the full sibling set for the chosen stimulus,
-        atomic.
+        Mirrors ``_select_di_cluster``: queries stimuli that host ≥
+        ``min_size`` live Verbal RC children, prefers clusters with
+        ≥ ``prefer_size`` siblings before smaller ones, respects the
+        difficulty band, and refuses to split siblings. The returned
+        list is the full sibling set for the chosen stimulus, atomic.
 
         Real GRE Verbal sections always include at least one passage
-        with 2–4 linked questions (Kaplan/Princeton practice tests: 3–4
+        with 2–4 linked questions (Kaplan/Princeton practice tests: 2–4
         passages per section with 1 long + 1–2 short). Without this
         anchor the assembler's random shuffle of RC cluster keys picks
         single-child singletons 83% of the time and ships sections with
@@ -1059,10 +1095,14 @@ class QuestionBankService:
         seeing any RC questions [with multiple questions per passage]").
 
         ``max_size`` caps the anchor so a 5-Q passage doesn't blow the
-        RC slot budget; pass the sum of ``rc_single + rc_multi +
-        rc_select_passage`` targets.
+        RC slot budget. Callers pass the sum of ``rc_single + rc_multi +
+        rc_select_passage`` targets for a primary anchor, and the
+        remaining RC budget for a secondary anchor.
+
+        ``prefer_size`` lets callers bias toward long passages (primary
+        anchor, default 3) or short passages (secondary anchor, pass 2).
         """
-        if max_size < RC_ANCHOR_MIN_SIZE:
+        if max_size < min_size:
             return []
         cand = (
             Question.select(Question.stimulus_id,
@@ -1072,7 +1112,7 @@ class QuestionBankService:
                    (Question.subtype.in_(list(CLUSTERED_VERBAL_SUBTYPES))) &
                    Question.stimulus_id.is_null(False))
             .group_by(Question.stimulus_id)
-            .having(fn.COUNT(Question.id) >= RC_ANCHOR_MIN_SIZE)
+            .having(fn.COUNT(Question.id) >= min_size)
         )
         clause = _exclude_synthetic_clause()
         if clause is not None:
@@ -1080,7 +1120,7 @@ class QuestionBankService:
 
         prefer, fallback = [], []
         for row in cand:
-            if row.n >= RC_ANCHOR_PREFER_SIZE:
+            if row.n >= prefer_size:
                 prefer.append(row.stimulus_id)
             else:
                 fallback.append(row.stimulus_id)

@@ -206,3 +206,88 @@ def test_section_fills_from_singletons_when_clusters_exhausted(temp_db):
     assert len(ids) == 12
     # No duplicates
     assert len(set(ids)) == 12
+
+
+def test_verbal_section_ships_a_multi_q_rc_passage(temp_db):
+    """Every Verbal section must include at least one multi-question RC
+    passage when the pool has one (real-GRE shape: 2-4 passages per
+    section with 1 long + 1-2 short). Prior bug: random cluster-shuffle
+    hit single-child clusters 83% of the time and a user saw zero multi-
+    Q passages across a full mock."""
+    from services.question_bank import QuestionBankService
+
+    created = _make_verbal_fixture(temp_db)
+    qb = QuestionBankService()
+    multi_q_stimuli = set(created["rc_multi_a"]) | set(created["rc_multi_b"])
+
+    for seed in range(20):
+        random.seed(seed)
+        ids = qb.select_questions_composed(
+            measure="verbal", count=12, difficulty_band="medium",
+        )
+        picked = set(ids)
+        # Cluster A OR cluster B must be fully present (anchor guarantees
+        # at least one multi-Q passage lands). A is preferred (size 3
+        # > size 2), so it should be the typical pick.
+        a_ok = set(created["rc_multi_a"]).issubset(picked)
+        b_ok = set(created["rc_multi_b"]).issubset(picked)
+        assert a_ok or b_ok, (
+            f"seed {seed}: no multi-Q passage landed. picked={sorted(picked)} "
+            f"A={created['rc_multi_a']} B={created['rc_multi_b']}")
+
+
+def test_quant_section_hits_figure_floor(temp_db):
+    """Every Quant section should contain at least
+    ``QUANT_FIGURE_MIN_PER_SECTION`` figure-bearing items when the pool
+    has enough. Prior bug: random sampling from large QC/MC pools where
+    only ~5% carry a figure yielded 0-1 figure items per section."""
+    from models.database import Question, Stimulus
+    from services.question_bank import (
+        QuestionBankService, QUANT_FIGURE_MIN_PER_SECTION,
+    )
+
+    # Fixture: 10 figure-bearing QC singletons (image stimuli) + 20
+    # text-only QC + 20 text-only mcq_single. No DI cluster available.
+    for i in range(10):
+        s = Stimulus.create(
+            stimulus_type="graph", title=f"fig-{i}",
+            content=f'<img src="data:image/png;base64,AAA" alt="fig-{i}">',
+        )
+        Question.create(
+            measure="quant", subtype="qc", stimulus=s,
+            prompt=f"FIG-QC-{i}", time_target_seconds=90,
+            concept_tags="[]", explanation="",
+            difficulty_target=3, status="live",
+        )
+    for i in range(20):
+        Question.create(
+            measure="quant", subtype="qc",
+            prompt=f"QC-{i}", time_target_seconds=90,
+            concept_tags="[]", explanation="",
+            difficulty_target=3, status="live",
+        )
+    for i in range(20):
+        Question.create(
+            measure="quant", subtype="mcq_single",
+            prompt=f"MCQ-{i}", time_target_seconds=90,
+            concept_tags="[]", explanation="",
+            difficulty_target=3, status="live",
+        )
+
+    qb = QuestionBankService()
+    for seed in range(20):
+        random.seed(seed)
+        ids = qb.select_questions_composed(
+            measure="quant", count=12, difficulty_band="medium",
+        )
+        # Count figure-bearing items (direct content inspection).
+        fig_count = 0
+        for q in Question.select().where(Question.id.in_(ids)):
+            if q.stimulus_id is None:
+                continue
+            stim = Stimulus.get_or_none(Stimulus.id == q.stimulus_id)
+            if stim and "<img" in (stim.content or ""):
+                fig_count += 1
+        assert fig_count >= QUANT_FIGURE_MIN_PER_SECTION, (
+            f"seed {seed}: only {fig_count} figure-bearing items, "
+            f"expected >= {QUANT_FIGURE_MIN_PER_SECTION}")

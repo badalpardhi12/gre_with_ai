@@ -101,6 +101,27 @@ DI_STIMULUS_TYPES = ("graph", "table", "chart")
 DI_CLUSTER_TARGET_SIZE = 3
 DI_CLUSTER_MIN_SIZE = 2  # degrade gracefully when a 3-cluster is unavailable
 
+# Minimum figure-bearing Quant items per section. Kaplan/Princeton +
+# ETS community consensus: 25–35% of Quant items reference a figure
+# (geometry diagram, coordinate plane, number line, chart, table). The
+# floor covers: the DI block (~3) + 1–2 geometry diagrams in QC/PS.
+# Our bank ships 45 geometry singletons (Manhattan 5lb) + 14 DI items;
+# without an explicit floor the random sampler from 1,500+ Quant items
+# hits a figure ~5% of the time per subtype slot and the user sees a
+# nearly figure-less section (GitHub: "no figure-based questions in
+# quants").
+QUANT_FIGURE_MIN_PER_SECTION = 3
+
+# Minimum multi-question RC passage anchor per Verbal section. Both
+# Kaplan and Princeton Review ship at least one passage with 3-4 linked
+# questions in each full-length practice Verbal section. Our bank has 84
+# live multi-Q passages, but 82.9% of ``rc_single`` cluster keys are
+# single-child singletons, so a random shuffle almost always picks four
+# standalone passages instead of the real-GRE "1 long + 1-2 short"
+# shape. The anchor guarantees ≥1 multi-Q passage lands per section.
+RC_ANCHOR_MIN_SIZE = 2
+RC_ANCHOR_PREFER_SIZE = 3  # prefer 3+ Q passages when the pool has them
+
 
 def get_recently_seen_ids(days_back: int = 14, user_id: str = "local"):
     """Return question IDs the user has answered in the last N days.
@@ -466,6 +487,66 @@ class QuestionBankService:
                     "DI-cluster gap: no graph/table stimulus with >=%d live "
                     "quant siblings at band=%s; section falls through to solo "
                     "data_interp items.", DI_CLUSTER_MIN_SIZE, difficulty_band,
+                )
+
+            # Figure-floor pass: ensure the section contains at least
+            # ``QUANT_FIGURE_MIN_PER_SECTION`` items whose stimulus carries
+            # an image or table. The DI cluster already contributed some;
+            # top up with figure-bearing singletons (spread across QC /
+            # MC / NE / DI subtypes) when the bank has no multi-sibling
+            # figure clusters. Each pick is subtracted from its subtype's
+            # remaining target so the composition ratios still balance.
+            current_figure_count = self._count_figure_bearing(selected_ids)
+            needed = max(
+                0, QUANT_FIGURE_MIN_PER_SECTION - current_figure_count)
+            if needed > 0:
+                figs = self._select_quant_figure_singletons(
+                    count=needed,
+                    difficulty_band=difficulty_band,
+                    exclude=exclude,
+                )
+                for qid, subtype in figs:
+                    targets[subtype] = max(0, targets.get(subtype, 0) - 1)
+                    selected_ids.append(qid)
+                    exclude.add(qid)
+
+        # Verbal blueprint step 1: every Verbal section anchors on at
+        # least one multi-question RC passage (real-GRE shape is 2-4
+        # passages per section with 1 long + 1-2 short). Pull the full
+        # passage cluster up-front and subtract from the rc_* targets so
+        # the remaining slots fill out with TC / SE / other RC.
+        if measure == "verbal":
+            rc_target_sum = sum(
+                targets.get(s, 0) for s in CLUSTERED_VERBAL_SUBTYPES)
+            rc_anchor = self._select_rc_passage_anchor(
+                difficulty_band=difficulty_band,
+                exclude=exclude,
+                max_size=rc_target_sum,
+            )
+            if rc_anchor:
+                # Reallocate the rc_* budget: the anchor already
+                # satisfies the "≥1 multi-Q passage" that the rc_multi
+                # and rc_select_passage quotas exist to enforce, so
+                # zero those and roll the leftover into rc_single.
+                # Without this, the per-subtype targets still sum to
+                # ``count`` while ``selected_ids`` grew by anchor_size,
+                # so the final ``selected_ids[:count]`` slice can bisect
+                # a cluster picked later by the subtype=None fallback
+                # (breaks cluster atomicity — see
+                # tests/test_cluster_aware_assembly.py).
+                anchor_size = len(rc_anchor)
+                rc_budget = max(0, rc_target_sum - anchor_size)
+                targets["rc_single"] = rc_budget
+                targets["rc_multi"] = 0
+                targets["rc_select_passage"] = 0
+                selected_ids.extend(rc_anchor)
+                exclude.update(rc_anchor)
+            else:
+                logger.warning(
+                    "RC-passage-anchor gap: no verbal stimulus with >=%d "
+                    "live RC siblings at band=%s; section will rely on "
+                    "random cluster shuffle for any multi-Q passages.",
+                    RC_ANCHOR_MIN_SIZE, difficulty_band,
                 )
 
         for subtype, target_count in targets.items():
@@ -887,6 +968,145 @@ class QuestionBankService:
         elif op == ">=":
             q = q.where(Question.difficulty_target >= threshold)
         return (q.scalar() or 0) > 0
+
+    @staticmethod
+    def _count_figure_bearing(qids):
+        """Count how many of ``qids`` have a figure-bearing stimulus
+        (image or table). Used by ``select_questions_composed`` to
+        decide whether the figure-floor top-up is still needed after
+        the DI cluster and earlier picks."""
+        if not qids:
+            return 0
+        rows = (
+            Question.select(Question.id, Stimulus.content.alias("c"))
+            .join(Stimulus, on=(Stimulus.id == Question.stimulus))
+            .where(Question.id.in_(list(qids)))
+        )
+        n = 0
+        for r in rows:
+            c = getattr(r, "c", "") or ""
+            if "<img" in c or "data:image/" in c or "<table" in c:
+                n += 1
+        return n
+
+    def _select_quant_figure_singletons(self, count, difficulty_band, exclude):
+        """Pick ``count`` live Quant items whose stimulus carries a figure
+        (image or table), subtype-agnostic.
+
+        Prefers real images (``<img>`` / ``data:image/``) over pure HTML
+        tables so a user who complains about "no figure-based questions"
+        gets actual geometry / coordinate / chart renderings, not just
+        the ai_generated DI table blocks. Returns a list of
+        ``(qid, subtype)`` tuples so the caller can reduce per-subtype
+        targets for each pick.
+
+        The Quant bank has 45 figure-bearing singletons (Manhattan 5lb
+        geometry diagrams) that ``_select_di_cluster`` can't surface
+        (they all have ``n_siblings=1`` so fail the ``>=2`` gate). This
+        helper fills the figure-floor gap directly.
+        """
+        if count <= 0:
+            return []
+        query = (
+            Question.select(Question.id, Question.subtype,
+                            Stimulus.content.alias("stim_content"))
+            .join(Stimulus, on=(Stimulus.id == Question.stimulus))
+            .where((Question.measure == "quant") &
+                   (Question.status == "live"))
+            .where(
+                (Stimulus.content.contains("<img")) |
+                (Stimulus.content.contains("data:image/")) |
+                (Stimulus.content.contains("<table"))
+            )
+        )
+        if difficulty_band == "easy":
+            query = query.where(Question.difficulty_target <= 2)
+        elif difficulty_band == "hard":
+            query = query.where(Question.difficulty_target >= 4)
+        if exclude:
+            query = query.where(Question.id.not_in(list(exclude)))
+        clause = _exclude_synthetic_clause()
+        if clause is not None:
+            query = query.where(clause)
+
+        image_bearing = []
+        table_bearing = []
+        for q in query:
+            content = getattr(q, "stim_content", "") or ""
+            if "<img" in content or "data:image/" in content:
+                image_bearing.append((q.id, q.subtype))
+            else:
+                table_bearing.append((q.id, q.subtype))
+        random.shuffle(image_bearing)
+        random.shuffle(table_bearing)
+        return (image_bearing + table_bearing)[:count]
+
+    def _select_rc_passage_anchor(self, difficulty_band, exclude, max_size):
+        """Pick one multi-question RC passage cluster for a Verbal section.
+
+        Mirrors ``_select_di_cluster``: queries stimuli that host ≥2 live
+        Verbal RC children, prefers 3+ Q passages before 2-Q fallbacks,
+        respects the difficulty band, and refuses to split siblings. The
+        returned list is the full sibling set for the chosen stimulus,
+        atomic.
+
+        Real GRE Verbal sections always include at least one passage
+        with 2–4 linked questions (Kaplan/Princeton practice tests: 3–4
+        passages per section with 1 long + 1–2 short). Without this
+        anchor the assembler's random shuffle of RC cluster keys picks
+        single-child singletons 83% of the time and ships sections with
+        every RC item standalone — user-reported symptom ("I'm not
+        seeing any RC questions [with multiple questions per passage]").
+
+        ``max_size`` caps the anchor so a 5-Q passage doesn't blow the
+        RC slot budget; pass the sum of ``rc_single + rc_multi +
+        rc_select_passage`` targets.
+        """
+        if max_size < RC_ANCHOR_MIN_SIZE:
+            return []
+        cand = (
+            Question.select(Question.stimulus_id,
+                            fn.COUNT(Question.id).alias("n"))
+            .where((Question.measure == "verbal") &
+                   (Question.status == "live") &
+                   (Question.subtype.in_(list(CLUSTERED_VERBAL_SUBTYPES))) &
+                   Question.stimulus_id.is_null(False))
+            .group_by(Question.stimulus_id)
+            .having(fn.COUNT(Question.id) >= RC_ANCHOR_MIN_SIZE)
+        )
+        clause = _exclude_synthetic_clause()
+        if clause is not None:
+            cand = cand.where(clause)
+
+        prefer, fallback = [], []
+        for row in cand:
+            if row.n >= RC_ANCHOR_PREFER_SIZE:
+                prefer.append(row.stimulus_id)
+            else:
+                fallback.append(row.stimulus_id)
+        random.shuffle(prefer)
+        random.shuffle(fallback)
+
+        for stim_id in prefer + fallback:
+            siblings = list(
+                Question.select(Question.id)
+                .where((Question.stimulus == stim_id) &
+                       (Question.status == "live") &
+                       (Question.subtype.in_(list(CLUSTERED_VERBAL_SUBTYPES))))
+            )
+            sibling_ids = [q.id for q in siblings]
+            if len(sibling_ids) > max_size:
+                continue  # would overflow the RC budget
+            if exclude and any(sid in exclude for sid in sibling_ids):
+                continue
+            if difficulty_band == "easy":
+                if not self._any_sibling_matches(sibling_ids, "<=", 2):
+                    continue
+            elif difficulty_band == "hard":
+                if not self._any_sibling_matches(sibling_ids, ">=", 4):
+                    continue
+            return sibling_ids
+        return []
 
     def select_awa_prompt(self):
         """Select a random AWA prompt. Returns [prompt_id]."""

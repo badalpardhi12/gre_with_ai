@@ -829,6 +829,11 @@ def _020_retire_image_text_mismatches_2026_05_06():
 
     Idempotent: the guard ``status != 'retired'`` makes re-runs
     no-ops.
+
+    NOTE: the tuple was originally 8 items; Q3720 was appended in a
+    follow-up commit but the migration had already run for users who
+    pulled between the two commits. Migration 021 catches those
+    users up.
     """
     db = _get_db()
     placeholders = ",".join(
@@ -837,6 +842,29 @@ def _020_retire_image_text_mismatches_2026_05_06():
         f"UPDATE question SET status='retired' "
         f"WHERE id IN ({placeholders}) AND status != 'retired'",
         _IMAGE_TEXT_MISMATCH_RETIRES_2026_05_06,
+    )
+
+
+def _021_retire_q3720_image_mismatch_2026_05_06():
+    """Retire Q3720 on user DBs that already applied migration 020
+    at its original 8-item tuple.
+
+    Context: GitHub #25 was filed the day migration 020 landed (commit
+    f096f5e, tuple = 8 items). Fixing #25 in commit 42aae71 amended
+    migration 020's tuple to add Q3720, but ``apply_pending_migrations``
+    skips any migration whose name is already in ``schemamigration`` —
+    so users who pulled between f096f5e and 42aae71 already have
+    migration 020 recorded as applied, and Q3720 never retires on
+    their DB. Migration 021 is the catch-up, ONLY retiring Q3720 so
+    it stays small and obviously-purposed.
+
+    Idempotent: the ``status != 'retired'`` guard makes this a no-op
+    for users who picked up the amended tuple via a fresh checkout.
+    """
+    db = _get_db()
+    db.execute_sql(
+        "UPDATE question SET status='retired' "
+        "WHERE id = 3720 AND status != 'retired'"
     )
 
 
@@ -873,6 +901,8 @@ MIGRATIONS = [
      _019_fix_missing_figure_prompts_2026_05_04),
     ("020_retire_image_text_mismatches_2026_05_06",
      _020_retire_image_text_mismatches_2026_05_06),
+    ("021_retire_q3720_image_mismatch_2026_05_06",
+     _021_retire_q3720_image_mismatch_2026_05_06),
 ]
 
 

@@ -793,6 +793,11 @@ _IMAGE_TEXT_MISMATCH_RETIRES_2026_05_06 = (
     3698,         # pair 3697/3698: image matches 3697 (angles 37°/45°)
     3701,         # pair 3700/3701: image matches 3700 (non-right triangle)
     3717,         # pair 3716/3717: image matches 3716 (parallel-line transversal)
+    3720,         # GitHub #25: image = parallel-lines figure with
+                  # triangles WYX/WZX/YZ; stem asks about side DC vs AB
+                  # in a configuration where "two angles at B make a
+                  # straight line" — image shows no such straight-line
+                  # angle at B.
     3726,         # pair 3725/3726: image matches 3725 (positive slope); GitHub #24
     3757,         # pair 3756/3757: image matches 3756 (circle inscribed in square)
     3767,         # pair 3766/3767: image matches 3766 (two triangles on parallel lines)

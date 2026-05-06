@@ -970,11 +970,24 @@ class QuestionBankService:
             return sibling_ids[:DI_CLUSTER_TARGET_SIZE]
 
         # Final fallback: solo items tagged ``data_interp`` (legacy seed).
-        solo = (Question.select(Question.id).where(
-            Question.measure == "quant",
-            Question.subtype == "data_interp",
-            Question.status == "live",
-        ))
+        # Prefer items whose stimulus carries a real chart/graph image
+        # (``<img>`` / ``data:image/``) over HTML-table DI stimuli —
+        # users reported "not seeing any graph-based DI questions"
+        # because the random shuffle here historically pulled the 9
+        # ai_generated HTML-table DI items ~2x more often than the 5
+        # image-bearing ones. Splitting into two pools and picking
+        # image-bearing first restores the "one chart, three questions"
+        # visual even though we can't yet ship a real multi-Q cluster.
+        # Every ``subtype='data_interp'`` row has a stimulus_id (no
+        # orphans as of migration 020), so INNER JOIN is safe here.
+        solo = (
+            Question.select(Question.id,
+                            Stimulus.content.alias("stim_content"))
+            .join(Stimulus, on=(Stimulus.id == Question.stimulus))
+            .where(Question.measure == "quant",
+                   Question.subtype == "data_interp",
+                   Question.status == "live")
+        )
         if difficulty_band == "easy":
             solo = solo.where(Question.difficulty_target <= 2)
         elif difficulty_band == "hard":
@@ -984,9 +997,17 @@ class QuestionBankService:
         clause = _exclude_synthetic_clause()
         if clause is not None:
             solo = solo.where(clause)
-        solo_ids = [q.id for q in solo]
-        random.shuffle(solo_ids)
-        return solo_ids[:DI_CLUSTER_TARGET_SIZE]
+
+        image_ids, table_ids = [], []
+        for q in solo:
+            content = getattr(q, "stim_content", "") or ""
+            if "<img" in content or "data:image/" in content:
+                image_ids.append(q.id)
+            else:
+                table_ids.append(q.id)
+        random.shuffle(image_ids)
+        random.shuffle(table_ids)
+        return (image_ids + table_ids)[:DI_CLUSTER_TARGET_SIZE]
 
     @staticmethod
     def _any_sibling_matches(sibling_ids, op, threshold):

@@ -770,6 +770,71 @@ def _019_fix_missing_figure_prompts_2026_05_04():
         )
 
 
+# Seven consecutive pairs of Manhattan 5lb Quant items share
+# byte-identical figure images via the extraction pipeline: the
+# original Manhattan chapter page carried two separate figures (one
+# per question) and the extractor duplicated whichever figure it
+# found first to both stimulus rows. Each pair's image matches at
+# most one of its two stems — the other is guaranteed to show a
+# figure that doesn't belong to the question.
+#
+# Per-pair inspection (see commit message for the full diff): the
+# image matches the FIRST qid in each pair; the SECOND qid's stem
+# describes a different geometric configuration than the shared
+# image shows. GitHub #24 reported the Q3725/Q3726 case directly
+# ("figure given in the question is not matching with the question")
+# and reading the other six pairs showed the same pattern.
+#
+# Q3693/Q3694 is a special case — the shared image shows two
+# unrelated figures (equilateral triangle ABC + right triangle DEF)
+# that match NEITHER stem. Both members retired.
+_IMAGE_TEXT_MISMATCH_RETIRES_2026_05_06 = (
+    3693, 3694,   # pair image matches neither stem → retire both
+    3698,         # pair 3697/3698: image matches 3697 (angles 37°/45°)
+    3701,         # pair 3700/3701: image matches 3700 (non-right triangle)
+    3717,         # pair 3716/3717: image matches 3716 (parallel-line transversal)
+    3726,         # pair 3725/3726: image matches 3725 (positive slope); GitHub #24
+    3757,         # pair 3756/3757: image matches 3756 (circle inscribed in square)
+    3767,         # pair 3766/3767: image matches 3766 (two triangles on parallel lines)
+)
+
+
+def _020_retire_image_text_mismatches_2026_05_06():
+    """Retire eight Manhattan 5lb Quant items whose shipped figure
+    doesn't match their stem.
+
+    Root cause is an extractor bug: when the Manhattan source page
+    carried two distinct figures for two consecutive questions, the
+    ETL duplicated ONE of the figure's base64 bytes into both
+    stimulus rows and dropped the other. The text-only Opus-4.6
+    batch review (waves 1-2) couldn't see the figures, so it fixed
+    label consistency in the stems ("line m" → "line l" to match the
+    image label) but couldn't detect slope/shape mismatches.
+
+    User-visible symptom emerged after commits 675cd1d + 49ecd49
+    started anchoring every Quant section on figure-bearing items
+    (previously those 45 Manhattan items were almost never picked
+    from the 1,500-item pool, so the mismatch was invisible). GitHub
+    #24 reports Q3726 as the first concrete example; verified six
+    more pairs exhibit the same bug.
+
+    A systematic re-extraction from the Manhattan 5lb EPUB that
+    preserves the one-figure-per-question mapping is the long-term
+    fix; this migration is the safe short-term band-aid.
+
+    Idempotent: the guard ``status != 'retired'`` makes re-runs
+    no-ops.
+    """
+    db = _get_db()
+    placeholders = ",".join(
+        "?" for _ in _IMAGE_TEXT_MISMATCH_RETIRES_2026_05_06)
+    db.execute_sql(
+        f"UPDATE question SET status='retired' "
+        f"WHERE id IN ({placeholders}) AND status != 'retired'",
+        _IMAGE_TEXT_MISMATCH_RETIRES_2026_05_06,
+    )
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -801,6 +866,8 @@ MIGRATIONS = [
      _018_fix_user_reported_2026_05_03),
     ("019_fix_missing_figure_prompts_2026_05_04",
      _019_fix_missing_figure_prompts_2026_05_04),
+    ("020_retire_image_text_mismatches_2026_05_06",
+     _020_retire_image_text_mismatches_2026_05_06),
 ]
 
 

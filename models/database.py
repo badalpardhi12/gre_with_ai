@@ -601,6 +601,14 @@ def init_db():
     from models.migrations import apply_pending_migrations
     apply_pending_migrations()
     db.close()
+    # After migrations, reconcile reference-data tables (question,
+    # questionoption, numericanswer, stimulus) with the shipped seed so
+    # seed content edits made without an accompanying migration
+    # (prompt/explanation rewrites, new questions, replaced figures,
+    # etc.) still land on existing user DBs. The helper is a no-op on
+    # repeat launches when the seed fingerprint hasn't changed.
+    from services.seed_sync import reconcile_if_stale
+    reconcile_if_stale()
 
 
 if __name__ == "__main__":

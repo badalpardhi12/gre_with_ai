@@ -23,6 +23,12 @@ def temp_db(tmp_path, monkeypatch):
     """Provide a clean SQLite database for each test."""
     db_file = tmp_path / "test.db"
     monkeypatch.setattr("config.DB_PATH", db_file)
+    # Also point the seed path at a nonexistent file so the reconcile
+    # step inside ``init_db`` no-ops (``reconcile_if_stale`` returns
+    # ``skipped: missing_path`` when the seed isn't on disk). Without
+    # this, the reconcile copies ~5,000 questions from the real shipped
+    # seed into the test's fresh DB, swamping any hand-built fixture.
+    monkeypatch.setattr("config.SEED_DB_PATH", tmp_path / "no_seed.db")
 
     # Force a fresh import of models so the module-level Database picks up
     # the patched DB_PATH. Also evict any service modules that captured

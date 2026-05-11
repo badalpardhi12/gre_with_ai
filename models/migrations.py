@@ -868,6 +868,26 @@ def _021_retire_q3720_image_mismatch_2026_05_06():
     )
 
 
+def _022_retire_q3754_image_mismatch_2026_05_11():
+    """Retire Q3754 — image shows the tangent-from-external-point figure
+    from adjacent Q3753, not the circle-inscribed-in-square stem.
+
+    Same Manhattan 5lb extraction bug that migrations 020/021 handled
+    (one figure duplicated to an adjacent pair). Caught on the full
+    vision audit of all 36 live figure-bearing Manhattan items on
+    2026-05-11 after a user reported seeing a figure that didn't match
+    the question. Q3753 was already retired in migration 020; Q3754's
+    image is the other half of the same duplicate pair and had gone
+    unnoticed because the stem mentions a circle and the wrong figure
+    also happens to contain a circle.
+    """
+    db = _get_db()
+    db.execute_sql(
+        "UPDATE question SET status='retired' "
+        "WHERE id = 3754 AND status != 'retired'"
+    )
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -903,6 +923,8 @@ MIGRATIONS = [
      _020_retire_image_text_mismatches_2026_05_06),
     ("021_retire_q3720_image_mismatch_2026_05_06",
      _021_retire_q3720_image_mismatch_2026_05_06),
+    ("022_retire_q3754_image_mismatch_2026_05_11",
+     _022_retire_q3754_image_mismatch_2026_05_11),
 ]
 
 

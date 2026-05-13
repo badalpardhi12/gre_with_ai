@@ -1,13 +1,11 @@
-# GRE prep with AI
+# GRE Prep — Local-First Desktop App
 
-Best-in-class desktop GRE preparation: full-length section-adaptive mock
-tests, a curated vocabulary curriculum with spaced repetition, AI-generated
-lessons and study plans, and per-question tutoring backed by Claude Opus 4.7.
+A best-in-class offline GRE preparation platform: section-adaptive mock tests, a 9,600-word spaced-repetition vocab deck, per-subtopic mastery analytics, and an optional LLM tutor that never controls your score. Every millisecond of timing, every answer key, every adaptive routing decision is deterministic and runs locally on your machine. The LLM layer is opt-in — drills, mocks, vocab, and analytics all work with no API key.
 
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)
 ![wxPython](https://img.shields.io/badge/GUI-wxPython%204.2-orange)
 ![SQLite](https://img.shields.io/badge/database-SQLite-green)
-![Tests](https://img.shields.io/github/actions/workflow/status/badalpardhi12/gre_with_ai/ci.yml?branch=main&label=tests)
+![Tests](https://img.shields.io/badge/tests-533%20pass-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 ![Today screen](docs/screenshots/today.png)
@@ -19,425 +17,302 @@ lessons and study plans, and per-question tutoring backed by Claude Opus 4.7.
 ```bash
 git clone https://github.com/badalpardhi12/gre_with_ai.git
 cd gre_with_ai
-chmod +x setup.sh && ./setup.sh
-source venv/bin/activate
-python app.py
+chmod +x setup.sh && ./setup.sh        # builds venv, runs migrations, optional API-key prompt
+venv/bin/python main.py                # launches the app
 ```
 
-`setup.sh` is idempotent and self-contained. In order, it:
-1. Installs Python 3.9+ if missing (Homebrew on macOS, apt on
-   Debian/Ubuntu).
-2. Verifies the shipped ~21 MB question / vocab / lessons SQLite DB
-   (`data/gre_mock.db`) is present and has a valid SQLite header.
-3. Builds a venv at `./venv` and installs every dependency including
-   `bleach` and `pytest`.
-4. Runs the test suite as a smoke check.
-5. Applies the on-launch schema migrations to the seed DB.
-6. Runs a question-bank corruption audit (`scripts/audit_data_corruption.py --summary`).
-   Output is informational — a few hundred rows are flagged as
-   "likely wrong explanation" by the heuristic; those are already
-   retired or demoted. Non-fatal.
-7. Interactively prompts for an optional OpenRouter API key (used
-   by the AI tutor + AWA scorer). Press Enter to skip — every other
-   feature works without it. Non-interactive runs (piping `< /dev/null`)
-   skip this step silently.
-
-Re-run `./setup.sh` after every `git pull` to refresh deps and apply
-any new migrations.
+`setup.sh` is idempotent. Re-run it after every `git pull`. An OpenRouter key is optional — skip the prompt and the app still runs every offline feature.
 
 ---
 
-## Tour
+## Screenshots
 
-### Today
-Single primary CTA chosen from your state, today's plan checklist, score-
-forecast range bar, and recent activity. Streak badge is permanently visible
-in the sidebar.
-
-![Today](docs/screenshots/today.png)
-
-### Learn
-Mastery heatmap of all 48 subtopics, color-banded by score. Click a tile and
-the right pane shows the lesson, last-10-attempts sparkline, and a one-click
-"Practice 10 questions" CTA.
-
-![Learn](docs/screenshots/learn.png)
-
-### Practice
-Three clearly-distinct modes — Quick Drill (smart 10-Q), Section Test (one
-timed verbal or quant section), Full Mock Exam (the full ~2 h GRE).
-
-![Practice](docs/screenshots/practice.png)
-
-### Vocab
-FSRS-inspired flashcards with rich back-of-card content (definition,
-examples, synonyms/antonyms, root analysis, mnemonic, themes).
-
-![Vocab](docs/screenshots/vocab.png)
-
-### Insights
-Score-forecast trend + per-measure mastery roll-up + study-plan summary +
-manual mistake-coach trigger + full test history.
-
-![Insights](docs/screenshots/insights.png)
-
-### Onboarding
-3-step first-launch wizard with skip CTAs at every step.
-
-| Welcome | Set your goal | Diagnostic offer |
+| Today — home | Practice — mode picker | Error Log |
 |---|---|---|
-| ![Step 1](docs/screenshots/onboarding_step_1.png) | ![Step 2](docs/screenshots/onboarding_step_2.png) | ![Step 3](docs/screenshots/onboarding_step_3.png) |
+| ![Today](docs/screenshots/today.png) | ![Practice](docs/screenshots/practice.png) | ![Error Log](docs/screenshots/error_log.png) |
+
+| Practice question (mid-session) | Learn — mastery heatmap | Insights — forecast + plan + history |
+|---|---|---|
+| ![Question](docs/screenshots/practice_question.png) | ![Learn](docs/screenshots/learn.png) | ![Insights](docs/screenshots/insights.png) |
+
+| Results | Vocab (FSRS) | Onboarding wizard |
+|---|---|---|
+| ![Results](docs/screenshots/results.png) | ![Vocab](docs/screenshots/vocab.png) | ![Onboarding](docs/screenshots/onboarding_step_1.png) |
 
 ---
 
-## What's inside
+## Architecture (presentation-grade)
 
-### Test taking
-- **Full-length mock tests** in the post-September-2023 GRE format
-  (1 h 58 min: AWA + V1 + V2 + Q1 + Q2)
-- **Section-level adaptive routing** — Section 2 difficulty is chosen from
-  Section 1 performance, mirroring the real ETS engine
-- **All 11 question subtypes** — TC (1/2/3 blank), SE, RC single/multi/
-  select-in-passage, QC, MCQ single/multi, Numeric Entry, Data Interpretation
-- **Real Data Interpretation charts** — pie/bar/grouped-bar/line/scatter/
-  table, rendered with matplotlib (dark theme), embedded as inline base64
-  data URIs (no `file://` exposure to the WebView)
-- **On-screen calculator** for quant sections, KaTeX math rendering throughout
-- **Crash recovery** — every answer is fsync'd to a journal; killed-mid-test
-  state is recoverable on next launch
+![Architecture diagram](docs/architecture/gre_architecture.png)
 
-### Adaptive learning
-- **Diagnostic test** — 30-question stratified intake produces per-topic
-  accuracy, weakness ranking, and a predicted scaled-score band
-- **Per-subtopic mastery tracking** — EWMA over recent attempts, weighted
-  by question difficulty; mastered at ≥0.80 over 10 attempts
-- **AI study-plan generator** — Claude Opus 4.7 builds a personalized
-  week-by-week plan from your diagnostic + live mastery + bank availability
-- **Score forecast** — predicted Verbal/Quant scaled-score range with a
-  10-session sparkline trend
-- **Smart drill picker** — 60% never-seen + 30% wrong-before + 10% right-
-  before, skipping the last 14 days
-
-### AI tutoring
-- **AnswerChat** — opens after a missed question, scope-locked to that
-  question; never overrides the deterministic correct answer
-- **Mistake-pattern coach** — every 50 lifetime mistakes, Opus 4.7
-  analyzes your error log and outputs a 3-bullet diagnosis with a
-  targeted drill recommendation. Manual trigger from the Insights tab.
-- **Per-question explanation generation** — falls back to LLM when no
-  stored explanation exists, then caches the result
-- **AWA scoring** — ETS-rubric-aligned essay evaluation with prompt-injection
-  hardening (essay text wrapped in `<essay>` tags, system prompt declares
-  user input untrusted)
-
-### Habit & onboarding
-- **3-step onboarding wizard** on first launch — Welcome → Goal & test
-  date → Diagnostic offer; "Skip" exits at any step
-- **Streak tracker** — flame icon + day count in the sidebar; one
-  freeze-day forgiveness, +1 freeze every Sunday (cap 3)
-- **Daily-goal completion bar** on the Today tab, sourced from real
-  per-question time spent
-
-### Content
-- **2,634 live questions** split **1,508 Quant / 1,126 Verbal**, tagged
-  by measure + subtype + topic + subtopic, validated for difficulty and
-  quality.
-- **9,647 curated vocabulary words** with definitions, example
-  sentences, synonyms, antonyms, root analysis, mnemonics, and theme
-  tags.
-- **308 Latin/Greek roots** linked to the vocabulary words.
-- **49 subtopic lessons + 8 strategy guides** auto-generated from
-  curated prep material.
-- **136 AWA issue prompts**.
-- **1,121 stimuli** (870 RC passages, 231 graphs/charts, 20 standalone
-  tables) shared across questions.
-
-### Dataset metrics
-
-Snapshot of `data/gre_mock.db` at the current commit. "Live" means
-eligible for assembly into mock sections; items at status `draft`,
-`candidate`, or `retired` stay in the DB (for audit, re-promotion, or
-lifecycle tracking) but don't reach the test-taker.
-
-| Status | Count |
-|---|---:|
-| live | 2,634 |
-| retired | 1,584 |
-| draft | 989 |
-| candidate | 44 |
-| **total rows** | **5,251** |
-
-**Live questions by measure × subtype**
-
-| Measure | Subtype | Count |
-|---|---|---:|
-| Quant | `mcq_single` (multiple-choice, single answer) | 733 |
-| Quant | `qc` (quantitative comparison) | 451 |
-| Quant | `numeric_entry` | 285 |
-| Quant | `mcq_multi` (multi-answer) | 21 |
-| Quant | `data_interp` | 18 |
-| Verbal | `rc_single` (reading comprehension, single-select) | 446 |
-| Verbal | `tc` (text completion) | 348 |
-| Verbal | `se` (sentence equivalence) | 250 |
-| Verbal | `rc_multi` (reading comprehension, multi-select) | 82 |
-| **Total** | | **2,634** |
-
-**Live questions by source**
-
-| Source | Count |
-|---|---:|
-| `manhattan_5lb_2018` | 1,220 |
-| `ai_generated` | 728 |
-| `princeton_2012` | 370 |
-| `ai_synthetic` (expert-review-approved) | 180 |
-| `kaplan_2024` | 136 |
-
-**Live questions by difficulty** (1 = easiest, 5 = hardest)
-
-| Difficulty | Quant | Verbal | Total |
-|---:|---:|---:|---:|
-| 1 | 1 | 131 | 132 |
-| 2 | 294 | 210 | 504 |
-| 3 | 646 | 453 | 1,099 |
-| 4 | 528 | 235 | 763 |
-| 5 | 39 | 97 | 136 |
-
-**Top Verbal subtopics** (22 distinct non-empty subtopics total)
-
-| Subtopic | Count |
-|---|---:|
-| `rc_inference` | 67 |
-| `tc_2_blank` | 64 |
-| `rc_main_idea` | 63 |
-| `tc_1_blank` | 58 |
-| `rc_detail` | 44 |
-| `rc_tone_attitude` | 43 |
-| `tc_3_blank` | 37 |
-| `se_contrast` | 19 |
-| `se_synonyms` | 15 |
-| `rc_structure_function` | 10 |
-| *…12 more* | |
-| *(no subtopic tag yet)* | 622 |
-
-**Top Quant subtopics** (35 distinct non-empty subtopics total)
-
-| Subtopic | Count |
-|---|---:|
-| `word_problems` | 42 |
-| `triangles` | 32 |
-| `inequalities` | 30 |
-| `quadratics` | 29 |
-| `functions` | 27 |
-| `linear_equations_systems` | 27 |
-| `ratios_proportions` | 27 |
-| `fractions_decimals` | 22 |
-| `spread_distributions` | 21 |
-| `probability` | 20 |
-| `circles` | 19 |
-| `coordinate_geometry` | 19 |
-| `counting_combinatorics` | 19 |
-| `percents` | 19 |
-| `exponents_roots` | 18 |
-| `descriptive_stats` | 16 |
-| `quadrilaterals_polygons` | 15 |
-| *…18 more* | |
-| *(no subtopic tag yet)* | 968 |
-
-A sizable slice of the Manhattan 5lb corpus still sits at
-`topic=''`/`subtopic=''` — those items are live and render fine, but the
-drill flow currently skips them for subtopic-targeted practice. Closing
-the tagging gap is on the roadmap.
-
----
-
-## UI architecture
-
-A persistent left sidebar with five purpose-built tabs (each does one thing,
-and exactly one thing):
-
-| Tab | Job |
-|---|---|
-| **Today** (Cmd+1)    | One primary CTA chosen by the app + today's plan checklist + score-forecast range bar + recent activity |
-| **Learn** (Cmd+2)    | 48-cell mastery heatmap with filter chips (All / Weak / Mastered / Not started) + integrated subtopic detail with lesson + practice CTA |
-| **Practice** (Cmd+3) | Three distinct cards: Quick Drill (smart 10-Q), Section Test (timed verbal or quant), Full Mock Exam (AWA + 4 sections, ~2 h) |
-| **Vocab** (Cmd+4)    | Daily SRS flashcards (FSRS-inspired) with rich back-of-card content |
-| **Insights** (Cmd+5) | Score-forecast trend, per-measure mastery roll-up, study-plan summary, mistake-coach status, full test history |
-
-Below the tabs sit the streak badge and a Settings cog.
-
-### Visual design
-- Single dark theme (no light variant) — every color, font size, and
-  spacing token comes from `widgets/theme.py` and `widgets/ui_scale.py`.
-  No `wx.Colour(...)` or hardcoded font sizes anywhere in `screens/`.
-- Custom-painted reusable widgets: `Sidebar`, `Card`, `PrimaryButton`,
-  `SecondaryButton`, `EmptyState`, `RangeBar`, `Sparkline`, `Heatmap`,
-  `StreakBadge` — keeps appearance consistent across macOS / Linux /
-  Windows where stock wx widgets render inconsistently.
-
----
-
-## Project structure
-
-```
-gre_with_ai/
-├── app.py                              # Application entry point
-├── main_frame.py                       # Sidebar shell + screen orchestration + menus
-├── config.py                           # Exam constants + atomic LLM-config save
-│
-├── models/
-│   ├── database.py                     # Peewee ORM (~22 tables) + UserStats
-│   ├── migrations.py                   # On-launch schema migrator (5 migrations)
-│   ├── taxonomy.py                     # 48-subtopic taxonomy + display-name lookup
-│   └── exam_session.py                 # Section + adaptive state + journal
-│
-├── services/
-│   ├── llm_service.py                  # OpenRouter (httpx.Timeout + wx.CallAfter wrappers)
-│   ├── question_bank.py                # Composition-aware selection + smart drill + subtopic_summary
-│   ├── scoring.py                      # 11 subtype answer-checkers + scaled scoring (Fraction-space tolerance)
-│   ├── awa_scorer.py                   # ETS-rubric AWA scoring (prompt-injection hardened)
-│   ├── srs.py                          # FSRS-inspired vocab spaced repetition (NOT EXISTS subquery)
-│   ├── diagnostic.py                   # 30Q stratified diagnostic + grade_diagnostic (atomic)
-│   ├── mastery.py                      # EWMA per-subtopic mastery (symmetric scoring)
-│   ├── study_plan.py                   # Personalized plan via Opus 4.7
-│   ├── mistake_coach.py                # AnswerChat + analyze_mistakes (delimiter-wrapped prompts)
-│   ├── score_forecast.py               # Predicted scaled-score range + 10-point history
-│   ├── streak.py                       # Daily streak + freeze logic + onboarding state
-│   └── log.py                          # Centralized rotating-file + stderr logger
-│
-├── screens/
-│   ├── today_screen.py                 # Tab 1 — daily home
-│   ├── learn_screen.py                 # Tab 2 — heatmap + subtopic detail
-│   ├── practice_screen.py              # Tab 3 — three mode cards
-│   ├── vocab_screen.py                 # Tab 4 — flashcards
-│   ├── insights_screen.py              # Tab 5 — analytics
-│   ├── onboarding/
-│   │   └── wizard.py                   # 3-step first-launch flow
-│   ├── instructions_screen.py          # Pre-section briefing
-│   ├── awa_screen.py                   # Essay editor + 10s autosave to disk
-│   ├── question_screen.py              # All 11 subtypes; AI-tutor button
-│   ├── review_screen.py                # In-section review grid
-│   ├── results_screen.py               # Post-test scores
-│   ├── diagnostic_results_screen.py    # Diagnostic deep-dive + Build-Plan CTA
-│   ├── answer_chat_screen.py           # Per-question AI tutor dialog
-│   ├── llm_settings.py                 # Settings dialog (atomic save, 0o600)
-│   └── study_plan_dialog.py            # Plan-creation form
-│
-├── widgets/
-│   ├── theme.py                        # Color tokens + mastery_color()
-│   ├── ui_scale.py                     # DPI-aware fonts + semantic tokens (text_xs..display, space)
-│   ├── sidebar.py                      # 5-tab nav + streak badge + cog
-│   ├── card.py                         # Tokenized titled surface
-│   ├── primary_button.py               # Custom-painted accent CTA
-│   ├── secondary_button.py             # Custom-painted outlined chip
-│   ├── empty_state.py                  # Icon + headline + body + CTA
-│   ├── range_bar.py                    # Score-forecast min-max bar
-│   ├── sparkline.py                    # 10-point trend line
-│   ├── heatmap.py                      # 48-cell mastery grid
-│   ├── math_view.py                    # KaTeX HTML renderer (CSP, bleach sanitized)
-│   ├── html_sanitizer.py               # bleach allow-list for WebView
-│   ├── calculator.py                   # On-screen calc (forbids ** to prevent DoS)
-│   ├── numeric_entry.py                # Decimal / fraction input (finite-float guard)
-│   ├── question_nav.py                 # In-section question grid
-│   └── timer.py                        # Wallclock-anchored countdown
-│
-├── tests/                              # pytest suite (238 cases; see "Testing" below)
-│   ├── conftest.py                     # tmp_db fixture
-│   ├── test_scoring.py                 # 25 scoring engine + estimate cases
-│   ├── test_exam_session.py            # 11 adaptive routing + section-state cases
-│   └── test_streak.py                  # 9 streak / freeze / onboarding cases
-│
-├── scripts/                            # Build-time data tools (not invoked at runtime)
-│   ├── seed_data.py                    # Initial DB seed
-│   ├── retag_questions.py              # LLM re-tagging to subtopic taxonomy
-│   ├── generate_questions.py           # AI gen → fill subtopic gaps (atomic)
-│   ├── generate_lessons.py             # AI lesson + strategy generation
-│   ├── generate_explanations.py
-│   ├── curate_vocab.py                 # Tier 1/2/3 + retire low-value words
-│   ├── enrich_vocab.py                 # Examples, synonyms, mnemonics
-│   ├── fix_di_charts.py                # Inline-text DI → matplotlib chart
-│   ├── reconstruct_di_charts.py        # Back-construct charts for orphan DI
-│   ├── embed_chart_images.py           # file:// → base64 data URI
-│   ├── rate_difficulty.py              # LLM-rated difficulty 1-5
-│   └── cleanup_broken_questions.py
-│
-├── data/
-│   ├── gre_mock.db                     # Shipped SQLite seed, ~21 MB
-│   ├── gre_user.db                     # Per-user DB (gitignored; bootstrapped from seed on first launch)
-│   └── llm_config.json                 # User's API key (0o600, gitignored)
-│
-└── resources/
-    └── katex/                          # KaTeX library (math rendering)
-```
-
----
-
-## Architecture
+Source: [`docs/architecture/gre_architecture.py`](docs/architecture/gre_architecture.py) · PDF: [`docs/architecture/gre_architecture.pdf`](docs/architecture/gre_architecture.pdf)
 
 ### Three-layer separation
-1. **Deterministic core** — section engine, timer, scoring, adaptive
-   routing. Never depends on the LLM. The user's score is always computed
-   from the answer key, never from a model output. Lives in
-   `services/scoring.py`, `models/exam_session.py`, `widgets/timer.py`.
-2. **Runtime LLM layer (OpenRouter)** — AWA scoring, explanations,
-   study-plan generation, AI tutor chat, mistake-pattern coach. Calls go
-   through `services/llm_service.py` (httpx timeout + wx.CallAfter
-   marshalling). May be offline; the rest of the app degrades gracefully
-   (drills, mock tests, vocab review all work without an API key).
-3. **Build-time data generation** — the extraction / synthetic-generation /
-   expert-review pipelines that built the shipped `data/gre_mock.db` live
-   out-of-tree. They're not part of the public repo; end users never
-   invoke them.
 
-### Data flow
+1. **Deterministic core** (`services/scoring.py`, `models/exam_session.py`, `widgets/timer.py`) — section engine, timer, answer checking, adaptive routing. Never depends on the LLM; your score is always computed from the answer key.
+2. **LLM layer** (`services/llm_service.py` + friends) — AWA scoring, per-question tutor, mistake coach, study plans, explanation fallback. Gated by an OpenRouter API key; every UI surface that consumes it degrades gracefully when the key is absent.
+3. **Data layer** — SQLite + Peewee, ~25 tables, on-launch idempotent migrator. The shipped seed `data/gre_mock.db` is a tracked ~22 MB blob; per-user state lives in the gitignored `data/gre_user.db` bootstrapped from the seed on first launch.
 
-```
-First launch
-    │
-    └─► Onboarding wizard (Welcome → Goal → Diagnostic) ──► Today tab
-                                                                │
-                                            ┌───────────────────┘
-                                            ▼
-                                  ┌─────────────────────────┐
-                                  │   Today tab (home)      │
-                                  │   one primary CTA       │
-                                  └────────────┬────────────┘
-        ┌──────────────────┬─────────────────┬────────────┬──────────────┐
-        ▼                  ▼                 ▼            ▼              ▼
-    Learn tab         Practice tab        Vocab tab    Insights      AnswerChat
-    Heatmap +         Quick Drill /       FSRS         Forecast,     (per-Q tutor)
-    lesson            Section Test /      flashcards   plan,
-                      Full Mock                        coach,
-                                                       history
-        │                  │                 │
-        └──────────────────┴───►  QuestionScreen
-                                   │
-                                   ├─► ScoringEngine.check_answer
-                                   ├─► update_mastery (per subtopic)
-                                   ├─► record_activity (streak)
-                                   ├─► log_event (autosave journal)
-                                   └─► Response row persisted
-                                        │
-                                        └─► every 50 wrong: MistakeCoach
+### Session flow (Mermaid)
+
+```mermaid
+flowchart LR
+  L[Launch]:::ui --> O{Onboarded?}:::ui
+  O -- no --> W[Onboarding wizard]:::ui --> T
+  O -- yes --> T[Today tab]:::ui
+  T --> P[Practice / Drill / Mock]:::ui
+  P --> QS[Question screen]:::ui
+  QS -- answer --> SE[ScoringEngine]:::core
+  SE -- correct/wrong --> RDB[(Response row)]:::db
+  SE --> MU[update mastery EWMA]:::core
+  SE --> RU[update Elo rating]:::core
+  QS -- end-section --> SA[Section-adaptive router]:::core
+  SA -- theta / accuracy --> QB[QuestionBank.select_composed]:::core
+  QB -- pick --> QS
+  P -- session end --> RES[Results screen]:::ui
+  RES --> IL[Error Log + Insights]:::ui
+  classDef ui fill:#eef3fb,stroke:#b9c8de,color:#111;
+  classDef core fill:#eaf4ec,stroke:#b9d8bd,color:#111;
+  classDef db fill:#f4eefb,stroke:#c9b6e0,color:#111;
 ```
 
-### Database
+---
 
-SQLite + Peewee; the seed DB ships as a regular tracked blob. Schema
-migrations are applied on every launch via `models/migrations.py`:
+## Data model (Mermaid ER)
 
-| # | Migration | What it does |
+```mermaid
+erDiagram
+  QUESTION ||--o{ QUESTION_OPTION : has
+  QUESTION ||--o| NUMERIC_ANSWER : has
+  QUESTION }o--|| STIMULUS : references
+  QUESTION ||--o{ RESPONSE : answered_by
+  QUESTION ||--o| ITEM_RATING : elo
+  QUESTION ||--o{ ITEM_REVIEW : fsrs
+  QUESTION ||--o{ SERVED_LOG : exposure
+  QUESTION ||--o{ ITEM_STATS : aggregate
+  QUESTION ||--o{ QUESTION_FLAG : user_reports
+  SESSION ||--o{ SECTION_RESULT : contains
+  SECTION_RESULT ||--o{ RESPONSE : grades
+  SESSION ||--o| SCORING_RESULT : scored
+  VOCAB_WORD }o--o{ VOCAB_ROOT : composed_of
+  VOCAB_WORD ||--o{ FLASHCARD_REVIEW : srs
+  USER_STATS ||--|| SESSION : tracks
+  MASTERY_RECORD }o--|| QUESTION : per_subtopic
+  STUDY_PLAN ||--|| USER_STATS : personal
+
+  QUESTION {
+    int id PK
+    string subtype
+    string measure
+    int difficulty_target
+    string topic
+    string subtopic
+    string status "live|draft|retired|candidate"
+    string source
+  }
+  RESPONSE {
+    int id PK
+    int session_id FK
+    int section_result_id FK
+    int question_id FK
+    bool is_correct
+    int time_to_answer_ms
+    datetime answered_at
+  }
+  SERVED_LOG {
+    int id PK
+    int question_id FK
+    string session_id
+    datetime served_at
+  }
+  ITEM_RATING {
+    int question_id PK
+    float rating "Elo, seeded from difficulty"
+    int n_responses
+  }
+  ITEM_REVIEW {
+    int user_id
+    int question_id FK
+    float stability
+    float difficulty
+    datetime next_due
+  }
+```
+
+---
+
+## Content pipeline (Mermaid sequence)
+
+Every item in the shipped `data/gre_mock.db` came through the same five-stage extraction / generation pipeline. Each D-task has its own source-tag (`source=` column) so provenance is auditable downstream.
+
+```mermaid
+sequenceDiagram
+  participant Book as Source (ebook / PDF / open dataset)
+  participant Marker as marker-pdf / scraper
+  participant LLM as Reformat LLM (OpenRouter)
+  participant Judge as Judge pass (multi-model vote)
+  participant Solver as sympy / solver (quant only)
+  participant Vision as Vision audit
+  participant DB as data/gre_mock.db
+
+  Note over Book,DB: D1 ETS Official Guide 3rd ed
+  Book->>Marker: PDF chapters
+  Marker->>LLM: raw markdown
+  LLM->>Judge: structured question JSON
+  Judge->>Vision: figure-bearing items
+  Judge->>DB: upsert (source=ets_og_3rd)
+
+  Note over Book,DB: D2 ETS Big Book (retired paper exams)
+  Book->>Marker: scan PDFs
+  Marker->>LLM: OCR + reformat
+  LLM->>Judge: JSON
+  Judge->>DB: upsert (source=ets_bigbook)
+
+  Note over Book,DB: D4 AGIEval LSAT + Hendrycks MATH
+  Book->>LLM: open-license CSV
+  LLM->>Judge: GRE-style reformat
+  Judge->>DB: upsert (source=agieval_lsat / hendrycks_math)
+
+  Note over Book,DB: D5 NYC Regents scraper
+  Book->>Marker: HTML pages
+  Marker->>LLM: reformat
+  LLM->>DB: upsert (source=regents)
+
+  Note over Book,DB: D6 Quant gen v2 (LLM + solver + dual judge)
+  LLM->>Solver: candidate + answer key
+  Solver-->>LLM: verified key
+  LLM->>Judge: multi-judge vote (Opus + Sonnet + Gemini)
+  Judge->>DB: upsert (source=ai_synthetic)
+
+  Note over Book,DB: D7 RC passage gen from public-domain prose
+  Book->>LLM: Project Gutenberg snippets
+  LLM->>Judge: 3-stage (draft → critique → revise)
+  Judge->>DB: upsert (source=ai_generated)
+```
+
+---
+
+## Features
+
+| Area | What it does | Source |
 |---|---|---|
-| 001 | `numeric_answer_mode` | Add `mode` column; backfill from `numerator IS NOT NULL` |
-| 002 | `numeric_answer_default_tolerance` | Bump existing decimal answers from 0 → 0.001 |
-| 003 | `flashcard_review_indexes` | Index `next_review_at` + composite `(user_id, next_review_at)` |
-| 004 | `user_stats` | Seed singleton `UserStats` row for `user_id="local"` |
-| 005 | `onboarding_inferred_complete` | Auto-onboard users with prior `Response` rows |
+| **Full mock tests** | Post-Sep-2023 format: AWA + V1·12 + V2·15 + Q1·12 + Q2·15, 1h58m total, section-adaptive between V1→V2 and Q1→Q2 | [`models/exam_session.py`](models/exam_session.py) |
+| **All 11 question subtypes** | TC (1/2/3-blank), SE, RC single/multi/select-in-passage, QC, MCQ single/multi, Numeric Entry, Data Interpretation | [`services/scoring.py`](services/scoring.py) |
+| **Smart drill picker** | 60% never-seen + 30% wrong-before + 10% right-before, skipping items served in the last 14 days | [`services/question_bank.py`](services/question_bank.py) |
+| **Per-subtopic mastery** | EWMA over recent attempts, weighted by difficulty, with forgetting-curve decay; mastered at ≥0.80 over 10 attempts | [`services/mastery.py`](services/mastery.py) |
+| **Elo item rating** | Per-item Elo seeded from difficulty label, updated on every response; powers information-theoretic question selection | [`services/rating_service.py`](services/rating_service.py) |
+| **Randomesque selection** | Top-5-by-info + shuffle-within-top-5, smooths item exposure over long study horizons | [`services/question_bank.py`](services/question_bank.py) |
+| **FSRS item scheduler** | Wrong items can be scheduled for spaced review; reused from the vocab FSRS engine | [`services/srs.py`](services/srs.py) |
+| **Cross-session dedup** | Questions served in the current mock are excluded from the next one via `ServedLog` (independent of Response commits) | [`services/question_bank.py`](services/question_bank.py) |
+| **Cluster cooldown** | 7-day cooldown on RC passage + DI cluster stimulus IDs, so the same passage can't reappear within a week | [`services/question_bank.py`](services/question_bank.py) |
+| **Score forecast** | Logistic Verbal/Quant scaled-score range + 10-session sparkline | [`services/score_forecast.py`](services/score_forecast.py) |
+| **Diagnostic (30Q)** | Stratified intake produces per-topic accuracy, weakness ranking, predicted scaled-score band | [`services/diagnostic.py`](services/diagnostic.py) |
+| **Error log as UX** | Wrong answers classified (careless / conceptual / timing / vocab-gap), filtered, and actionable (Schedule Redo · Ask Tutor) | [`screens/error_log_screen.py`](screens/error_log_screen.py) |
+| **AWA scoring (LLM)** | ETS-rubric-aligned, 4 subscores (analysis / structure / support / conventions) with prompt-injection hardening | [`services/awa_scorer.py`](services/awa_scorer.py) |
+| **AnswerChat (LLM)** | Per-question tutor, scope-locked, never overrides the answer key | [`services/mistake_coach.py`](services/mistake_coach.py) |
+| **Mistake-pattern coach** | Every 50 lifetime mistakes, Opus analyzes the error log → 3-bullet diagnosis + targeted drill | [`services/mistake_coach.py`](services/mistake_coach.py) |
+| **Study plan generator** | Personalized week-by-week plan from diagnostic + mastery + bank availability | [`services/study_plan.py`](services/study_plan.py) |
+| **Vocab (9,647 words)** | FSRS flashcards with definition, examples, synonyms/antonyms, root analysis, mnemonic | [`services/srs.py`](services/srs.py) |
+| **Contextual vocab** | Generated 120-word passages + inference question per target word | [`services/vocab_context_gen.py`](services/vocab_context_gen.py) |
+| **Streak + onboarding** | Daily streak with freeze-day forgiveness; 3-step first-launch wizard | [`services/streak.py`](services/streak.py) |
+| **Crash recovery** | Every answer `fsync`'d to a journal; killed-mid-test state recoverable on next launch | [`models/exam_session.py`](models/exam_session.py) |
+| **DI charts** | Real matplotlib-rendered charts (pie, bar, line, scatter, table), base64-embedded — no `file://` exposure | [`widgets/math_view.py`](widgets/math_view.py) |
 
-Key tables: `Question`, `QuestionOption`, `NumericAnswer`, `Stimulus`,
-`Response`, `ItemStats`, `Session`, `SectionResult`, `AWAPrompt`,
-`AWASubmission`, `AWAResult`, `VocabWord`, `VocabRoot`, `FlashcardReview`,
-`MasteryRecord`, `Lesson`, `StudyPlan`, `DiagnosticResult`,
-`UserStats`, `SchemaMigration`.
+---
+
+## Tech stack
+
+| Layer | Choice | Rationale |
+|---|---|---|
+| Language | Python 3.9.6 | Wheel availability for wxPython on macOS; 3.13 is blocked by a numpy/clang mismatch |
+| GUI | wxPython 4.2.4 | Native widgets on macOS / Linux / Windows; `html2.WebView` for KaTeX-rendered stems |
+| ORM | Peewee | ~22 tables, migrations runnable at launch, lighter than SQLAlchemy for an embedded DB |
+| Database | SQLite | Zero-config, single-file, crash-safe with WAL, shippable as a seed blob |
+| Math rendering | KaTeX | Bundled under `resources/katex/`; sanitized via `bleach` + strict CSP |
+| Charts | matplotlib (dark theme) | Rendered once, embedded as base64 PNG into stimulus HTML |
+| LLM layer | OpenRouter | One API surface for Opus / Sonnet / Gemini; easy to swap judges |
+| Testing | pytest | 533 tests across 40+ modules; `tmp_db` fixture swaps to a throwaway DB |
+
+---
+
+## Dataset growth scripts
+
+Each of these builds items tagged with a unique `source=` and writes `provenance_json` for audit:
+
+| Script | What it does |
+|---|---|
+| [`scripts/extract_ets_og.py`](scripts/extract_ets_og.py) | ETS Official Guide 3rd ed. → marker-pdf → LLM reformat → upsert |
+| [`scripts/extract_ets_bigbook.py`](scripts/extract_ets_bigbook.py) | ETS Big Book retired-paper exams → OCR → reformat → subtype-filter |
+| [`scripts/extract_ets_bigbook_stub.py`](scripts/extract_ets_bigbook_stub.py) | Stub harness for iterating on the Big Book pipeline without the full PDF |
+| [`scripts/extract_agieval_math.py`](scripts/extract_agieval_math.py) | AGIEval LSAT-LR/RC + Hendrycks MATH → GRE-style reformat |
+| [`scripts/extract_regents.py`](scripts/extract_regents.py) | NYC Regents math exams → quant-reformat with solver verification |
+| [`scripts/generate_quant_items.py`](scripts/generate_quant_items.py) | Quant gen v2 — LLM + sympy solver verification + dual-judge vote |
+| [`scripts/generate_rc_passages.py`](scripts/generate_rc_passages.py) | RC passage gen from public-domain prose (3-stage draft→critique→revise) |
+| [`scripts/recalibrate_irt.py`](scripts/recalibrate_irt.py) | Offline 2PL IRT recalibration with `girth`, priors from Elo rating |
+| [`scripts/audit_data_corruption.py`](scripts/audit_data_corruption.py) | Heuristic scan for wrong-explanation / bad-figure rows |
+
+---
+
+## Development
+
+```bash
+# Activate the env
+source venv/bin/activate
+
+# Run the app
+python main.py
+
+# Run the test suite (533 tests, < 60s on an M-series Mac)
+venv/bin/python -m pytest tests/ -q
+
+# Run only the repetition-floor benchmark (20-mock simulation)
+venv/bin/python -m pytest tests/benchmarks/test_repetition_floor.py -v
+
+# Recalibrate IRT offline (optional, requires response data)
+venv/bin/python scripts/recalibrate_irt.py
+```
+
+### Adding a feature
+
+1. **Write the test first** under `tests/test_<feature>.py` using the `temp_db` fixture (see `tests/conftest.py`).
+2. **Put deterministic logic in `services/`** — never inside a screen. Screens are presentation only.
+3. **LLM calls go through `services/llm_service.py`** (never call `httpx` directly). The service wraps callbacks in `wx.CallAfter` and handles timeouts.
+4. **Schema changes require a migration**. Add the file under `models/migrations.py`, give it a numeric prefix + date, and make it idempotent (every migration runs at every launch).
+5. **UI tokens come from `widgets/theme.py` + `widgets/ui_scale.py`** — no hardcoded `wx.Colour` or font sizes in `screens/`.
+
+---
+
+## Bug reports
+
+Every question screen has a flag icon that opens a pre-filled GitHub issue with qid + source + full JSON + a PNG of the main window. See [`docs/reporting.md`](docs/reporting.md) for the full flow, the screenshot-capture fallback ladder, and what the developer sees on the other end.
+
+---
+
+## Data Interpretation charts
+
+DI questions render real visualisations (not inline text):
+
+- **Rendered charts** (pie, bar, grouped-bar, line, stacked-bar, scatter) ship as base64-encoded PNGs inlined into the stimulus HTML. The `html2.WebView` renders them without `file://` access, eliminating path-traversal surface.
+- **Tables** render as styled HTML; markdown pipe-tables in source content are converted to HTML at render time by `widgets/math_view._markdown_tables_to_html`.
+- **LaTeX inline math in options** is normalised to readable Unicode (options render as `wx.StaticText`, no KaTeX WebView needed).
+
+A figure audit over the quant corpus is documented in [`docs/figure_audit_2026_05_11.md`](docs/figure_audit_2026_05_11.md) — 1 mismatch out of 36 image-bearing items, already retired.
+
+---
+
+## Roadmap
+
+The full 90-day plan lives in [`docs/implementation_plan_2026_05_12.md`](docs/implementation_plan_2026_05_12.md):
+
+| Phase | Window | Deliverables |
+|---|---|---|
+| Phase 0 | Week 0 | Repetition-floor benchmark (P0.1) — done |
+| Phase 1 | Week 1 | R1–R5 quick wins: DI gate, figure floor, served-log, consecutive-mock exclude, widening fallback — done |
+| Phase 2 | Weeks 2–3 | Error-log-as-UX, FSRS items, Elo, randomesque, timing analytics (E1–E5) — done |
+| Phase 3 | Weeks 4–8 | Section-level CAT wire-up, contextual vocab, calibrated AWA, forgetting curve (S1–S4) — done |
+| Phase 4 | Weeks 9–12 | Offline IRT recalibration, score-forecast calibration, cluster cooldown, dataset Tier 1 (D1–D7) — done |
+
+Diagnosis of the original "repetitiveness" complaint that drove the plan: [`research/gre-repetitiveness-roadmap/report.md`](research/gre-repetitiveness-roadmap/report.md).
 
 ---
 
@@ -445,157 +320,37 @@ Key tables: `Question`, `QuestionOption`, `NumericAnswer`, `Stimulus`,
 
 ### Runtime LLM (OpenRouter)
 
-All in-app AI features go through OpenRouter via `services/llm_service.py`:
-
-| Feature | Where |
-|---------|-------|
-| AWA essay scoring | `services/awa_scorer.py` |
-| Per-question AI tutor (AnswerChat) | `services/mistake_coach.py` |
-| Mistake-pattern coach | `services/mistake_coach.py` |
-| AI study plan generator | `services/study_plan.py` |
-| Question explanations on demand | `services/explanation.py` |
-
-Configure via the in-app **Settings** dialog (saved atomically to
-`data/llm_config.json` with `chmod 0o600`) or environment variables:
+Configure via the in-app **Settings** dialog (atomically saved to `data/llm_config.json`, `chmod 0o600`) or environment variables:
 
 | Variable | Default | Purpose |
-|----------|---------|---------|
+|---|---|---|
 | `OPENROUTER_API_KEY` | — | Your OpenRouter key |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | API base URL |
 | `LLM_MODEL` | `anthropic/claude-opus-4` | Model id |
 | `LLM_MAX_TOKENS` | `4096` | Response cap |
 
 ### LLM call hardening
-- **Timeout**: connect 10 s, read 180 s, write 10 s, pool 10 s. Long
-  generations (study plans can take 90 s) succeed; stuck connections
-  surface as a friendly error rather than a hung UI.
-- **Threading**: `call_async` and `chat_async` wrap callbacks in
-  `wx.CallAfter` so callers can update the GUI directly without their
-  own marshalling.
-- **Prompt-injection delimiters**: AnswerChat and explanation prompts
-  wrap user-untrusted blocks (`<stimulus>`, `<prompt>`, `<options>`,
-  `<student_answer>`, `<explanation>`) and the system prompt explicitly
-  warns the model not to follow embedded instructions.
-- **WebView sanitization**: `widgets/html_sanitizer.py` runs every
-  LLM-generated stimulus/prompt/explanation through `bleach` before
-  it reaches `wx.html2.WebView.SetPage`. The page also has a strict CSP
-  (`default-src 'self' data:`, `connect-src 'none'`).
 
----
-
-## Testing
-
-```bash
-source venv/bin/activate
-pytest tests/ -v
-```
-
-238 tests across 17 modules cover:
-- **Scoring**: every subtype's `ScoringEngine.check_answer` (TC
-  empty-correct, numeric crash on bad data, tolerance None, fraction
-  equivalence, SE all-or-nothing, etc.) + `estimate_scaled_score`
-  defensive type-coercion.
-- **Exam flow**: section-adaptive routing at 40%/70% boundaries,
-  section-state navigation, mark / response / tick, cross-session
-  dedup, drill cluster atomicity.
-- **Blueprint assembly**: cluster-aware section assembly, RC passage
-  integrity.
-- **Spaced repetition**: scheduler (cluster-aware SRS, 0 DI overlaps
-  across 10 mocks).
-- **Rendering**: HTML sanitizer, MathView (plain-math normalisation,
-  Markdown bold/italic, newlines→`<br>`, markdown-table→HTML),
-  `latex_inline_to_text` option normalisation, explanation validation,
-  RC-select-passage UI, end-to-end render integrity, MathView figure
-  captions.
-- **In-app feedback**: question-flag dialog, issue-reporter URL build,
-  report-screenshot clipboard / file fallback.
-- **Habit**: streak gap / freeze / longest-streak / Sunday top-up,
-  onboarding state machine.
-
-`tests/conftest.py` provides a `temp_db` fixture that swaps `config.DB_PATH`
-to a `tmp_path` and re-imports `models.*` + `services.*` so tests never
-touch the user's real DB.
-
-### Screenshots
-
-Every PNG under `docs/screenshots/` is shipped in the repo and refreshed
-out-of-tree. The generator script (`capture_screenshots.py`) isn't
-tracked publicly — it lives alongside the other build-time tooling
-that produced the shipped assets. Contributors who need to regenerate
-the images should open an issue and I'll re-shoot + commit.
-
----
-
-## Data Interpretation Charts
-
-DI questions render real visualisations rather than inline text:
-
-- **Rendered charts** (pie, bar, grouped-bar, line, stacked-bar,
-  scatter) ship as base64-encoded PNGs inlined into the stimulus
-  HTML (`<img src="data:image/png;base64,…">`). The wxPython
-  `html2.WebView` renders them without needing `file://` access, so
-  there's no path-traversal surface.
-- **Tables** render as styled HTML (`<table>` / `<th>` / `<td>`).
-  Markdown pipe-tables in the source content are converted to HTML
-  at render time by `widgets/math_view._markdown_tables_to_html`, so
-  the two sources look identical on screen.
-- **Prompt + options**: LaTeX inline math in option labels is
-  normalised to readable Unicode by `widgets/latex_inline_text.py`
-  (options render as `wx.StaticText` with no KaTeX WebView).
-
-The extraction and generation pipelines that originally built these
-charts (Opus-emitted `chart_spec` JSON + matplotlib dark-theme
-renderer) live out-of-tree; the rendered PNGs are baked into the
-shipped `data/gre_mock.db`, so end users just see the finished
-stimuli.
+- **Timeout**: connect 10 s, read 180 s, write 10 s, pool 10 s. Long generations (study plans can take 90 s) succeed; stuck connections surface as a friendly error rather than a hung UI.
+- **Threading**: `call_async` / `chat_async` wrap callbacks in `wx.CallAfter` so GUI updates happen on the main thread.
+- **Prompt-injection hardening**: AnswerChat and explanation prompts wrap user-untrusted blocks (`<stimulus>`, `<prompt>`, `<options>`, `<student_answer>`, `<explanation>`) and the system prompt explicitly warns the model not to follow embedded instructions.
+- **WebView sanitization**: `widgets/html_sanitizer.py` runs every LLM-generated stimulus/prompt/explanation through `bleach` before `wx.html2.WebView.SetPage`. The page also has a strict CSP (`default-src 'self' data:`, `connect-src 'none'`).
 
 ---
 
 ## Troubleshooting
 
-**wxPython on Linux**
-> `pip install wxPython` may need GTK + WebKit dev headers:
-> `sudo apt install libgtk-3-dev libwebkit2gtk-4.0-dev`
+**wxPython on Linux** → `sudo apt install libgtk-3-dev libwebkit2gtk-4.0-dev` before `pip install wxPython`.
 
-**numpy / wxPython "metadata-generation-failed" on macOS Python 3.13**
-> Apple clang 17 + numpy 2.0.2 + Python 3.13 = source-build failure with
-> `error: no type named 'ptrdiff_t' in namespace 'std'`. Pinned wheels
-> only ship for Python 3.9–3.12.
-> **Fix:** delete the venv and re-run setup with Python 3.12:
-> ```bash
-> rm -rf venv
-> brew install python@3.12
-> PYTHON=python3.12 ./setup.sh
-> ```
-> The current `setup.sh` already prefers `python3.12` over `python3.13`
-> when both are present; this is only relevant if 3.12 is missing or
-> you forced `PYTHON=python3.13`.
+**numpy / wxPython "metadata-generation-failed" on macOS Python 3.13** → pin to Python 3.12 (`brew install python@3.12 && PYTHON=python3.12 ./setup.sh`).
 
-**Empty dashboard / "no questions"**
-> The seed DB `data/gre_mock.db` didn't land during clone. Re-run
-> `git clone` from scratch, or `git checkout HEAD -- data/gre_mock.db`.
+**Empty dashboard / "no questions"** → the seed DB didn't land during clone. `git checkout HEAD -- data/gre_mock.db`.
 
-**AWA score shows N/A / AI tutor doesn't open**
-> Configure your OpenRouter key via the Settings dialog (or
-> `OPENROUTER_API_KEY` env var). The Insights tab disables the
-> "Run coach now" button when no key is configured.
+**AWA score shows N/A / AI tutor doesn't open** → configure your OpenRouter key via Settings. The Insights tab disables the "Run coach now" button when no key is configured.
 
-**Database reset**
-> `git checkout HEAD -- data/gre_mock.db` to restore the shipped seed,
-> or `rm data/gre_user.db` to wipe your personal state and relaunch
-> (the app re-bootstraps `gre_user.db` from the seed on first launch).
+**Database reset** → `git checkout HEAD -- data/gre_mock.db` to restore the shipped seed, or `rm data/gre_user.db` to wipe your personal state. The app re-bootstraps `gre_user.db` from the seed on first launch.
 
-**Wizard re-appears every launch**
-> If you skipped onboarding but want it gone permanently:
-> ```python
-> from services.streak import mark_onboarding_complete
-> mark_onboarding_complete()
-> ```
-
-**Recover from a force-quit mid-test**
-> A timestamped `data/autosave_journal.YYYYMMDD_HHMMSS.jsonl.bak` is
-> archived on the next launch. Open it to inspect any answers you'd
-> committed before the crash.
+**Recover from a force-quit mid-test** → a timestamped `data/autosave_journal.YYYYMMDD_HHMMSS.jsonl.bak` is archived on the next launch.
 
 ---
 

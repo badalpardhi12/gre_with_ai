@@ -97,6 +97,10 @@ class AnswerReviewDialog(wx.Dialog):
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
         )
         self._details = question_details or []
+        # Per-card widget handles keyed by qid so we can disable the
+        # button and flip the label to "Reported" after a successful
+        # submission. Built up during _make_card.
+        self._report_widgets: dict = {}
         self.SetBackgroundColour(Color.BG_PAGE)
         self._build_ui()
 
@@ -182,7 +186,42 @@ class AnswerReviewDialog(wx.Dialog):
         )
         meta.SetForegroundColour(Color.TEXT_SECONDARY)
         meta_row.Add(meta, 0, wx.ALIGN_CENTER_VERTICAL)
-        sizer.Add(meta_row, 0, wx.ALL, 10)
+
+        # "Report issue" affordance on the far right. Lets the user
+        # flag a problem they only noticed during post-test review
+        # (mis-keyed answer, broken figure, typo…). Reuses the same
+        # FlagQuestionDialog the live question screen uses, so the
+        # reason list / GitHub URL format / QuestionFlag row stay
+        # consistent across entry points.
+        qid = detail.get("question_id")
+        meta_row.AddStretchSpacer(1)
+        report_btn = wx.Button(card, label="🚩 Report issue", style=wx.BU_EXACTFIT)
+        report_btn.SetToolTip(
+            "Flag a wrong answer, mismatched explanation, or "
+            "unanswerable question on this card."
+        )
+        reported_label = wx.StaticText(card, label="  ✓ Reported — thanks  ")
+        reported_label.SetForegroundColour(Color.SUCCESS)
+        rf = reported_label.GetFont()
+        rf.SetWeight(wx.FONTWEIGHT_BOLD)
+        reported_label.SetFont(rf)
+        reported_label.Hide()
+        if qid is None:
+            report_btn.Disable()
+            report_btn.SetToolTip("No qid attached to this card.")
+        else:
+            report_btn.Bind(
+                wx.EVT_BUTTON,
+                lambda evt, q=qid: self._on_report_clicked(q),
+            )
+            self._report_widgets[qid] = {
+                "button": report_btn,
+                "label": reported_label,
+                "card": card,
+            }
+        meta_row.Add(report_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+        meta_row.Add(reported_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+        sizer.Add(meta_row, 0, wx.ALL | wx.EXPAND, 10)
 
         # Stimulus (if present, truncated)
         stim = detail.get("stimulus")
@@ -270,3 +309,122 @@ class AnswerReviewDialog(wx.Dialog):
 
         card.SetSizer(sizer)
         return card
+
+    # ── Post-test report flow ────────────────────────────────────────
+    def _on_report_clicked(self, qid: int) -> None:
+        """Open the shared flag dialog; on OK persist + optionally
+        open the GitHub issue URL.
+
+        This mirrors `screens.question_screen._on_report_question` so
+        reports filed from the post-test review screen carry the same
+        metadata as reports filed during the live test.
+        """
+        from widgets.flag_dialog import FlagQuestionDialog
+        from services.question_bank import (
+            flag_question, auto_retire_flagged_questions,
+        )
+
+        dlg = FlagQuestionDialog(self, qid)
+        try:
+            if dlg.ShowModal() != wx.ID_OK:
+                return
+            reason = dlg.get_reason()
+            note = dlg.get_note()
+            if not reason:
+                return
+            ok = flag_question(qid, reason, note=note, user_id="local")
+            if not ok:
+                wx.MessageBox(
+                    "Sorry — we couldn't record that report. The question "
+                    "may have been removed.",
+                    "Report failed",
+                    wx.OK | wx.ICON_ERROR,
+                    parent=self,
+                )
+                return
+            # Auto-retire is cheap; keep the on-submit contract identical
+            # to the live screen's flow.
+            try:
+                auto_retire_flagged_questions()
+            except Exception:  # pragma: no cover — defensive
+                pass
+            self._mark_reported(qid)
+            self._offer_github_report(qid, reason, note)
+        finally:
+            dlg.Destroy()
+
+    def _mark_reported(self, qid: int) -> None:
+        """Flip the per-card UI to the post-submit state."""
+        handles = self._report_widgets.get(qid)
+        if not handles:
+            return
+        btn = handles.get("button")
+        lbl = handles.get("label")
+        card = handles.get("card")
+        if btn is not None:
+            btn.Disable()
+            btn.Hide()
+        if lbl is not None:
+            lbl.Show()
+        if card is not None:
+            card.Layout()
+
+    def _offer_github_report(self, qid: int, reason: str, note: str) -> None:
+        """Offer to open a pre-filled GitHub issue URL.
+
+        Failures here are non-fatal — the QuestionFlag row is already
+        persisted, so the local audit trail is intact even if the
+        browser hand-off fails.
+        """
+        import webbrowser
+        try:
+            from services.issue_reporter import build_issue_url
+            from models.database import Question
+            # Find the detail dict so we can ship the full question
+            # payload to the issue template.
+            payload = None
+            for d in self._details:
+                if d.get("question_id") == qid:
+                    payload = dict(d)
+                    payload["id"] = qid
+                    break
+            if payload is None:
+                payload = {"id": qid}
+            q_row = Question.get_or_none(Question.id == qid)
+            if q_row is not None:
+                payload["source"] = q_row.source
+                payload["status"] = q_row.status
+            combined_comment = note or ""
+            if reason:
+                prefix = f"[reason: {reason}] (reported from post-test review)"
+                combined_comment = (
+                    f"{prefix}\n\n{combined_comment}".strip()
+                    if combined_comment
+                    else prefix
+                )
+            url = build_issue_url(payload, combined_comment)
+        except Exception as exc:  # pragma: no cover — defensive
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to build issue URL from review screen for q%s: %s",
+                qid, exc,
+            )
+            wx.MessageBox(
+                "Thanks — your report was recorded locally.",
+                "Reported", wx.OK | wx.ICON_INFORMATION, parent=self,
+            )
+            return
+
+        resp = wx.MessageBox(
+            "Thanks — your report was recorded locally.\n\n"
+            "Open a pre-filled GitHub issue in your browser so the "
+            "developer sees it too?",
+            "Send report to the developer?",
+            wx.YES_NO | wx.ICON_QUESTION,
+            parent=self,
+        )
+        if resp == wx.YES:
+            try:
+                webbrowser.open(url)
+            except Exception:  # pragma: no cover — defensive
+                pass

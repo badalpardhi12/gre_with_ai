@@ -1127,6 +1127,90 @@ def _028_served_log_stim_id_2026_05_12():
                 raise
 
 
+# Task #19 — 11 Manhattan 5lb Ch24 rows (the "first Q of each set" each
+# extractor run produced) that the re-extraction under
+# ``manhattan_5lb_2018_ch24_di_v2`` supersedes with proper 1-chart-3+Q
+# clusters.  Listed by qid rather than derived because the upstream
+# prompts are stable and this keeps the migration reviewable.
+_MANHATTAN_CH24_SINGLETONS_TO_RETIRE_2026_05_13 = (
+    3598,  # Set 1 — 9th Grade Students at Millbrook (table)
+    3603,  # Set 2 — Marshville Toy Company hours (table)
+    3606,  # Set 3 — Max-temperature bar chart (graph)
+    3610,  # Set 4 — Survey of 557 Pet Households (table)
+    3614,  # Set 5 — Town Elevations line graph (graph)
+    3616,  # Set 6 — GPA comparison 1950 vs 2000 (graph)
+    3620,  # Set 7 — Machine operator defects scatter plot (graph)
+    3624,  # Set 8 — Varsity Sports roster chart (graph)
+    3628,  # Set 9 — Store revenue change table (table)
+    3630,  # Set 10 — Population & GDP 50 African countries (graph)
+    3634,  # Set 11 — Owner-occupied housing pie chart (graph)
+)
+
+
+def _029_retire_manhattan_di_singletons_2026_05_13():
+    """Task #19 — retire the 11 Manhattan 5lb Chapter 24 DI singletons.
+
+    Context
+    -------
+    The original ``manhattan_5lb_2018`` extractor imported each DI "set"
+    as a single lone question (the first one under each chart), dropping
+    the 3-5 sibling questions that actually belonged to the same
+    stimulus.  Every one of these rows has ``COUNT(stimulus_id) = 1``,
+    which is pathological for Data Interpretation — students would see
+    a chart, answer one question, never see its siblings, and get
+    charged the full chart-comprehension overhead for a single data
+    point.  This was root-cause #1.2 in the repetitiveness audit
+    (``research/gre-repetitiveness-roadmap/report.md``).
+
+    What replaces them
+    ------------------
+    ``scripts/extract_manhattan_di_clusters.py`` re-extracts the same
+    chapter from ``data/extracted/manhattan/ch24_raw.json`` as proper
+    clusters under ``source='manhattan_5lb_2018_ch24_di_v2'``.  The new
+    rows land with ``status='candidate'`` (review required before they
+    go live) and share their cluster's ``stimulus_id``.
+
+    What this migration does
+    ------------------------
+    Marks the 11 legacy qids as ``status='retired'`` and appends a
+    ``retired_reason`` + ``retired_by_migration`` entry to each row's
+    ``provenance_json``.  The sibling already-retired 4 qids from this
+    chapter (3606, 3614, 3616, 3624 — already retired for image-text
+    mismatches in migrations 020/021/022) are left alone by the
+    ``status != 'retired'`` guard.
+
+    Idempotent — the guard makes re-runs no-ops.
+    """
+    db = _get_db()
+    import json as _json
+    for qid in _MANHATTAN_CH24_SINGLETONS_TO_RETIRE_2026_05_13:
+        row = db.execute_sql(
+            "SELECT status, provenance_json FROM question WHERE id=?",
+            (qid,),
+        ).fetchone()
+        if row is None:
+            continue  # qid not in this DB — ignore
+        status, prov_raw = row
+        if status == "retired":
+            continue  # already retired (earlier migration or manual)
+        try:
+            prov = _json.loads(prov_raw) if prov_raw else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        prov["retired_reason"] = (
+            "Replaced by manhattan_5lb_2018_ch24_di_v2 cluster "
+            "re-extraction (Task #19 — proper 1-chart-3+Q DI sets)."
+        )
+        prov["retired_by_migration"] = "029_retire_manhattan_di_singletons_2026_05_13"
+        db.execute_sql(
+            "UPDATE question SET status='retired', provenance_json=? "
+            "WHERE id=? AND status != 'retired'",
+            (_json.dumps(prov), qid),
+        )
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -1176,6 +1260,8 @@ MIGRATIONS = [
      _027_vocab_context_2026_05_12),
     ("028_served_log_stim_id_2026_05_12",
      _028_served_log_stim_id_2026_05_12),
+    ("029_retire_manhattan_di_singletons_2026_05_13",
+     _029_retire_manhattan_di_singletons_2026_05_13),
 ]
 
 

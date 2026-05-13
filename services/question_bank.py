@@ -99,7 +99,15 @@ QUANT_COMPOSITION = {
 # final fallback.
 DI_STIMULUS_TYPES = ("graph", "table", "chart")
 DI_CLUSTER_TARGET_SIZE = 3
-DI_CLUSTER_MIN_SIZE = 2  # degrade gracefully when a 3-cluster is unavailable
+# Minimum ``live`` siblings a stimulus must have to be eligible as a real
+# DI cluster. Previously this was ``2`` (require a pair), which silently
+# disqualified every stimulus in the current seed bank (0 graph/table
+# stimuli have >=2 live children). Lowered to ``1`` so the selector emits
+# a result for every stimulus with at least one live child; the selector
+# still prefers true multi-sibling clusters (size >=2) and only uses
+# size-1 stimuli to compose an "independent singletons" DI block across
+# three DIFFERENT stimuli when no real cluster is available.
+DI_CLUSTER_MIN_SIZE = 1
 
 # Minimum figure-bearing Quant items per section. Kaplan/Princeton +
 # ETS community consensus: 25–35% of Quant items reference a figure
@@ -496,9 +504,10 @@ class QuestionBankService:
                     0, targets.get("data_interp", 0) - len(di_cluster))
             else:
                 logger.warning(
-                    "DI-cluster gap: no graph/table stimulus with >=%d live "
-                    "quant siblings at band=%s; section falls through to solo "
-                    "data_interp items.", DI_CLUSTER_MIN_SIZE, difficulty_band,
+                    "DI-cluster gap: no DI items available (neither a "
+                    "multi-sibling graph/table cluster nor a distinct-"
+                    "stimulus singleton composition) at band=%s; section "
+                    "will fall through with no DI block.", difficulty_band,
                 )
 
             # Figure-floor pass: ensure the section contains at least
@@ -912,10 +921,17 @@ class QuestionBankService:
         Prefers a real 3-question cluster under a graph/table/chart
         stimulus (children can be any quant subtype — real DI sets mix
         mcq_single / qc / numeric_entry). Falls back to a 2-question
-        cluster, then (last resort) to solo ``data_interp`` items.
+        cluster. When no multi-sibling cluster exists (current seed bank
+        reality: every DI stimulus is a singleton), composes a DI block
+        from three DIFFERENT singleton stimuli so picks spread across
+        the whole DI pool instead of drawing 3-at-a-time from a tiny
+        random shuffle — this was the root cause of DI items repeating
+        by mock #2 in the repetition-floor benchmark.
 
-        Atomicity: if any sibling is already in ``exclude_ids``, the
-        whole cluster is skipped rather than split.
+        Atomicity: if any sibling of a real multi-cluster is already in
+        ``exclude_ids``, the whole cluster is skipped rather than split.
+        The distinct-stimuli fallback naturally respects exclusion since
+        each pick is independent.
 
         Returns a list of question IDs (0..DI_CLUSTER_TARGET_SIZE items),
         empty when nothing is available.
@@ -935,17 +951,23 @@ class QuestionBankService:
         if clause is not None:
             cand = cand.where(clause)
 
-        triples, pairs = [], []
+        triples, pairs, singletons = [], [], []
         for row in cand:
             n = row.n
             if n >= DI_CLUSTER_TARGET_SIZE:
                 triples.append(row.stimulus_id)
-            elif n >= DI_CLUSTER_MIN_SIZE:
+            elif n >= 2:
                 pairs.append(row.stimulus_id)
+            else:
+                # n == 1 — stimulus with a single live child. Held for
+                # the distinct-stimuli composition branch below.
+                singletons.append(row.stimulus_id)
 
         random.shuffle(triples)
         random.shuffle(pairs)
 
+        # Try real multi-sibling clusters first (preserves GRE "one
+        # chart, three questions" shape when the bank supports it).
         for stim_id in triples + pairs:
             siblings = list(
                 Question.select(Question.id)
@@ -969,45 +991,85 @@ class QuestionBankService:
             random.shuffle(sibling_ids)
             return sibling_ids[:DI_CLUSTER_TARGET_SIZE]
 
-        # Final fallback: solo items tagged ``data_interp`` (legacy seed).
-        # Prefer items whose stimulus carries a real chart/graph image
-        # (``<img>`` / ``data:image/``) over HTML-table DI stimuli —
-        # users reported "not seeing any graph-based DI questions"
-        # because the random shuffle here historically pulled the 9
-        # ai_generated HTML-table DI items ~2x more often than the 5
-        # image-bearing ones. Splitting into two pools and picking
-        # image-bearing first restores the "one chart, three questions"
-        # visual even though we can't yet ship a real multi-Q cluster.
-        # Every ``subtype='data_interp'`` row has a stimulus_id (no
-        # orphans as of migration 020), so INNER JOIN is safe here.
-        solo = (
+        # Distinct-stimuli composition fallback.
+        #
+        # The seed bank currently has 0 graph/table/chart stimuli with
+        # >=2 live children, so the cluster branch above always falls
+        # through. Previously the code then drew ``DI_CLUSTER_TARGET_SIZE``
+        # items in a single shuffle from a 14-item pool (the
+        # ``subtype == 'data_interp'`` slice only), and nothing forced
+        # picks onto distinct stimuli — so DI repeats were showing up by
+        # mock #2 in a 20-mock binge.
+        #
+        # Approach (A) per docs/implementation_plan_2026_05_12.md Phase
+        # 1 R1: compose the DI block by picking ONE child qid from each
+        # of three DIFFERENT singleton stimuli in the graph/table/chart
+        # umbrella. This pool is ~49 stimuli (vs. 14 subtype-filtered)
+        # because real DI children are labelled as qc / mcq_single /
+        # numeric_entry just as often as data_interp. Spreading across
+        # the full set is the whole point of R1.
+        if not singletons:
+            return []
+
+        random.shuffle(singletons)
+        # Build a per-stimulus "preferred qid" map with one query so we
+        # don't N+1. Pull id + content together so we can still rank
+        # image-bearing stimuli over HTML-table ones.
+        singleton_children = (
             Question.select(Question.id,
+                            Question.stimulus_id,
+                            Question.difficulty_target,
                             Stimulus.content.alias("stim_content"))
             .join(Stimulus, on=(Stimulus.id == Question.stimulus))
-            .where(Question.measure == "quant",
-                   Question.subtype == "data_interp",
-                   Question.status == "live")
+            .where((Question.measure == "quant") &
+                   (Question.status == "live") &
+                   (Question.stimulus_id.in_(singletons)))
         )
-        if difficulty_band == "easy":
-            solo = solo.where(Question.difficulty_target <= 2)
-        elif difficulty_band == "hard":
-            solo = solo.where(Question.difficulty_target >= 4)
-        if exclude_list:
-            solo = solo.where(Question.id.not_in(exclude_list))
         clause = _exclude_synthetic_clause()
         if clause is not None:
-            solo = solo.where(clause)
+            singleton_children = singleton_children.where(clause)
 
-        image_ids, table_ids = [], []
-        for q in solo:
-            content = getattr(q, "stim_content", "") or ""
+        # Bucket: stim_id -> list of candidate qids (there may be >1 if
+        # the outer HAVING group collapsed duplicates). Rank: image-bearing
+        # first, HTML-table second. Respect difficulty_band + exclude_ids.
+        image_buckets = {}   # stim_id -> list[qid]
+        table_buckets = {}   # stim_id -> list[qid]
+        for row in singleton_children:
+            qid = row.id
+            if exclude_ids and qid in exclude_ids:
+                continue
+            if difficulty_band == "easy" and (row.difficulty_target or 0) > 2:
+                continue
+            if difficulty_band == "hard" and (row.difficulty_target or 0) < 4:
+                continue
+            content = getattr(row, "stim_content", "") or ""
+            stim_id = row.stimulus_id
             if "<img" in content or "data:image/" in content:
-                image_ids.append(q.id)
+                image_buckets.setdefault(stim_id, []).append(qid)
             else:
-                table_ids.append(q.id)
-        random.shuffle(image_ids)
-        random.shuffle(table_ids)
-        return (image_ids + table_ids)[:DI_CLUSTER_TARGET_SIZE]
+                table_buckets.setdefault(stim_id, []).append(qid)
+
+        # Order stim_ids: image-bearing shuffled, then table-bearing
+        # shuffled; a stimulus that appears in both lists (unlikely
+        # since each stim is one content blob) is kept only in the
+        # image list.
+        image_stims = list(image_buckets.keys())
+        table_stims = [s for s in table_buckets.keys()
+                       if s not in image_buckets]
+        random.shuffle(image_stims)
+        random.shuffle(table_stims)
+
+        picked = []
+        for stim_id in image_stims + table_stims:
+            if len(picked) >= DI_CLUSTER_TARGET_SIZE:
+                break
+            candidates = (image_buckets.get(stim_id, [])
+                          + table_buckets.get(stim_id, []))
+            if not candidates:
+                continue
+            random.shuffle(candidates)
+            picked.append(candidates[0])
+        return picked
 
     @staticmethod
     def _any_sibling_matches(sibling_ids, op, threshold):

@@ -128,3 +128,7 @@ setup.log
 # Blueprint PDF (large binary)
 *.pdf
 .claude/worktrees/
+
+# Rolling benchmark snapshot regenerated on every pytest run; the Phase
+# 0 baseline is preserved as tests/benchmarks/baseline_2026_05_12.json.
+tests/benchmarks/current_snapshot.json

@@ -162,7 +162,14 @@ def _simulate_mocks():
                     exclude_ids=list(in_mock_seen),
                     exclude_user_seen=user_id,
                 )
-                # Enrich: fetch stimulus_id + subtype in one query.
+                # Enrich: fetch stimulus_id + subtype + stimulus type in
+                # one query.  After Phase 1 R1 the DI block is composed
+                # from items whose *stimulus* is graph/table/chart,
+                # regardless of subtype label (real DI children ship as
+                # qc / mcq_single / numeric_entry just as often as
+                # data_interp). The ``is_di`` classifier must match the
+                # selector's definition, otherwise the metric will not
+                # reflect the spread the selector is now producing.
                 if not qids:
                     continue
                 rows = (
@@ -171,15 +178,36 @@ def _simulate_mocks():
                             Question.measure)
                     .where(Question.id.in_(qids))
                 )
+                # Second pass: map stimulus_id -> stimulus_type for the
+                # qids we picked, so the ``is_di`` classifier can include
+                # items whose stimulus is graph/table/chart (post-R1 DI
+                # pool is wider than ``subtype == 'data_interp'``).
+                stim_ids = [r.stimulus_id for r in rows
+                            if r.stimulus_id is not None]
+                stim_type_map = {}
+                if stim_ids:
+                    stim_rows = (Stimulus.select(Stimulus.id,
+                                                 Stimulus.stimulus_type)
+                                 .where(Stimulus.id.in_(stim_ids)))
+                    stim_type_map = {s.id: s.stimulus_type for s in stim_rows}
                 meta = {
-                    r.id: (r.subtype, r.stimulus_id, r.measure)
+                    r.id: (r.subtype, r.stimulus_id, r.measure,
+                           stim_type_map.get(r.stimulus_id))
                     for r in rows
                 }
                 fig_set = _figure_bearing_qids(qids, Question, Stimulus)
 
                 for qid in qids:
-                    subtype, stim_id, m = meta.get(qid, (None, None, measure))
-                    is_di = (subtype == "data_interp")
+                    subtype, stim_id, m, stim_type = meta.get(
+                        qid, (None, None, measure, None))
+                    # DI = explicit ``data_interp`` subtype OR any quant
+                    # item whose stimulus is graph/table/chart (the
+                    # broader post-R1 DI pool).
+                    is_di = (
+                        subtype == "data_interp"
+                        or (m == "quant"
+                            and stim_type in ("graph", "table", "chart"))
+                    )
                     is_rc = subtype in ("rc_single", "rc_multi",
                                         "rc_select_passage")
                     is_figure = qid in fig_set
@@ -304,14 +332,25 @@ def _get_metrics():
 
 
 def test_baseline_snapshot():
-    """Run the 20-mock simulation and persist the baseline JSON.
+    """Run the 20-mock simulation and persist a snapshot JSON.
 
     Always passes — this is the recording step, not the gate. The gate
     lives in ``test_post_phase1_targets`` below.
+
+    Preservation rule: the Phase 0 baseline (``baseline_2026_05_12.json``)
+    is the *before-fix* artifact and must never be rewritten once Phase
+    1 work starts. If the baseline file already exists, this test writes
+    the current run's metrics to ``current_snapshot.json`` instead so
+    you can diff against the baseline without clobbering it.
     """
     metrics = _get_metrics()
     BASELINE_JSON.parent.mkdir(parents=True, exist_ok=True)
-    with open(BASELINE_JSON, "w") as f:
+    if BASELINE_JSON.exists():
+        # Preserve the pre-R1 baseline; write to a rolling snapshot file.
+        snapshot_path = BASELINE_JSON.parent / "current_snapshot.json"
+    else:
+        snapshot_path = BASELINE_JSON
+    with open(snapshot_path, "w") as f:
         json.dump(metrics, f, indent=2, sort_keys=True)
     # Minimal sanity asserts — if these fail the simulation is broken,
     # not the assembler.

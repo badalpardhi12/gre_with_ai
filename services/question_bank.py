@@ -73,6 +73,80 @@ DEFAULT_MASTERY_COOLDOWN_DAYS = 60
 AUTO_RETIRE_THRESHOLD_DEFAULT = 3
 
 
+# Phase 2 E5: randomesque item selection — pick one qid uniformly from the
+# top-M candidates closest to the user's theta, then shuffle the rest.
+# Degrades gracefully to pure random when the rating service is not
+# importable or no candidate has a rating. Toggle off for benchmarks/tests
+# that want the legacy behaviour.
+RANDOMESQUE_ENABLED = True
+RANDOMESQUE_DEFAULT_M = 5
+
+
+def _randomesque_pick(candidate_ids, m=RANDOMESQUE_DEFAULT_M):
+    """Shuffle ``candidate_ids`` with a theta-aware front bias.
+
+    The first element is drawn uniformly at random from the top-``m``
+    candidates whose ``|rating - user_theta|`` is smallest (most
+    informative for the current ability estimate). The remaining
+    candidates follow in random order.
+
+    Graceful degradation: if ``services.rating_service`` cannot be
+    imported, or none of the candidates has a rating, or
+    ``RANDOMESQUE_ENABLED`` is False, this falls back to plain
+    ``random.shuffle`` and returns an equivalently shuffled list — the
+    caller never has to care which path was taken.
+
+    The input list is NOT mutated; a new list is always returned. An
+    empty input yields an empty list. ``m`` is clamped to at least 1 and
+    at most ``len(candidate_ids)``.
+    """
+    # Tolerate generators/tuples — callers sometimes pass these.
+    ids = list(candidate_ids) if not isinstance(candidate_ids, list) \
+        else list(candidate_ids)
+    if not ids:
+        return []
+
+    if not RANDOMESQUE_ENABLED:
+        random.shuffle(ids)
+        return ids
+
+    # Runtime import so module-load stays cheap and so this file still
+    # imports cleanly in worktrees where rating_service hasn't landed
+    # yet (Phase 2 E4 lands in parallel).
+    try:
+        from services import rating_service  # type: ignore
+        theta = rating_service.get_user_theta()
+        ratings = {qid: rating_service.get_rating(qid) for qid in ids}
+    except Exception:
+        random.shuffle(ids)
+        return ids
+
+    # If the service exists but has no ratings for any candidate, the
+    # theta distance collapses — fall back to plain random.
+    rated = [(qid, ratings.get(qid)) for qid in ids
+             if ratings.get(qid) is not None]
+    if not rated:
+        random.shuffle(ids)
+        return ids
+
+    # Rank by distance to theta (smallest = most informative). Stable
+    # sort keeps tie-breaking deterministic per-call; randomness enters
+    # only in the uniform draw over top-M.
+    try:
+        rated.sort(key=lambda pair: abs(pair[1] - theta))
+    except Exception:
+        random.shuffle(ids)
+        return ids
+
+    top_m = max(1, min(m, len(rated)))
+    front_pool = rated[:top_m]
+    winner_qid = random.choice(front_pool)[0]
+
+    rest = [qid for qid in ids if qid != winner_qid]
+    random.shuffle(rest)
+    return [winner_qid] + rest
+
+
 # Real GRE composition targets per section (proportions sum to 1.0)
 # Source: ETS GRE official guide — Verbal/Quant section composition
 VERBAL_COMPOSITION = {
@@ -461,9 +535,11 @@ class QuestionBankService:
         if not never_seen and not wrong_before and not right_before:
             never_seen = [q.id for q in all_qs]
 
-        random.shuffle(never_seen)
-        random.shuffle(wrong_before)
-        random.shuffle(right_before)
+        # Phase 2 E5: theta-aware front bias per qid pool (gracefully
+        # falls back to plain shuffle when rating_service is unavailable).
+        never_seen = _randomesque_pick(never_seen)
+        wrong_before = _randomesque_pick(wrong_before)
+        right_before = _randomesque_pick(right_before)
 
         # Compose drill: most never-seen, then wrong-before for review, fill with right-before
         target = count
@@ -510,7 +586,9 @@ class QuestionBankService:
             query = query.where(clause)
 
         available = [q.id for q in query]
-        random.shuffle(available)
+        # Phase 2 E5: theta-aware within-band selection (graceful fallback
+        # to plain shuffle when rating_service is unavailable).
+        available = _randomesque_pick(available)
         return available[:count]
 
     def select_questions_composed(self, measure, count, difficulty_band="medium",

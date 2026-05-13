@@ -23,6 +23,7 @@ from models.database import (
 from services.log import get_logger
 from services.score_forecast import overall_forecast, forecast_history
 from services.study_plan import get_active_plan
+from services.timing_analytics import per_subtype_p50_p90, outliers
 from widgets import ui_scale
 from widgets.card import Card
 from widgets.primary_button import PrimaryButton
@@ -55,6 +56,7 @@ class InsightsScreen(wx.Panel):
             (self._refresh_forecast, "forecast"),
             (self._refresh_mastery, "mastery"),
             (self._refresh_plan, "plan"),
+            (self._refresh_timing, "timing"),
             (self._refresh_history, "history"),
         ):
             try:
@@ -98,6 +100,10 @@ class InsightsScreen(wx.Panel):
         row2.Add(self._build_coach_card(), 1, wx.EXPAND |
                  wx.LEFT | wx.RIGHT | wx.TOP, ui_scale.space(5))
         col.Add(row2, 0, wx.EXPAND)
+
+        # Timing panel (P2.E3): per-subtype P50/P90 bars + outlier count.
+        col.Add(self._build_timing_card(), 0, wx.EXPAND |
+                wx.LEFT | wx.RIGHT | wx.TOP, ui_scale.space(5))
 
         # History list
         col.Add(self._build_history_card(), 0, wx.EXPAND |
@@ -179,6 +185,21 @@ class InsightsScreen(wx.Panel):
                              lambda _: (self._on_run_coach and
                                         self._on_run_coach()))
         self._coach_body.Add(self._coach_btn, 0)
+        return card
+
+    def _build_timing_card(self):
+        card = Card(self.content, title="TIMING (LAST 30 DAYS)")
+        self._timing_body = card.body
+        self._timing_card = card
+
+        self._timing_summary = wx.StaticText(card, label="Loading…")
+        self._timing_summary.SetForegroundColour(Color.TEXT_SECONDARY)
+        self._timing_summary.SetFont(wx.Font(
+            ui_scale.text_sm(), wx.FONTFAMILY_DEFAULT,
+            wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL,
+        ))
+        self._timing_body.Add(self._timing_summary, 0, wx.BOTTOM,
+                              ui_scale.space(2))
         return card
 
     def _build_history_card(self):
@@ -325,6 +346,82 @@ class InsightsScreen(wx.Panel):
         else:
             self._coach_btn.Enable(False)
             self._coach_btn.set_label("Configure LLM key in Settings")
+
+    def _refresh_timing(self):
+        # Clear previous rows (keep the summary label at index 0).
+        self._timing_body.Clear(True)
+        self._timing_summary = wx.StaticText(self._timing_card, label="")
+        self._timing_summary.SetForegroundColour(Color.TEXT_SECONDARY)
+        self._timing_summary.SetFont(wx.Font(
+            ui_scale.text_sm(), wx.FONTFAMILY_DEFAULT,
+            wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL,
+        ))
+        self._timing_body.Add(self._timing_summary, 0, wx.BOTTOM,
+                              ui_scale.space(2))
+
+        try:
+            stats = per_subtype_p50_p90(days=30)
+            outlier_count = len(outliers(days=30))
+        except Exception:
+            logger.exception("timing analytics query failed")
+            stats, outlier_count = {}, 0
+
+        if not stats:
+            self._timing_summary.SetLabel(
+                "No timing data yet — answer a few questions to unlock "
+                "per-subtype pacing.")
+            return
+
+        total_n = sum(s["n"] for s in stats.values())
+        self._timing_summary.SetLabel(
+            f"{total_n} responses across {len(stats)} subtypes  ·  "
+            f"{outlier_count} outlier{'s' if outlier_count != 1 else ''} "
+            "(>=2 SDs over mean)"
+        )
+
+        # Determine max P90 for bar scaling so every subtype shares a scale.
+        max_ms = max(s["p90"] for s in stats.values()) or 1
+        for subtype in sorted(stats.keys()):
+            s = stats[subtype]
+            self._timing_body.Add(
+                self._render_timing_row(subtype, s, max_ms),
+                0, wx.BOTTOM, ui_scale.space(2),
+            )
+
+    def _render_timing_row(self, subtype, stats, max_ms) -> wx.BoxSizer:
+        row = wx.BoxSizer(wx.HORIZONTAL)
+
+        lbl = wx.StaticText(self._timing_card,
+                            label=f"{subtype[:14]:14s}")
+        lbl.SetForegroundColour(Color.TEXT_PRIMARY)
+        lbl.SetFont(wx.Font(
+            ui_scale.text_sm(), wx.FONTFAMILY_TELETYPE,
+            wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL,
+        ))
+        row.Add(lbl, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
+                ui_scale.space(3))
+
+        bar = _SegmentedBar(self._timing_card,
+                            fraction=stats["p90"] / max_ms)
+        bar.SetMinSize((ui_scale.font_size(180), ui_scale.space(4)))
+        row.Add(bar, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
+                ui_scale.space(3))
+
+        def _fmt(ms):
+            return f"{ms / 1000:.1f}s"
+
+        stat_lbl = wx.StaticText(
+            self._timing_card,
+            label=f"P50 {_fmt(stats['p50'])}  P90 {_fmt(stats['p90'])}  "
+                  f"(n={stats['n']})",
+        )
+        stat_lbl.SetForegroundColour(Color.TEXT_SECONDARY)
+        stat_lbl.SetFont(wx.Font(
+            ui_scale.text_sm(), wx.FONTFAMILY_TELETYPE,
+            wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL,
+        ))
+        row.Add(stat_lbl, 0, wx.ALIGN_CENTER_VERTICAL)
+        return row
 
     def _refresh_history(self):
         self._history_list.DeleteAllItems()

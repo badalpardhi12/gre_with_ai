@@ -285,6 +285,11 @@ class Response(BaseModel):
     is_marked = BooleanField(default=False)
     is_correct = BooleanField(null=True)  # set after scoring
     time_spent_seconds = IntegerField(default=0)
+    # Finer-grained timing for the per-subtype timing analytics (P2.E3).
+    # Mirrors time_spent_seconds*1000 on writes from the session path, but
+    # is the source of truth for analytics queries because it preserves
+    # sub-second precision when the session engine can supply it.
+    time_to_answer_ms = IntegerField(null=True)
     answered_at = DateTimeField(null=True)
     created_at = DateTimeField(default=datetime.now)
 

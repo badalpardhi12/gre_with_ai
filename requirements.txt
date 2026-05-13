@@ -34,6 +34,12 @@ json-repair>=0.40,<1
 # references a figure). Lazy-imported so the runtime app doesn't fail
 # if the wheel isn't installed.
 pymupdf>=1.24,<2
+# pymupdf4llm: build-time only. Used by scripts/lib/marker_pipeline.py
+# (Phase 4 / D3) to turn PDFs and EPUBs into per-page markdown for the
+# ETS Official Guide + Big Book extraction pipelines. Pure-Python ~30 kB
+# wrapper over pymupdf. Chosen over marker-pdf because marker's
+# surya-ocr dep uses Python 3.10+ syntax and won't import on our 3.9.
+pymupdf4llm>=0.0.27,<1
 pydantic==2.12.5
 pydantic_core==2.41.5
 python-dotenv==1.2.1

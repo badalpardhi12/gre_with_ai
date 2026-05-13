@@ -933,6 +933,63 @@ def _023_served_log_2026_05_12():
                 raise
 
 
+def _025_item_rating_2026_05_12():
+    """P2.E4 — create ``itemrating`` table + seed every live question.
+
+    Seeds an Elo-style rating on the theta scale derived from the
+    prep-book ``difficulty_target`` band (1-5), mapped as::
+
+        1 → -1.2, 2 → -0.6, 3 → 0.0, 4 → +0.6, 5 → +1.2
+
+    Fresh DBs get the table from ``db.create_tables(ALL_TABLES, safe=True)``
+    in ``init_db``; the CREATE TABLE IF NOT EXISTS below is a no-op there
+    but required on DBs that already ran ``init_db`` before ``ItemRating``
+    was registered.
+
+    Idempotent — CREATE TABLE IF NOT EXISTS + INSERT OR IGNORE so a
+    re-run neither duplicates rows nor overwrites a rating that has
+    already been updated from responses.
+    """
+    db = _get_db()
+    stmts = (
+        "CREATE TABLE IF NOT EXISTS itemrating ("
+        "  id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,"
+        "  question_id INTEGER NOT NULL UNIQUE,"
+        "  rating REAL NOT NULL DEFAULT 0.0,"
+        "  n_responses INTEGER NOT NULL DEFAULT 0,"
+        "  updated_at DATETIME NOT NULL"
+        ")",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_itemrating_question_id "
+        "ON itemrating(question_id)",
+    )
+    for stmt in stmts:
+        try:
+            db.execute_sql(stmt)
+        except OperationalError as e:
+            if not _is_benign_schema_error(e):
+                raise
+
+    # Seed one row per live question. INSERT OR IGNORE is a no-op for
+    # any (question_id) that already has a rating, preserving values that
+    # have drifted from the seed via real responses.
+    db.execute_sql(
+        "INSERT OR IGNORE INTO itemrating "
+        "  (question_id, rating, n_responses, updated_at) "
+        "SELECT id, "
+        "       CASE difficulty_target "
+        "         WHEN 1 THEN -1.2 "
+        "         WHEN 2 THEN -0.6 "
+        "         WHEN 3 THEN  0.0 "
+        "         WHEN 4 THEN  0.6 "
+        "         WHEN 5 THEN  1.2 "
+        "         ELSE 0.0 END, "
+        "       0, "
+        "       CURRENT_TIMESTAMP "
+        "  FROM question "
+        " WHERE status = 'live'"
+    )
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -972,6 +1029,8 @@ MIGRATIONS = [
      _022_retire_q3754_image_mismatch_2026_05_11),
     ("023_served_log_2026_05_12",
      _023_served_log_2026_05_12),
+    ("025_item_rating_2026_05_12",
+     _025_item_rating_2026_05_12),
 ]
 
 

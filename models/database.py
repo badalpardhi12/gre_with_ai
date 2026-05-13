@@ -547,6 +547,27 @@ class ServedLog(BaseModel):
         )
 
 
+class ItemRating(BaseModel):
+    """Elo-style per-item rating on the theta scale.
+
+    Seeded from ``Question.difficulty_target`` (1-5 band → logit rating)
+    and updated after every graded ``Response``. Bridges prep-book labels
+    to a real-time theta signal until IRT calibration has enough data to
+    populate ``Question.irt_b_estimate`` directly.
+
+    See ``services.rating_service`` for the update rule and
+    ``models.migrations._025_item_rating_2026_05_12`` for the initial seed.
+    """
+    id = AutoField()
+    question_id = IntegerField(unique=True, index=True)
+    rating = FloatField(default=0.0)
+    n_responses = IntegerField(default=0)
+    updated_at = DateTimeField(default=datetime.now)
+
+    class Meta:
+        database = db
+
+
 class QuestionFlag(BaseModel):
     """User-submitted report that a question is wrong / broken.
 
@@ -617,6 +638,7 @@ ALL_TABLES = [
     UserStats,
     QuestionFlag,
     ServedLog,
+    ItemRating,
     SyntheticGenerationRun,
 ]
 

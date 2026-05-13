@@ -125,8 +125,16 @@ _SUP_BARE_RE = re.compile(r"\^([A-Za-z0-9])")
 _SUB_BRACED_RE = re.compile(r"_\{([^{}]+)\}")
 _SUB_BARE_RE = re.compile(r"_([A-Za-z0-9])")
 
-# Inline-math delimiters the bank uses.
-_INLINE_DELIM_RE = re.compile(r"\\\(|\\\)|\\\[|\\\]|\$\$")
+# Inline-math delimiters the bank uses. Single ``$`` is not in this
+# pass because it might be a literal dollar; see ``_SINGLE_DOLLAR_MATH_RE``
+# for paired math-signature stripping.
+_INLINE_DELIM_RE = re.compile(r"\\\(|\\\)|\\\[|\\\]")
+
+# Paired single-``$`` delimiters — only strip when the enclosed
+# content contains a backslash/caret/underscore (i.e. it was inline
+# math, not a literal dollar amount like ``$5``). Non-greedy so we
+# don't swallow unrelated dollar signs in the surrounding text.
+_SINGLE_DOLLAR_MATH_RE = re.compile(r"\$([^$]*?[\\^_][^$]*?)\$")
 
 
 def _to_superscript(inner: str) -> str:
@@ -180,6 +188,17 @@ def latex_inline_to_text(text: str) -> str:
     # 0) Strip the ``{,}`` thousands-separator artefact so our
     # non-recursive fraction regex sees flat numerals.
     out = _THOUSANDS_BRACE_RE.sub(",", out)
+    # 0a) Strip ``$$`` display-math delimiters up-front so the
+    # single-``$`` math-pair regex below doesn't partially consume
+    # them (leaving a stray ``$``).
+    out = out.replace("$$", "")
+    # 0b) Unwrap paired single-``$`` math delimiters like
+    # ``$\frac{1}{2}$``. We do this before ``\frac`` rewriting
+    # because the inner content still has its backslashes/carets
+    # intact, so the math-signature check fires. Literal dollar
+    # amounts like ``$5 per hour`` are left alone because they don't
+    # contain a backslash/caret/underscore inside a paired ``$…$``.
+    out = _SINGLE_DOLLAR_MATH_RE.sub(r"\1", out)
     # 1) Fractions first — they often wrap other macros we rewrite below.
     out = _FRAC_RE.sub(_render_frac, out)
     # 2) Square roots.

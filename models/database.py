@@ -519,6 +519,34 @@ class UserStats(BaseModel):
     daily_goal_minutes = IntegerField(default=20)
 
 
+class ServedLog(BaseModel):
+    """Lightweight 'question was served' tracker, independent of Response.
+
+    When the assembler picks a qid for a section, we write a row here
+    immediately (at pick time, not answer time). Exclusion queries
+    (cross-session dedup, cooldown) read from ``served_log`` in addition
+    to ``Response``, so first-launch behavior — before any answers
+    exist — still excludes items served in recent sessions.
+
+    Kept separate from ``Response`` so (a) we can write without waiting
+    for the user to answer, (b) a session abandoned mid-way still
+    counts against exposure. See migration ``_023_served_log_2026_05_12``.
+    """
+    id = AutoField()
+    question_id = IntegerField(index=True)
+    # Nullable because ad-hoc practice / drill picks may have no session.
+    session_id = CharField(index=True, null=True)
+    user_id = CharField(default="local", index=True)
+    served_at = DateTimeField(default=datetime.now, index=True)
+
+    class Meta:
+        database = db
+        indexes = (
+            (("user_id", "served_at"), False),
+            (("question_id", "user_id", "served_at"), False),
+        )
+
+
 class QuestionFlag(BaseModel):
     """User-submitted report that a question is wrong / broken.
 
@@ -588,6 +616,7 @@ ALL_TABLES = [
     MasteryRecord, StudyPlan, DiagnosticResult,
     UserStats,
     QuestionFlag,
+    ServedLog,
     SyntheticGenerationRun,
 ]
 

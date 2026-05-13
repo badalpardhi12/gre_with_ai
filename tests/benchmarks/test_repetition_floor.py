@@ -243,7 +243,14 @@ def _simulate_mocks():
 
 
 def _compute_metrics(picks):
-    """Derive the 3 metric groups the plan specifies."""
+    """Derive the 3 metric groups the plan specifies.
+
+    Passages / DI stims appear multiple times in a single mock naturally
+    (cluster-atomic sibling pulls), so we dedupe by (stim_id, mock_idx)
+    before recording exposure — a "repeat" is cross-mock only. RC passage
+    counts and DI qid counts are likewise per-mock-exposure, not per-qid,
+    so a 3-Q passage exposed once counts as 1, not 3.
+    """
     # First repeat by bucket
     di_seen_at = {}       # qid -> first mock_idx
     rc_passage_seen_at = {}  # stimulus_id -> first mock_idx
@@ -258,29 +265,44 @@ def _compute_metrics(picks):
     all_picks_count = {}           # qid -> int
     figure_qid_count = {}          # qid -> int  (non-DI figure singletons)
     di_qid_count = {}              # qid -> int
-    rc_passage_count = {}          # stim_id -> int
+    rc_passage_count = {}          # stim_id -> int (per-mock exposures)
+
+    # Per-mock dedup sets so cluster-atomic children count once per mock.
+    mock_di_seen = {}              # mock_idx -> set(qid)
+    mock_fig_seen = {}             # mock_idx -> set(qid)
+    mock_rc_seen = {}              # mock_idx -> set(stim_id)
 
     for p in picks:
         qid = p["qid"]
         all_picks_count[qid] = all_picks_count.get(qid, 0) + 1
-
         mock = p["mock_idx"]
+
         if p["is_di"]:
-            di_qid_count[qid] = di_qid_count.get(qid, 0) + 1
-            if qid in di_seen_at and first_repeat["di"] is None:
-                first_repeat["di"] = mock
-            di_seen_at.setdefault(qid, mock)
+            di_set = mock_di_seen.setdefault(mock, set())
+            if qid not in di_set:
+                di_set.add(qid)
+                di_qid_count[qid] = di_qid_count.get(qid, 0) + 1
+                if qid in di_seen_at and first_repeat["di"] is None:
+                    first_repeat["di"] = mock
+                di_seen_at.setdefault(qid, mock)
 
         elif p["is_figure"] and p["measure"] == "quant":
             # figure-bearing non-DI quant (geometry diagrams, etc.)
-            figure_qid_count[qid] = figure_qid_count.get(qid, 0) + 1
-            if (qid in figure_singleton_seen_at
-                    and first_repeat["figure_singleton"] is None):
-                first_repeat["figure_singleton"] = mock
-            figure_singleton_seen_at.setdefault(qid, mock)
+            fig_set = mock_fig_seen.setdefault(mock, set())
+            if qid not in fig_set:
+                fig_set.add(qid)
+                figure_qid_count[qid] = figure_qid_count.get(qid, 0) + 1
+                if (qid in figure_singleton_seen_at
+                        and first_repeat["figure_singleton"] is None):
+                    first_repeat["figure_singleton"] = mock
+                figure_singleton_seen_at.setdefault(qid, mock)
 
         if p["is_rc"] and p["stimulus_id"] is not None:
             stim = p["stimulus_id"]
+            rc_set = mock_rc_seen.setdefault(mock, set())
+            if stim in rc_set:
+                continue
+            rc_set.add(stim)
             rc_passage_count[stim] = rc_passage_count.get(stim, 0) + 1
             if stim in rc_passage_seen_at and first_repeat["rc_passage"] is None:
                 first_repeat["rc_passage"] = mock
@@ -358,14 +380,15 @@ def test_baseline_snapshot():
     assert metrics["unique_items_by_bucket"]["all_items"] > 0
 
 
-@pytest.mark.xfail(reason="Phase 1 R1-R5 targets; fails on pre-fix baseline",
-                   strict=False)
 def test_post_phase1_targets():
     """Regression gate for Phase 1 (R1–R5).
 
     These thresholds come from ``docs/implementation_plan_2026_05_12.md``
-    Phase 1 acceptance criteria. Expected to fail on main today — the
-    whole point of Phase 1 is to flip each one from red to green.
+    Phase 1 acceptance criteria. Originally ``xfail`` on pre-R3 main
+    (the DI / figure / RC passage repetition floor was far below target);
+    flipped to a strict gate after R3 landed (``ServedLog`` dedup at
+    pick time) so any regression that brings the floor back below
+    Phase 1's targets turns this test red immediately.
     """
     metrics = _get_metrics()
     first = metrics["first_repeat_mock_by_bucket"]

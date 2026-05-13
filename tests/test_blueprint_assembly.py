@@ -58,7 +58,20 @@ from services.question_bank import (
 @pytest.fixture(scope="module", autouse=True)
 def _db():
     init_db()
+    from models.database import ServedLog
+    ServedLog.delete().execute()
     yield
+    ServedLog.delete().execute()
+
+
+@pytest.fixture(autouse=True)
+def _clean_served_log():
+    """R3 — ServedLog writes at pick time; clear between tests so DI-
+    cluster / pool-coverage assertions see a fresh candidate pool."""
+    from models.database import ServedLog
+    ServedLog.delete().execute()
+    yield
+    ServedLog.delete().execute()
 
 
 @pytest.fixture

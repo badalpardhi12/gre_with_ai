@@ -8,7 +8,7 @@ from peewee import fn
 
 from models.database import (
     db, Question, QuestionOption, NumericAnswer, Stimulus,
-    AWAPrompt, VocabWord, Response, QuestionFlag,
+    AWAPrompt, VocabWord, Response, QuestionFlag, ServedLog,
 )
 from services.log import get_logger
 
@@ -151,16 +151,67 @@ RC_ANCHOR_MIN_SIZE = 2
 RC_ANCHOR_PREFER_SIZE = 3  # prefer 3+ Q passages for the primary anchor
 
 
+def _log_served(qids, user_id: str = "local", session_id=None):
+    """R3 — bulk-insert a ServedLog row per qid at pick time.
+
+    Called from ``select_questions_composed`` right before it returns.
+    Uses a single ``insert_many`` round-trip; guarded with try/except so
+    a DB-layer hiccup (migration not applied, DB locked, etc.) degrades
+    to WARN-and-continue rather than blowing up the selection path.
+    """
+    if not qids:
+        return
+    try:
+        now = datetime.now()
+        rows = [
+            {"question_id": int(qid),
+             "session_id": str(session_id) if session_id is not None else None,
+             "user_id": user_id or "local",
+             "served_at": now}
+            for qid in qids
+        ]
+        ServedLog.insert_many(rows).execute()
+    except Exception:
+        logger.warning(
+            "servedlog write failed for %d qids (user=%s); "
+            "selection proceeds, dedup may regress",
+            len(qids), user_id, exc_info=True,
+        )
+
+
 def get_recently_seen_ids(days_back: int = 14, user_id: str = "local"):
-    """Return question IDs the user has answered in the last N days.
+    """Return question IDs the user has answered OR been served in the last N days.
 
     Used to avoid showing the same questions in consecutive sessions.
+    Unions two sources:
+      * ``Response`` — items the user actually answered (historical).
+      * ``ServedLog`` — items served to the user at pick time, regardless
+        of whether they answered (R3 addition). This is what makes
+        fresh-launch, binge-mocking users get dedup on the second mock
+        even before any Response row exists.
     """
     cutoff = datetime.now() - timedelta(days=days_back)
+    seen = set()
     rows = Response.select(Response.question_id).where(
         Response.created_at >= cutoff
     ).distinct()
-    return set(r.question_id for r in rows)
+    seen.update(r.question_id for r in rows)
+    # Served-log union — guarded so a schema gap (older user DB that
+    # hasn't run migration 023 yet) can't break the selector.
+    try:
+        served_rows = (ServedLog
+                       .select(ServedLog.question_id)
+                       .where((ServedLog.served_at >= cutoff) &
+                              (ServedLog.user_id == user_id))
+                       .distinct())
+        seen.update(r.question_id for r in served_rows)
+    except Exception:
+        logger.debug(
+            "get_recently_seen_ids: servedlog read failed; "
+            "falling back to Response-only dedup",
+            exc_info=True,
+        )
+    return seen
 
 
 def _cluster_group(q):
@@ -193,15 +244,34 @@ def _user_recent_seen(user_id: str = "local",
     The app is single-user today, so ``user_id`` is informational; every
     response in the DB is this user's. Kept as a parameter so the helper
     grows cleanly when multi-user arrives.
+
+    Unions Response (answered) + ServedLog (served — R3) so dedup fires
+    even when the user never answered (abandoned sessions, fresh launch
+    after a series of benchmark mocks, etc.).
     """
     if days is None or days <= 0:
         return set()
     cutoff = datetime.now() - timedelta(days=days)
+    seen = set()
     rows = (Response
             .select(Response.question_id)
             .where(Response.created_at >= cutoff)
             .distinct())
-    return set(r.question_id for r in rows)
+    seen.update(r.question_id for r in rows)
+    try:
+        served_rows = (ServedLog
+                       .select(ServedLog.question_id)
+                       .where((ServedLog.served_at >= cutoff) &
+                              (ServedLog.user_id == user_id))
+                       .distinct())
+        seen.update(r.question_id for r in served_rows)
+    except Exception:
+        logger.debug(
+            "_user_recent_seen: servedlog read failed; "
+            "falling back to Response-only dedup",
+            exc_info=True,
+        )
+    return seen
 
 
 def _user_mastery_last_correct(user_id: str = "local"):
@@ -748,7 +818,17 @@ class QuestionBankService:
         # Do NOT fully shuffle — cluster siblings must stay adjacent so the
         # UI can render the passage once at the top of its cluster. We
         # already assembled them cluster-at-a-time in pick order.
-        return selected_ids[:count]
+        final_picks = selected_ids[:count]
+
+        # R3 — ServedLog write-through. Record every qid we're about to
+        # hand to the caller so future selections (even from fresh-launch
+        # users with no Response history) can exclude them. Guarded so a
+        # schema/write failure NEVER blocks question selection.
+        if final_picks and exclude_user_seen:
+            _log_served(final_picks, user_id=exclude_user_seen,
+                        session_id=None)
+
+        return final_picks
 
     @staticmethod
     def _composition_targets(composition, count):

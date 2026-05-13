@@ -888,6 +888,51 @@ def _022_retire_q3754_image_mismatch_2026_05_11():
     )
 
 
+def _023_served_log_2026_05_12():
+    """P1.R3 — create ``servedlog`` table for pick-time exposure tracking.
+
+    Writing here is decoupled from the Response table so exclusion queries
+    (cross-session dedup, cooldown) can fire on fresh launches before the
+    user has answered anything. The ORM model lives in
+    ``models.database.ServedLog``; this migration's sole job is to emit a
+    matching schema on user DBs that upgrade past this point. Fresh DBs
+    already get the table via ``db.create_tables(ALL_TABLES, safe=True)``
+    in ``init_db``; the CREATE TABLE IF NOT EXISTS here is a no-op on
+    those but required on DBs that already ran ``init_db`` before the
+    model was registered.
+
+    Idempotent — CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT EXISTS.
+    """
+    db = _get_db()
+    stmts = (
+        "CREATE TABLE IF NOT EXISTS servedlog ("
+        "  id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,"
+        "  question_id INTEGER NOT NULL,"
+        "  session_id VARCHAR(255),"
+        "  user_id VARCHAR(255) NOT NULL DEFAULT 'local',"
+        "  served_at DATETIME NOT NULL"
+        ")",
+        "CREATE INDEX IF NOT EXISTS idx_servedlog_question_id "
+        "ON servedlog(question_id)",
+        "CREATE INDEX IF NOT EXISTS idx_servedlog_session_id "
+        "ON servedlog(session_id)",
+        "CREATE INDEX IF NOT EXISTS idx_servedlog_user_id "
+        "ON servedlog(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_servedlog_served_at "
+        "ON servedlog(served_at)",
+        "CREATE INDEX IF NOT EXISTS idx_servedlog_user_served "
+        "ON servedlog(user_id, served_at)",
+        "CREATE INDEX IF NOT EXISTS idx_servedlog_qid_user_served "
+        "ON servedlog(question_id, user_id, served_at)",
+    )
+    for stmt in stmts:
+        try:
+            db.execute_sql(stmt)
+        except OperationalError as e:
+            if not _is_benign_schema_error(e):
+                raise
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -925,6 +970,8 @@ MIGRATIONS = [
      _021_retire_q3720_image_mismatch_2026_05_06),
     ("022_retire_q3754_image_mismatch_2026_05_11",
      _022_retire_q3754_image_mismatch_2026_05_11),
+    ("023_served_log_2026_05_12",
+     _023_served_log_2026_05_12),
 ]
 
 

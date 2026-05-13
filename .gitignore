@@ -110,6 +110,10 @@ scripts/seed_data.py
 .env
 .env.local
 
+# Local-only offline notes (Apple-internal context, scratch notes,
+# anything that shouldn't ship in the public repo). Never tracked.
+.local/
+
 # IDE
 .vscode/
 .idea/

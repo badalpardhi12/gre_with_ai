@@ -41,6 +41,9 @@ class QuestionScreen(wx.Panel):
         self._answer_controls = []
         self._numeric_entry = None
         self._calc_panel = None
+        # "Your selections: A, C, G" live readout, re-created per
+        # question in `_build_answer_controls` for multi-select subtypes.
+        self._selection_indicator = None
 
         self._build_ui()
 
@@ -381,6 +384,12 @@ class QuestionScreen(wx.Panel):
         if saved:
             self._restore_response(saved)
 
+        # Sync the "Your selections:" readout (no-op for non-multi
+        # subtypes) so navigating back to a partly-answered mcq_multi
+        # shows the restored ticks as "Your selections: A, C" right
+        # away — not only after the next click.
+        self._update_selection_indicator()
+
         # Update nav
         self._update_nav()
         self.Layout()
@@ -394,6 +403,9 @@ class QuestionScreen(wx.Panel):
         # Reset the per-option StaticText list so the resize handler
         # only re-wraps the live question's options.
         self._option_texts = []
+        # Reset the live "Your selections:" indicator; only multi-select
+        # subtypes re-create it below.
+        self._selection_indicator = None
 
         subtype = q["subtype"]
         options = q.get("options", [])
@@ -468,6 +480,26 @@ class QuestionScreen(wx.Panel):
                     on_change=self._on_answer_change,
                 )
                 self._answer_controls.append(("check", opt["label"], cb))
+
+            # Live "Your selections: A, C, G" indicator. Mcq_multi with
+            # 7+ checkboxes is easy to mis-click on; a running readout
+            # right below the options lets the user verify their
+            # selection before moving on. Also serves as a regression
+            # check if a real click/label mismatch ever shows up — the
+            # label in the readout comes from the SAME tuple used at
+            # submit time, so any drift between "what the user clicked"
+            # and "what gets submitted" shows up here first.
+            self._selection_indicator = wx.StaticText(
+                self.answer_panel, label="Your selections: (none)"
+            )
+            self._selection_indicator.SetFont(
+                wx.Font(10, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_ITALIC,
+                        wx.FONTWEIGHT_BOLD)
+            )
+            self._selection_indicator.SetForegroundColour(wx.Colour(0, 100, 180))
+            self.answer_sizer.Add(
+                self._selection_indicator, 0, wx.LEFT | wx.TOP, 10
+            )
 
         elif subtype == "tc":
             # Text completion: group options by blank. Delegates to
@@ -706,7 +738,37 @@ class QuestionScreen(wx.Panel):
         if self._exam is not None:
             self._exam.log_event("answer_changed",
                                  {"qid": qid, "response": response})
+        self._update_selection_indicator()
         self._update_nav()
+
+    def _update_selection_indicator(self):
+        """Refresh the live 'Your selections: A, C, G' readout shown
+        below mcq_multi / rc_multi / se options.
+
+        Pulls labels straight from the same ``_answer_controls`` list
+        that ``_get_current_response`` uses, so the text the user sees
+        here is guaranteed to match what the scorer will see on submit.
+        This also catches any future regression where click targets
+        might get misrouted — the labels appearing in this readout are
+        the ground truth for the submission payload.
+        """
+        ind = getattr(self, "_selection_indicator", None)
+        if ind is None:
+            return
+        subtype = (self._current_q or {}).get("subtype")
+        if subtype not in ("mcq_multi", "rc_multi", "se"):
+            return
+        selected = [
+            label for ct, label, ctrl in self._answer_controls
+            if ct == "check" and ctrl.GetValue()
+        ]
+        if selected:
+            ind.SetLabel("Your selections: " + ", ".join(selected))
+        else:
+            ind.SetLabel("Your selections: (none)")
+        # Re-layout so a wider label (e.g. "A, B, C, D, E, F, G") pushes
+        # the answer panel's scroll extent correctly.
+        self.answer_sizer.Layout()
 
     def _on_mark(self, event):
         ss = self._section_state

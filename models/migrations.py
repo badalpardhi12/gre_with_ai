@@ -1056,6 +1056,48 @@ def _026_item_review_fsrs_2026_05_12():
                 raise
 
 
+def _027_vocab_context_2026_05_12():
+    """P3.S2 — create ``vocabcontextitem`` table for LLM-generated
+    GRE-register mini-passages that embed a target vocab word in context.
+
+    Fresh DBs already pick up the table via
+    ``db.create_tables(ALL_TABLES, safe=True)`` in ``init_db``; the CREATE
+    TABLE IF NOT EXISTS below is a no-op there but required on DBs that
+    already ran ``init_db`` before ``VocabContextItem`` was added.
+
+    Generation is cached by (word, difficulty_tier, prompt_version) so
+    repeated calls for the same triple short-circuit to a DB hit.
+
+    Idempotent — CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT EXISTS.
+    """
+    db = _get_db()
+    stmts = (
+        "CREATE TABLE IF NOT EXISTS vocabcontextitem ("
+        "  id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,"
+        "  word VARCHAR(255) NOT NULL,"
+        "  difficulty_tier VARCHAR(16) NOT NULL DEFAULT 'mid',"
+        "  passage_text TEXT NOT NULL,"
+        "  question_text TEXT NOT NULL,"
+        "  correct_answer VARCHAR(255) NOT NULL,"
+        "  distractors TEXT NOT NULL DEFAULT '[]',"
+        "  llm_model VARCHAR(255) NOT NULL DEFAULT '',"
+        "  prompt_version INTEGER NOT NULL DEFAULT 1,"
+        "  created_at DATETIME NOT NULL"
+        ")",
+        "CREATE INDEX IF NOT EXISTS idx_vocabcontextitem_word "
+        "ON vocabcontextitem(word)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS "
+        "idx_vocabcontextitem_word_tier_version "
+        "ON vocabcontextitem(word, difficulty_tier, prompt_version)",
+    )
+    for stmt in stmts:
+        try:
+            db.execute_sql(stmt)
+        except OperationalError as e:
+            if not _is_benign_schema_error(e):
+                raise
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -1101,6 +1143,8 @@ MIGRATIONS = [
      _025_item_rating_2026_05_12),
     ("026_item_review_fsrs_2026_05_12",
      _026_item_review_fsrs_2026_05_12),
+    ("027_vocab_context_2026_05_12",
+     _027_vocab_context_2026_05_12),
 ]
 
 

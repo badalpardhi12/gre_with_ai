@@ -447,6 +447,50 @@ class FlashcardReview(BaseModel):
         )
 
 
+class VocabContextItem(BaseModel):
+    """LLM-generated GRE-register mini-passage for contextual vocab practice (P3.S2).
+
+    Each row captures a single (word, difficulty_tier, prompt_version) passage —
+    a ~120-word academic paragraph using the target word naturally, plus one
+    inference question whose correct answer hinges on the word's in-context
+    meaning. Generation is cached by (word, difficulty_tier, prompt_version) so
+    a second request for the same tuple is a DB hit, not an LLM call.
+
+    FSRS review state for these items rides on ``FlashcardReview`` (scoped to
+    the linked ``VocabWord`` row) — the context passage is an alternate
+    *presentation* of the word, not a parallel SRS universe.
+    """
+    id = AutoField()
+    word = CharField(index=True)
+    difficulty_tier = CharField(default="mid")  # easy | mid | hard
+    passage_text = TextField()
+    question_text = TextField()
+    correct_answer = CharField()
+    distractors = TextField(default="[]")  # JSON list of 3 strings
+    llm_model = CharField(default="")
+    prompt_version = IntegerField(default=1)
+    created_at = DateTimeField(default=datetime.now)
+
+    class Meta:
+        database = db
+        indexes = (
+            (("word",), False),
+            (("word", "difficulty_tier", "prompt_version"), True),
+        )
+
+    def get_distractors(self):
+        try:
+            return json.loads(self.distractors) if self.distractors else []
+        except (ValueError, TypeError):
+            return []
+
+    def get_options(self):
+        """Return the 4 answer options — correct + 3 distractors. Order is
+        stable (correct first) so callers that want a shuffled render do it
+        themselves with a local RNG."""
+        return [self.correct_answer] + self.get_distractors()
+
+
 class ItemReview(BaseModel):
     """FSRS scheduling state for a single user-question pair (P2.E2).
 
@@ -666,6 +710,7 @@ ALL_TABLES = [
     AWAPrompt, AWASubmission, AWAResult,
     TelemetryEvent, ItemStats,
     VocabWord, VocabRoot, FlashcardReview,
+    VocabContextItem,
     Lesson,
     MasteryRecord, StudyPlan, DiagnosticResult,
     UserStats,

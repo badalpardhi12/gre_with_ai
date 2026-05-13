@@ -55,22 +55,55 @@ Source: [`docs/architecture/gre_architecture.py`](docs/architecture/gre_architec
 
 ### Session flow (Mermaid)
 
+High-level user journey from launch to results.
+
 ```mermaid
-flowchart LR
+---
+title: GRE app — session lifecycle
+---
+flowchart TB
   L[Launch]:::ui --> O{Onboarded?}:::ui
-  O -- no --> W[Onboarding wizard]:::ui --> T
-  O -- yes --> T[Today tab]:::ui
+  O -- no --> W[Onboarding wizard]:::ui
+  W --> T[Today tab]:::ui
+  O -- yes --> T
   T --> P[Practice / Drill / Mock]:::ui
-  P --> QS[Question screen]:::ui
-  QS -- answer --> SE[ScoringEngine]:::core
-  SE -- correct/wrong --> RDB[(Response row)]:::db
-  SE --> MU[update mastery EWMA]:::core
-  SE --> RU[update Elo rating]:::core
-  QS -- end-section --> SA[Section-adaptive router]:::core
+  P --> QL
+
+  subgraph QL[Per-question loop]
+    direction TB
+    QS[Question screen]:::ui --> SE[ScoringEngine]:::core
+    SE --> RDB[(Response row)]:::db
+    SE --> MU[Update mastery EWMA]:::core
+    SE --> RU[Update Elo rating]:::core
+    RU --> QS
+  end
+
+  QL -- end-of-section --> SA[Section-adaptive router]:::core
   SA -- theta / accuracy --> QB[QuestionBank.select_composed]:::core
-  QB -- pick --> QS
-  P -- session end --> RES[Results screen]:::ui
+  QB -- next items --> QL
+  QL -- session end --> RES[Results screen]:::ui
   RES --> IL[Error Log + Insights]:::ui
+
+  classDef ui fill:#eef3fb,stroke:#b9c8de,color:#111;
+  classDef core fill:#eaf4ec,stroke:#b9d8bd,color:#111;
+  classDef db fill:#f4eefb,stroke:#c9b6e0,color:#111;
+```
+
+Error-log feedback loop — wrong answers become FSRS-scheduled review items.
+
+```mermaid
+---
+title: Error log → FSRS review loop
+---
+flowchart TB
+  W[Wrong answer in session]:::ui --> CLS[Classify mistake<br/>careless / conceptual /<br/>timing / vocab-gap]:::core
+  CLS --> EL[Error Log entry]:::db
+  EL --> EX{User action}:::ui
+  EX -- Schedule Redo --> FSRS[FSRS scheduler<br/>services/srs.py]:::core
+  EX -- Ask Tutor --> LLM[AnswerChat<br/>scope-locked tutor]:::core
+  FSRS --> DUE[(ItemReview<br/>next_due)]:::db
+  DUE -- due today --> T[Today tab — review queue]:::ui
+
   classDef ui fill:#eef3fb,stroke:#b9c8de,color:#111;
   classDef core fill:#eaf4ec,stroke:#b9d8bd,color:#111;
   classDef db fill:#f4eefb,stroke:#c9b6e0,color:#111;
@@ -80,25 +113,19 @@ flowchart LR
 
 ## Data model (Mermaid ER)
 
+The schema splits into two clusters: **content** (a Question and everything that describes it) and **user state** (sessions, responses, per-item ratings and reviews). Shown as two focused diagrams for readability.
+
+### Content side — Question, Stimulus, Options
+
 ```mermaid
+---
+title: Content — a Question and its components
+---
 erDiagram
+  STIMULUS ||--o{ QUESTION : "referenced by"
   QUESTION ||--o{ QUESTION_OPTION : has
   QUESTION ||--o| NUMERIC_ANSWER : has
-  QUESTION }o--|| STIMULUS : references
-  QUESTION ||--o{ RESPONSE : answered_by
-  QUESTION ||--o| ITEM_RATING : elo
-  QUESTION ||--o{ ITEM_REVIEW : fsrs
-  QUESTION ||--o{ SERVED_LOG : exposure
-  QUESTION ||--o{ ITEM_STATS : aggregate
-  QUESTION ||--o{ QUESTION_FLAG : user_reports
-  SESSION ||--o{ SECTION_RESULT : contains
-  SECTION_RESULT ||--o{ RESPONSE : grades
-  SESSION ||--o| SCORING_RESULT : scored
-  VOCAB_WORD }o--o{ VOCAB_ROOT : composed_of
-  VOCAB_WORD ||--o{ FLASHCARD_REVIEW : srs
-  USER_STATS ||--|| SESSION : tracks
-  MASTERY_RECORD }o--|| QUESTION : per_subtopic
-  STUDY_PLAN ||--|| USER_STATS : personal
+  QUESTION ||--o{ QUESTION_FLAG : "user reports"
 
   QUESTION {
     int id PK
@@ -110,6 +137,43 @@ erDiagram
     string status "live|draft|retired|candidate"
     string source
   }
+  STIMULUS {
+    int id PK
+    string kind "passage|figure|shared"
+    text body
+  }
+  QUESTION_OPTION {
+    int id PK
+    int question_id FK
+    text text
+    bool is_correct
+  }
+  NUMERIC_ANSWER {
+    int question_id PK
+    float min
+    float max
+  }
+```
+
+### User-state side — sessions, responses, ratings, reviews
+
+```mermaid
+---
+title: User state — sessions, responses, per-item rating and review
+---
+erDiagram
+  SESSION ||--o{ SECTION_RESULT : contains
+  SESSION ||--o| SCORING_RESULT : scored
+  SECTION_RESULT ||--o{ RESPONSE : grades
+  QUESTION ||--o{ RESPONSE : "answered by"
+  QUESTION ||--o{ SERVED_LOG : exposure
+  QUESTION ||--o| ITEM_RATING : elo
+  QUESTION ||--o{ ITEM_REVIEW : fsrs
+  QUESTION ||--o{ ITEM_STATS : aggregate
+  QUESTION ||--o{ MASTERY_RECORD : "per subtopic"
+  USER_STATS ||--|| SESSION : tracks
+  STUDY_PLAN ||--|| USER_STATS : personal
+
   RESPONSE {
     int id PK
     int session_id FK
@@ -139,6 +203,39 @@ erDiagram
   }
 ```
 
+### Vocabulary (FSRS deck, separate from the Question bank)
+
+```mermaid
+---
+title: Vocab — 9,647 words + roots + FSRS reviews
+---
+erDiagram
+  VOCAB_WORD }o--o{ VOCAB_ROOT : "composed of"
+  VOCAB_WORD ||--o{ FLASHCARD_REVIEW : srs
+
+  VOCAB_WORD {
+    int id PK
+    string word
+    string definition
+    text examples
+    text synonyms
+    text antonyms
+    string mnemonic
+  }
+  VOCAB_ROOT {
+    int id PK
+    string root
+    string meaning
+  }
+  FLASHCARD_REVIEW {
+    int id PK
+    int word_id FK
+    float stability
+    float difficulty
+    datetime next_due
+  }
+```
+
 ---
 
 ## Content pipeline (Mermaid sequence)
@@ -146,48 +243,53 @@ erDiagram
 Every item in the shipped `data/gre_mock.db` came through the same five-stage extraction / generation pipeline. Each D-task has its own source-tag (`source=` column) so provenance is auditable downstream.
 
 ```mermaid
+---
+title: Content pipeline — from source to gre_mock.db
+---
 sequenceDiagram
-  participant Book as Source (ebook / PDF / open dataset)
-  participant Marker as marker-pdf / scraper
-  participant LLM as Reformat LLM (OpenRouter)
-  participant Judge as Judge pass (multi-model vote)
-  participant Solver as sympy / solver (quant only)
-  participant Vision as Vision audit
+  autonumber
+  participant Src as Source<br/>(ebook / PDF / dataset)
+  participant Ing as Ingest<br/>(marker-pdf / scraper)
+  participant Fmt as Reformat LLM<br/>(OpenRouter)
+  participant Slv as Solver<br/>(sympy, quant only)
+  participant Jud as Judge<br/>(multi-model vote)
+  participant Vis as Vision audit
   participant DB as data/gre_mock.db
 
-  Note over Book,DB: D1 ETS Official Guide 3rd ed
-  Book->>Marker: PDF chapters
-  Marker->>LLM: raw markdown
-  LLM->>Judge: structured question JSON
-  Judge->>Vision: figure-bearing items
-  Judge->>DB: upsert (source=ets_og_3rd)
+  Note over Src,DB: D1 — ETS Official Guide 3rd ed
+  Src->>Ing: PDF chapters
+  Ing->>Fmt: raw markdown
+  Fmt->>Jud: structured question JSON
+  Jud->>Vis: figure-bearing items
+  Vis-->>Jud: figure OK / retire
+  Jud->>DB: upsert (source=ets_og_3rd)
 
-  Note over Book,DB: D2 ETS Big Book (retired paper exams)
-  Book->>Marker: scan PDFs
-  Marker->>LLM: OCR + reformat
-  LLM->>Judge: JSON
-  Judge->>DB: upsert (source=ets_bigbook)
+  Note over Src,DB: D2 — ETS Big Book (retired paper exams)
+  Src->>Ing: scan PDFs
+  Ing->>Fmt: OCR text + reformat
+  Fmt->>Jud: structured JSON
+  Jud->>DB: upsert (source=ets_bigbook)
 
-  Note over Book,DB: D4 AGIEval LSAT + Hendrycks MATH
-  Book->>LLM: open-license CSV
-  LLM->>Judge: GRE-style reformat
-  Judge->>DB: upsert (source=agieval_lsat / hendrycks_math)
+  Note over Src,DB: D4 — AGIEval LSAT + Hendrycks MATH
+  Src->>Fmt: open-license CSV
+  Fmt->>Jud: GRE-style reformat
+  Jud->>DB: upsert (source=agieval_lsat / hendrycks_math)
 
-  Note over Book,DB: D5 NYC Regents scraper
-  Book->>Marker: HTML pages
-  Marker->>LLM: reformat
-  LLM->>DB: upsert (source=regents)
+  Note over Src,DB: D5 — NYC Regents scraper
+  Src->>Ing: HTML pages
+  Ing->>Fmt: reformat
+  Fmt->>DB: upsert (source=regents)
 
-  Note over Book,DB: D6 Quant gen v2 (LLM + solver + dual judge)
-  LLM->>Solver: candidate + answer key
-  Solver-->>LLM: verified key
-  LLM->>Judge: multi-judge vote (Opus + Sonnet + Gemini)
-  Judge->>DB: upsert (source=ai_synthetic)
+  Note over Src,DB: D6 — Quant gen v2 (LLM + solver + dual judge)
+  Fmt->>Slv: candidate stem + answer key
+  Slv-->>Fmt: verified key
+  Fmt->>Jud: multi-judge vote<br/>(Opus + Sonnet + Gemini)
+  Jud->>DB: upsert (source=ai_synthetic)
 
-  Note over Book,DB: D7 RC passage gen from public-domain prose
-  Book->>LLM: Project Gutenberg snippets
-  LLM->>Judge: 3-stage (draft → critique → revise)
-  Judge->>DB: upsert (source=ai_generated)
+  Note over Src,DB: D7 — RC passage gen from public-domain prose
+  Src->>Fmt: Project Gutenberg snippets
+  Fmt->>Jud: 3-stage (draft → critique → revise)
+  Jud->>DB: upsert (source=ai_generated)
 ```
 
 ---

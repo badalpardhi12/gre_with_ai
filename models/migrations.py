@@ -933,6 +933,27 @@ def _023_served_log_2026_05_12():
                 raise
 
 
+def _024_response_time_ms_2026_05_12():
+    """P2.E3 — add ``response.time_to_answer_ms`` for timing analytics.
+
+    Stores per-question response time with millisecond precision so the
+    per-subtype P50/P90 and outlier computations don't quantise into
+    whole-second buckets. Older rows keep NULL; the analytics service
+    falls back to ``time_spent_seconds * 1000`` when the new column is
+    not populated, so pre-migration history still participates.
+
+    Idempotent — swallows ``duplicate column`` like sibling migrations.
+    """
+    db = _get_db()
+    try:
+        db.execute_sql(
+            "ALTER TABLE response ADD COLUMN time_to_answer_ms INTEGER"
+        )
+    except OperationalError as e:
+        if not _is_benign_schema_error(e):
+            raise
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -972,6 +993,8 @@ MIGRATIONS = [
      _022_retire_q3754_image_mismatch_2026_05_11),
     ("023_served_log_2026_05_12",
      _023_served_log_2026_05_12),
+    ("024_response_time_ms_2026_05_12",
+     _024_response_time_ms_2026_05_12),
 ]
 
 

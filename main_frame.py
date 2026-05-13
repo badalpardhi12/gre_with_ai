@@ -709,6 +709,7 @@ class MainFrame(wx.Frame):
                 )
                 for qid in section.question_ids:
                     resp = section.get_response(qid)
+                    seconds = per_q_time.get(qid, 0)
                     Response.create(
                         session=self.db_session,
                         section_result=sr,
@@ -716,7 +717,8 @@ class MainFrame(wx.Frame):
                         response_payload=json.dumps(resp) if resp else "{}",
                         is_marked=qid in section.marked,
                         is_correct=correctness.get(qid),
-                        time_spent_seconds=per_q_time.get(qid, 0),
+                        time_spent_seconds=seconds,
+                        time_to_answer_ms=int(seconds * 1000) if seconds else None,
                     )
 
         # Section-level adaptation

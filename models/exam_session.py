@@ -19,6 +19,49 @@ from config import (
 )
 
 
+def get_previous_mock_qids(user_id="local"):
+    """Return the set of question IDs assigned to the user's most-recent
+    COMPLETED full mock session.
+
+    This is used by mock N+1 to avoid any overlap with mock N (Phase 1 R5:
+    consecutive-mock qid exclude). Sessions that were abandoned or are still
+    in progress are NOT counted — the user hasn't really "seen" the whole
+    batch yet and excluding them would be over-aggressive.
+
+    The single-user desktop app keeps everything under ``user_id="local"``;
+    the argument exists so a future multi-user flip is a one-line change
+    (Session has no user_id column today, so the arg is currently unused
+    beyond documenting intent).
+
+    Returns an empty set when there is no prior completed mock, or when
+    the DB / models are unavailable (defensive: never crash mock start).
+    """
+    try:
+        from models.database import Session, SectionResult
+    except Exception:
+        return set()
+
+    try:
+        prev = (Session
+                .select()
+                .where((Session.test_type == "full_mock")
+                       & (Session.state == "completed"))
+                .order_by(Session.ended_at.desc(), Session.id.desc())
+                .first())
+        if prev is None:
+            return set()
+        qids = set()
+        for sec in prev.sections:  # backref="sections"
+            try:
+                qids.update(sec.get_question_ids())
+            except (ValueError, TypeError):
+                continue
+        return qids
+    except Exception:
+        # DB unavailable / migration pending / schema drift — fail open.
+        return set()
+
+
 class ExamState(Enum):
     NOT_STARTED = "not_started"
     IN_PROGRESS = "in_progress"
@@ -191,9 +234,14 @@ class ExamSession:
         # Store question bank for deferred S2 loading
         self._question_bank = question_bank
 
+        # Phase 1 R5: mock N+1 must not repeat any qid from the user's
+        # most-recent COMPLETED mock. Compute once here, reuse for S2.
+        self._prev_mock_qids = get_previous_mock_qids(user_id)
+
         # Track IDs already picked across sections so S1-Verbal doesn't
-        # collide with S1-Quant and vice versa.
-        seen_across_sections = set()
+        # collide with S1-Quant and vice versa. Seeded with the previous
+        # mock's qids so nothing from mock N can appear in mock N+1.
+        seen_across_sections = set(self._prev_mock_qids)
 
         # Assemble questions for each section (S2 deferred until S1 completes)
         for sec_type in self.section_order:
@@ -330,11 +378,15 @@ class ExamSession:
         qb = getattr(self, '_question_bank', None)
         if qb and not self.sections[s2_type].question_ids:
             s1_ids = s1.question_ids
+            # Phase 1 R5: union previous-mock qids into S2's exclude set too,
+            # so the deferred S2 assembly respects consecutive-mock dedup.
+            prev_mock_qids = getattr(self, '_prev_mock_qids', set())
+            exclude_for_s2 = list(set(s1_ids) | set(prev_mock_qids))
             q_ids = qb.select_questions_composed(
                 measure=measure,
                 count=q_count,
                 difficulty_band=band,
-                exclude_ids=s1_ids,
+                exclude_ids=exclude_for_s2,
                 exclude_user_seen=getattr(self, "_user_id", "local"),
             )
             self.sections[s2_type].question_ids = q_ids

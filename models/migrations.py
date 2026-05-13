@@ -544,9 +544,10 @@ def _017_batch_ai_review_2026_05_01():
         re-seeded DB reaches the same retired state.
 
     Prompt / explanation rewrites live only in the shipped seed DB —
-    they're not replayable from this migration (the Floodgate outputs
-    that contain the rewrite text live out-of-tree per the repo's
-    "only app + DB" policy). Retires ARE replayable via the qid list.
+    they're not replayable from this migration (the batch-LLM review
+    outputs that contain the rewrite text live out-of-tree per the
+    repo's "only app + DB" policy). Retires ARE replayable via the
+    qid list.
 
     Idempotent: the retire update skips already-retired rows.
     """

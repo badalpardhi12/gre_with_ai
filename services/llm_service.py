@@ -3,8 +3,8 @@ LLM service — OpenRouter integration (OpenAI-compatible API) with async suppor
 for wxPython. Used for ALL runtime AI features (AWA scoring, AI tutor chat,
 mistake coach, study plan).
 
-Build-time data generation scripts in scripts/ use a separate LLM gateway client
-and are not invoked from the running app.
+Build-time data generation scripts in scripts/ also go through this module;
+there is no other LLM backend in the repo.
 """
 import json
 import threading

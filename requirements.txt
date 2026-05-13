@@ -54,3 +54,12 @@ wxPython==4.2.4
 # (Phase 4 P1). MIT, scipy-only, not a runtime dependency — the app
 # never imports it. Kept pinned loose so scipy upgrades don't break it.
 girth>=0.8,<1
+# sympy + z3-solver: build-time only. Used by
+# scripts/generate_quant_items.py (Phase 4 · D6) to symbolically verify
+# that LLM-generated quant items' stated correct answer matches the
+# expression the generator claims models the problem. Neither is
+# imported by the runtime app; both are optional at install time
+# (generate_quant_items.py degrades gracefully and refuses to run when
+# sympy is missing).
+sympy>=1.12,<2
+z3-solver>=4.13,<5

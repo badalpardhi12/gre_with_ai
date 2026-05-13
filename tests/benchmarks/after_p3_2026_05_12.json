@@ -1,0 +1,24 @@
+{
+  "first_repeat_mock_by_bucket": {
+    "di": 21,
+    "figure_singleton": 21,
+    "rc_passage": 21
+  },
+  "hot_items": {
+    "all": {},
+    "di": {},
+    "figure_singleton": {},
+    "rc_passage": {}
+  },
+  "meta": {
+    "n_mocks": 20,
+    "random_seed": 20260512,
+    "total_picks": 1080
+  },
+  "unique_items_by_bucket": {
+    "all_items": 1080,
+    "di": 51,
+    "figure_singleton": 0,
+    "rc_passage": 137
+  }
+}

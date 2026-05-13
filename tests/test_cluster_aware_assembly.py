@@ -306,6 +306,12 @@ def test_quant_section_hits_figure_floor(temp_db):
         )
 
     qb = QuestionBankService()
+    # The assembler softens the floor when the live figure pool is shallow
+    # (P1.R2). This fixture ships 10 figure-bearing items, so the effective
+    # floor is ``min(base, pool_size // 8) = min(3, 1) = 1`` for a 12-Q
+    # section and ``min(4, 1) = 1`` for a 15-Q section. Resolve pool size
+    # off the live fixture to match what the selector sees.
+    fixture_pool = qb._quant_figure_pool_size(difficulty_band="medium")
     for seed in range(20):
         random.seed(seed)
         ids = qb.select_questions_composed(
@@ -319,7 +325,7 @@ def test_quant_section_hits_figure_floor(temp_db):
             stim = Stimulus.get_or_none(Stimulus.id == q.stimulus_id)
             if stim and "<img" in (stim.content or ""):
                 fig_count += 1
-        floor = _quant_figure_floor(12)
+        floor = _quant_figure_floor(12, pool_size=fixture_pool)
         assert fig_count >= floor, (
             f"seed {seed}: only {fig_count} figure-bearing items, "
             f"expected >= {floor}")
@@ -337,7 +343,7 @@ def test_quant_section_hits_figure_floor(temp_db):
             stim = Stimulus.get_or_none(Stimulus.id == q.stimulus_id)
             if stim and "<img" in (stim.content or ""):
                 fig_count += 1
-        floor = _quant_figure_floor(15)
+        floor = _quant_figure_floor(15, pool_size=fixture_pool)
         assert fig_count >= floor, (
             f"seed {seed} (15Q): only {fig_count} figure-bearing items, "
             f"expected >= {floor}")

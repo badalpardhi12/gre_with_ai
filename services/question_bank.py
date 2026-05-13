@@ -122,11 +122,19 @@ DI_CLUSTER_MIN_SIZE = 1
 # The floor scales with section length so the figure density stays in
 # the 25–33% band regardless of whether the caller asks for Q1 (12) or
 # Q2 (15): 3/12 ≈ 25%, 4/15 ≈ 27%.
-def _quant_figure_floor(count):
-    """Minimum figure-bearing items for a Quant section of size ``count``."""
-    if count <= 12:
-        return 3
-    return 4
+def _quant_figure_floor(count, pool_size=None):
+    """Minimum figure-bearing items for a Quant section of size ``count``.
+
+    When the live figure pool is smaller than ~8× the nominal floor, we
+    back off proportionally — forcing 3-of-43 into every section drives
+    the same items into heavy rotation. At the small end we still keep
+    ≥1 figure to honor the ETS composition pattern.
+    """
+    base = 3 if count <= 12 else 4
+    if pool_size is None:
+        return base
+    soft = max(1, min(base, pool_size // 8))
+    return soft
 
 
 # Minimum multi-question RC passage anchor per Verbal section. Both
@@ -511,15 +519,23 @@ class QuestionBankService:
                 )
 
             # Figure-floor pass: ensure the section contains at least
-            # ``_quant_figure_floor(count)`` items whose stimulus carries
-            # an image or table. The DI cluster already contributed some;
-            # top up with figure-bearing singletons (spread across QC /
-            # MC / NE / DI subtypes) when the bank has no multi-sibling
-            # figure clusters. Each pick is subtracted from its subtype's
+            # ``_quant_figure_floor(count, pool_size=...)`` items whose
+            # stimulus carries an image or table. The floor scales down
+            # when the live figure pool is shallow (P1.R2) so a small
+            # bank doesn't get the same qids jammed into every section.
+            # The DI cluster already contributed some; top up with
+            # figure-bearing singletons (spread across QC / MC / NE / DI
+            # subtypes) when the bank has no multi-sibling figure
+            # clusters. Each pick is subtracted from its subtype's
             # remaining target so the composition ratios still balance.
             current_figure_count = self._count_figure_bearing(selected_ids)
+            pool_size = self._quant_figure_pool_size(
+                difficulty_band=difficulty_band)
             needed = max(
-                0, _quant_figure_floor(count) - current_figure_count)
+                0,
+                _quant_figure_floor(count, pool_size=pool_size)
+                - current_figure_count,
+            )
             if needed > 0:
                 figs = self._select_quant_figure_singletons(
                     count=needed,
@@ -1085,6 +1101,37 @@ class QuestionBankService:
         elif op == ">=":
             q = q.where(Question.difficulty_target >= threshold)
         return (q.scalar() or 0) > 0
+
+    @staticmethod
+    def _quant_figure_pool_size(difficulty_band=None):
+        """Return the live, figure-bearing Quant pool size.
+
+        Used by ``select_questions_composed`` to scale
+        ``_quant_figure_floor`` down when the pool is too shallow to
+        support the nominal 3/4-per-section floor without forcing a few
+        items into heavy rotation. The query mirrors the filter applied
+        by ``_select_quant_figure_singletons`` so pool size and pick
+        source stay in sync.
+        """
+        query = (
+            Question.select(fn.COUNT(Question.id))
+            .join(Stimulus, on=(Stimulus.id == Question.stimulus))
+            .where((Question.measure == "quant") &
+                   (Question.status == "live"))
+            .where(
+                (Stimulus.content.contains("<img")) |
+                (Stimulus.content.contains("data:image/")) |
+                (Stimulus.content.contains("<table"))
+            )
+        )
+        if difficulty_band == "easy":
+            query = query.where(Question.difficulty_target <= 2)
+        elif difficulty_band == "hard":
+            query = query.where(Question.difficulty_target >= 4)
+        clause = _exclude_synthetic_clause()
+        if clause is not None:
+            query = query.where(clause)
+        return query.scalar() or 0
 
     @staticmethod
     def _count_figure_bearing(qids):

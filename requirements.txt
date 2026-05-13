@@ -44,3 +44,7 @@ typing-inspection==0.4.2
 typing_extensions==4.15.0
 urllib3==2.6.3
 wxPython==4.2.4
+# girth: 2PL IRT MML estimator used by scripts/recalibrate_irt.py
+# (Phase 4 P1). MIT, scipy-only, not a runtime dependency — the app
+# never imports it. Kept pinned loose so scipy upgrades don't break it.
+girth>=0.8,<1

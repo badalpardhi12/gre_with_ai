@@ -24,11 +24,12 @@ class Sidebar(wx.Panel):
     """
 
     DEFAULT_TABS = [
-        {"id": "today",    "label": "Today",    "icon": "◐"},
-        {"id": "learn",    "label": "Learn",    "icon": "📖"},
-        {"id": "practice", "label": "Practice", "icon": "✎"},
-        {"id": "vocab",    "label": "Vocab",    "icon": "Aa"},
-        {"id": "insights", "label": "Insights", "icon": "▦"},
+        {"id": "today",     "label": "Today",     "icon": "◐"},
+        {"id": "learn",     "label": "Learn",     "icon": "📖"},
+        {"id": "practice",  "label": "Practice",  "icon": "✎"},
+        {"id": "vocab",     "label": "Vocab",     "icon": "Aa"},
+        {"id": "insights",  "label": "Insights",  "icon": "▦"},
+        {"id": "error_log", "label": "Error Log", "icon": "✗"},
     ]
 
     SETTINGS_ID = "__settings__"

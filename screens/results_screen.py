@@ -13,6 +13,7 @@ class ResultsScreen(wx.Panel):
         super().__init__(parent)
         self.SetBackgroundColour(Color.BG_PAGE)
         self._on_home = None
+        self._on_review_errors = None
         self._question_details = []
         self._build_ui()
 
@@ -86,6 +87,19 @@ class ResultsScreen(wx.Panel):
         )
         review_btn.Bind(wx.EVT_BUTTON, self._on_review_answers)
         btn_sizer.Add(review_btn, 0, wx.ALL, 12)
+
+        # P2.E1 — prominent link into the Error Log so users can
+        # triage wrong answers by category immediately after a section.
+        error_log_btn = wx.Button(self, label="  ✗ Review Errors  ",
+                                  size=(200, 40))
+        error_log_btn.SetFont(wx.Font(12, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
+                                       wx.FONTWEIGHT_BOLD))
+        error_log_btn.SetToolTip(
+            "Open the Error Log to see wrong answers with auto-classified "
+            "error categories and redo / tutor actions."
+        )
+        error_log_btn.Bind(wx.EVT_BUTTON, self._on_review_errors_click)
+        btn_sizer.Add(error_log_btn, 0, wx.ALL, 12)
 
         home_btn = wx.Button(self, label="  Return to Home  ", size=(180, 40))
         home_btn.SetFont(wx.Font(12, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
@@ -204,9 +218,17 @@ class ResultsScreen(wx.Panel):
         """callback()"""
         self._on_home = callback
 
+    def set_on_review_errors(self, callback):
+        """callback() — routes to the Error Log screen (P2.E1)."""
+        self._on_review_errors = callback
+
     def _on_home_click(self, event):
         if self._on_home:
             self._on_home()
+
+    def _on_review_errors_click(self, _event):
+        if self._on_review_errors:
+            self._on_review_errors()
 
     def _on_review_answers(self, _):
         """Open the per-question answer + explanation review dialog."""

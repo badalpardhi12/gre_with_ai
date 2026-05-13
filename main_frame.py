@@ -41,6 +41,7 @@ from screens.today_screen import TodayScreen
 from screens.learn_screen import LearnScreen
 from screens.practice_screen import PracticeScreen
 from screens.insights_screen import InsightsScreen
+from screens.error_log_screen import ErrorLogScreen
 
 from widgets.sidebar import Sidebar
 from widgets.theme import Color
@@ -56,6 +57,7 @@ TAB_HOME_SCREEN = {
     "practice": "practice",
     "vocab":    "vocab",
     "insights": "insights",
+    "error_log": "error_log",
 }
 
 # Reverse lookup: which sidebar tab should be highlighted when a given
@@ -66,6 +68,7 @@ SCREEN_TO_TAB = {
     "practice":  "practice",
     "vocab":     "vocab",
     "insights":  "insights",
+    "error_log": "error_log",
     "diagnostic_results": "insights",
 }
 
@@ -184,6 +187,8 @@ class MainFrame(wx.Frame):
         view_menu.Append(2012, "&Practice\tCtrl+3", "Drills, section tests, full mocks")
         view_menu.Append(2013, "&Vocab\tCtrl+4", "Daily vocabulary review")
         view_menu.Append(2014, "&Insights\tCtrl+5", "Forecast, history, study plan")
+        view_menu.Append(2015, "&Error Log\tCtrl+6",
+                         "Review every wrong answer with auto-classified errors")
         menubar.Append(view_menu, "&View")
 
         # Help menu
@@ -200,6 +205,7 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _: self._on_sidebar_select("practice"), id=2012)
         self.Bind(wx.EVT_MENU, lambda _: self._on_sidebar_select("vocab"), id=2013)
         self.Bind(wx.EVT_MENU, lambda _: self._on_sidebar_select("insights"), id=2014)
+        self.Bind(wx.EVT_MENU, lambda _: self._on_sidebar_select("error_log"), id=2015)
         self.Bind(wx.EVT_MENU, lambda _: self._show_settings(), id=wx.ID_PREFERENCES)
         self.Bind(wx.EVT_MENU, lambda _: self._show_about(), id=wx.ID_ABOUT)
         self.Bind(wx.EVT_MENU, lambda _: self.Close(), id=wx.ID_EXIT)
@@ -236,7 +242,7 @@ class MainFrame(wx.Frame):
                     break
             # From these screens, ESC goes back to Today
             if current in ("vocab", "learn", "practice", "insights",
-                           "diagnostic_results"):
+                           "error_log", "diagnostic_results"):
                 self._go_home()
                 return
             # From instructions, abort the test
@@ -259,6 +265,7 @@ class MainFrame(wx.Frame):
             "practice": PracticeScreen,
             "vocab": VocabScreen,
             "insights": InsightsScreen,
+            "error_log": ErrorLogScreen,
             "instructions": InstructionsScreen,
             "awa": AWAScreen,
             "question": QuestionScreen,
@@ -288,6 +295,8 @@ class MainFrame(wx.Frame):
         self.screens["review"].set_on_return(self._return_to_questions)
         self.screens["review"].set_on_end_section(self._end_current_section)
         self.screens["results"].set_on_home(self._go_home)
+        self.screens["results"].set_on_review_errors(
+            lambda: self._on_sidebar_select("error_log"))
 
         self.screens["vocab"].set_on_back(lambda: self._on_sidebar_select("today"))
         self.screens["learn"].set_on_start_drill(self._on_practice_topic)
@@ -300,6 +309,10 @@ class MainFrame(wx.Frame):
         self.screens["insights"].set_handlers(
             update_plan=self._open_plan_dialog,
             run_coach=self._run_coach_now,
+        )
+        self.screens["error_log"].set_handlers(
+            ask_tutor=self._ask_tutor_from_error_log,
+            schedule_redo=self._schedule_redo_from_error_log,
         )
         self.screens["diagnostic_results"].set_on_back(self._go_home)
         self.screens["diagnostic_results"].set_on_build_plan(
@@ -1404,6 +1417,45 @@ class MainFrame(wx.Frame):
             wx.CallAfter(self._show_mistake_coach_report, report)
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    # ── Error Log row handlers (P2.E1) ───────────────────────────────
+
+    def _ask_tutor_from_error_log(self, qid: int, response_id: int):
+        """Open AnswerChat scoped to the selected wrong answer."""
+        from screens.answer_chat_screen import AnswerChatDialog
+        from models.database import Response
+        q_data = None
+        try:
+            q_data = self.question_bank.get_question(qid)
+        except Exception:
+            q_data = None
+        if q_data is None:
+            wx.MessageBox("Question not found.", "Ask Tutor",
+                          wx.OK | wx.ICON_WARNING)
+            return
+        user_resp = None
+        try:
+            r = Response.get_or_none(Response.id == response_id)
+            if r is not None:
+                user_resp = r.get_payload()
+        except Exception:
+            user_resp = None
+        dlg = AnswerChatDialog(self, q_data, user_response=user_resp)
+        dlg.ShowModal()
+        dlg.Destroy()
+
+    def _schedule_redo_from_error_log(self, qid: int):
+        """Stub: FSRS wiring arrives in P2.E2. For now, log intent + toast."""
+        from services.log import get_logger
+        get_logger("main_frame").info(
+            "schedule_redo intent from error-log: qid=%s", qid)
+        wx.MessageBox(
+            f"Question {qid} scheduled for redo.\n\n"
+            "FSRS queue wiring arrives in P2.E2; for now this logs intent so "
+            "you can find the item in the error log again.",
+            "Scheduled",
+            wx.OK | wx.ICON_INFORMATION,
+        )
 
     def _start_section_test(self, measure: str):
         """Start a 2-section adaptive test for a single measure."""

@@ -4,7 +4,7 @@ Question bank service — loads, filters, and selects questions from the databas
 import random
 from datetime import datetime, timedelta
 
-from peewee import fn
+from peewee import fn, OperationalError
 
 from models.database import (
     db, Question, QuestionOption, NumericAnswer, Stimulus,
@@ -64,6 +64,14 @@ def _exclude_synthetic_clause():
 # is keyed on ``stimulus_id``, not ``question_id``.
 DEFAULT_RECENT_SEEN_DAYS = 30
 DEFAULT_MASTERY_COOLDOWN_DAYS = 60
+
+# P4.P3: 7-day cooldown on RC-passage and DI-cluster ``stimulus_id``s.
+# Even when sibling qids rotate, the shared passage/chart shouldn't
+# reappear inside this window. Read side is
+# ``get_recently_served_stimulus_ids``; unioned into
+# ``exclude_stimulus_ids`` inside ``_select_rc_passage_anchor`` /
+# ``_select_di_cluster``.
+DEFAULT_CLUSTER_COOLDOWN_DAYS = 7
 
 
 # Threshold of distinct flag-submitting users at which a question is
@@ -232,25 +240,100 @@ def _log_served(qids, user_id: str = "local", session_id=None):
     Uses a single ``insert_many`` round-trip; guarded with try/except so
     a DB-layer hiccup (migration not applied, DB locked, etc.) degrades
     to WARN-and-continue rather than blowing up the selection path.
+
+    P4.P3: also captures each qid's ``stimulus_id`` (NULL for singletons)
+    so the 7-day cluster cooldown can query served stimuli directly
+    without a Question join on every read.
     """
     if not qids:
         return
     try:
+        # One query to map qid -> stimulus_id. Missing rows (deleted /
+        # retired qids) default to NULL.
+        stim_map = {}
+        try:
+            for row in (Question
+                        .select(Question.id, Question.stimulus)
+                        .where(Question.id.in_([int(q) for q in qids]))):
+                stim_map[row.id] = row.stimulus_id
+        except Exception:
+            # Worst case: fall back to NULL stimulus_id for everyone.
+            logger.debug(
+                "_log_served: stimulus lookup failed; writing NULL stim_ids",
+                exc_info=True,
+            )
+
         now = datetime.now()
         rows = [
             {"question_id": int(qid),
              "session_id": str(session_id) if session_id is not None else None,
              "user_id": user_id or "local",
-             "served_at": now}
+             "served_at": now,
+             "stimulus_id": stim_map.get(int(qid))}
             for qid in qids
         ]
-        ServedLog.insert_many(rows).execute()
+        try:
+            ServedLog.insert_many(rows).execute()
+        except OperationalError as e:
+            # Older user DB that hasn't run migration 028 yet — drop
+            # stimulus_id from the payload and retry so dedup still
+            # works (just without cluster cooldown).
+            if _is_missing_stim_id_error(e):
+                for r in rows:
+                    r.pop("stimulus_id", None)
+                ServedLog.insert_many(rows).execute()
+            else:
+                raise
     except Exception:
         logger.warning(
             "servedlog write failed for %d qids (user=%s); "
             "selection proceeds, dedup may regress",
             len(qids), user_id, exc_info=True,
         )
+
+
+def _is_missing_stim_id_error(exc) -> bool:
+    """True when a peewee OperationalError complains about the missing
+    ``stimulus_id`` column on ``servedlog`` — the one symptom migration
+    028 fixes. Any other schema error still bubbles up."""
+    msg = str(exc).lower()
+    return "stimulus_id" in msg and ("no column" in msg
+                                      or "no such column" in msg
+                                      or "has no column" in msg)
+
+
+def get_recently_served_stimulus_ids(days: int = 7,
+                                     user_id: str = "local"):
+    """P4.P3 — return the set of ``stimulus_id`` values served to
+    ``user_id`` within the last ``days`` days.
+
+    Used by ``_select_rc_passage_anchor`` and ``_select_di_cluster`` to
+    refuse to pick a passage/chart whose sibling qids were already
+    served — closing the loophole where the assembler rotates to a
+    different qid under the same stimulus within the dedup window.
+
+    Gracefully returns an empty set when:
+      * ``servedlog.stimulus_id`` doesn't exist yet (user DB hasn't run
+        migration 028), or
+      * the query otherwise fails. The caller treats "no cooldown" as a
+        degraded-but-safe fallback rather than blowing up selection.
+    """
+    try:
+        cutoff = datetime.now() - timedelta(days=days)
+        rows = (ServedLog
+                .select(ServedLog.stimulus_id)
+                .where((ServedLog.served_at >= cutoff) &
+                       (ServedLog.user_id == user_id) &
+                       (ServedLog.stimulus_id.is_null(False)))
+                .distinct())
+        return {r.stimulus_id for r in rows if r.stimulus_id is not None}
+    except Exception:
+        logger.debug(
+            "get_recently_served_stimulus_ids: read failed; "
+            "cluster cooldown degrades to no-op",
+            exc_info=True,
+        )
+        return set()
 
 
 def get_recently_seen_ids(days_back: int = 14, user_id: str = "local"):
@@ -668,11 +751,25 @@ class QuestionBankService:
 
         in_session_exclude = set(exclude_ids or [])
         dedup_exclude = set()
+        # P4.P3: 7-day stimulus cooldown. Applied to cluster anchors
+        # only (RC passage + DI chart) — singleton qids are already
+        # governed by the qid-level ``ServedLog`` dedup window, which
+        # is 30 days by default. The cluster cooldown closes the
+        # loophole where a different qid under the same stimulus
+        # re-surfaces within a week even though the passage/chart was
+        # just served. Empty set when ``exclude_user_seen`` is off
+        # (stateless topic drills etc.) so the cooldown is purely a
+        # "known user" feature.
+        cluster_cooldown_stims = set()
         if exclude_user_seen:
             dedup_exclude = _dedup_exclusions(
                 user_id=exclude_user_seen,
                 recent_days=recent_seen_days,
                 mastery_cooldown_days=mastery_cooldown_days,
+            )
+            cluster_cooldown_stims = get_recently_served_stimulus_ids(
+                days=DEFAULT_CLUSTER_COOLDOWN_DAYS,
+                user_id=exclude_user_seen,
             )
         exclude = set(in_session_exclude) | set(dedup_exclude)
 
@@ -689,7 +786,10 @@ class QuestionBankService:
         # around it. The ``data_interp`` subtype quota is reduced by the
         # cluster size so we don't double-count the DI slot.
         if measure == "quant":
-            di_cluster = self._select_di_cluster(difficulty_band, exclude)
+            di_cluster = self._select_di_cluster(
+                difficulty_band, exclude,
+                exclude_stimulus_ids=cluster_cooldown_stims,
+            )
             if di_cluster:
                 selected_ids.extend(di_cluster)
                 exclude.update(di_cluster)
@@ -745,6 +845,7 @@ class QuestionBankService:
                 exclude=exclude,
                 max_size=rc_target_sum,
                 prefer_size=RC_ANCHOR_PREFER_SIZE,
+                exclude_stimulus_ids=cluster_cooldown_stims,
             )
             if rc_anchor:
                 selected_ids.extend(rc_anchor)
@@ -766,6 +867,7 @@ class QuestionBankService:
                         max_size=rc_budget_left,
                         prefer_size=RC_ANCHOR_MIN_SIZE,
                         min_size=RC_ANCHOR_MIN_SIZE,
+                        exclude_stimulus_ids=cluster_cooldown_stims,
                     )
                     if secondary:
                         selected_ids.extend(secondary)
@@ -1348,7 +1450,8 @@ class QuestionBankService:
             query = query.where(clause)
         return [q.id for q in query]
 
-    def _select_di_cluster(self, difficulty_band, exclude_ids):
+    def _select_di_cluster(self, difficulty_band, exclude_ids,
+                            exclude_stimulus_ids=None):
         """Pick one Data-Interpretation set for a Quant section.
 
         Prefers a real 3-question cluster under a graph/table/chart
@@ -1366,10 +1469,16 @@ class QuestionBankService:
         The distinct-stimuli fallback naturally respects exclusion since
         each pick is independent.
 
+        ``exclude_stimulus_ids`` (P4.P3): a set of stimulus_ids to avoid
+        even when no sibling qid is excluded — e.g. the 7-day cluster
+        cooldown. Skips both multi-Q clusters *and* singleton-fallback
+        picks whose parent stimulus is in this set.
+
         Returns a list of question IDs (0..DI_CLUSTER_TARGET_SIZE items),
         empty when nothing is available.
         """
         exclude_list = list(exclude_ids) if exclude_ids else []
+        stim_block = set(exclude_stimulus_ids or ())
         cand = (
             Question.select(Question.stimulus_id,
                             fn.COUNT(Question.id).alias("n"))
@@ -1402,6 +1511,10 @@ class QuestionBankService:
         # Try real multi-sibling clusters first (preserves GRE "one
         # chart, three questions" shape when the bank supports it).
         for stim_id in triples + pairs:
+            if stim_id in stim_block:
+                # P4.P3 cluster cooldown — stimulus already served
+                # within the configured window; skip entirely.
+                continue
             siblings = list(
                 Question.select(Question.id)
                 .where((Question.stimulus_id == stim_id) &
@@ -1470,6 +1583,9 @@ class QuestionBankService:
         for row in singleton_children:
             qid = row.id
             if exclude_ids and qid in exclude_ids:
+                continue
+            if row.stimulus_id in stim_block:
+                # P4.P3 cooldown — same chart shown within window.
                 continue
             if difficulty_band == "easy" and (row.difficulty_target or 0) > 2:
                 continue
@@ -1624,7 +1740,8 @@ class QuestionBankService:
 
     def _select_rc_passage_anchor(self, difficulty_band, exclude, max_size,
                                    prefer_size=RC_ANCHOR_PREFER_SIZE,
-                                   min_size=RC_ANCHOR_MIN_SIZE):
+                                   min_size=RC_ANCHOR_MIN_SIZE,
+                                   exclude_stimulus_ids=None):
         """Pick one multi-question RC passage cluster for a Verbal section.
 
         Mirrors ``_select_di_cluster``: queries stimuli that host ≥
@@ -1648,9 +1765,14 @@ class QuestionBankService:
 
         ``prefer_size`` lets callers bias toward long passages (primary
         anchor, default 3) or short passages (secondary anchor, pass 2).
+
+        ``exclude_stimulus_ids`` (P4.P3): a set of passage stim_ids to
+        skip regardless of sibling exclusion state — e.g. the 7-day
+        passage cooldown set from ``get_recently_served_stimulus_ids``.
         """
         if max_size < min_size:
             return []
+        stim_block = set(exclude_stimulus_ids or ())
         cand = (
             Question.select(Question.stimulus_id,
                             fn.COUNT(Question.id).alias("n"))
@@ -1675,6 +1797,9 @@ class QuestionBankService:
         random.shuffle(fallback)
 
         for stim_id in prefer + fallback:
+            if stim_id in stim_block:
+                # P4.P3 — passage served within cooldown window; skip.
+                continue
             siblings = list(
                 Question.select(Question.id)
                 .where((Question.stimulus == stim_id) &

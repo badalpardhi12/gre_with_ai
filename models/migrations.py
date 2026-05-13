@@ -1098,6 +1098,34 @@ def _027_vocab_context_2026_05_12():
                 raise
 
 
+def _028_served_log_stim_id_2026_05_12():
+    """P4.P3 — add ``servedlog.stimulus_id`` for 7-day cluster cooldown.
+
+    Lets the RC-passage anchor and DI-cluster selectors exclude stimuli
+    whose sibling qids were served recently, closing the loophole where
+    a different qid under the same passage/chart re-surfaces within the
+    dedup window. The column is nullable because singleton picks (any
+    qid with no stimulus) still write a ServedLog row — they just carry
+    NULL here.
+
+    Idempotent — swallows ``duplicate column`` and ``already exists``.
+    """
+    db = _get_db()
+    stmts = (
+        "ALTER TABLE servedlog ADD COLUMN stimulus_id INTEGER",
+        "CREATE INDEX IF NOT EXISTS idx_servedlog_stimulus_id "
+        "ON servedlog(stimulus_id)",
+        "CREATE INDEX IF NOT EXISTS idx_servedlog_stim_user_served "
+        "ON servedlog(stimulus_id, user_id, served_at)",
+    )
+    for stmt in stmts:
+        try:
+            db.execute_sql(stmt)
+        except OperationalError as e:
+            if not _is_benign_schema_error(e):
+                raise
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -1145,6 +1173,8 @@ MIGRATIONS = [
      _026_item_review_fsrs_2026_05_12),
     ("027_vocab_context_2026_05_12",
      _027_vocab_context_2026_05_12),
+    ("028_served_log_stim_id_2026_05_12",
+     _028_served_log_stim_id_2026_05_12),
 ]
 
 

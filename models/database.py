@@ -615,12 +615,21 @@ class ServedLog(BaseModel):
     session_id = CharField(index=True, null=True)
     user_id = CharField(default="local", index=True)
     served_at = DateTimeField(default=datetime.now, index=True)
+    # Stimulus that hosted the served qid, if any. Populated alongside
+    # ``question_id`` in ``services.question_bank._log_served`` so the
+    # 7-day cluster cooldown (P4.P3) can exclude recently-served RC
+    # passages and DI charts by ``stimulus_id`` directly — qids rotate
+    # inside a cluster but the shared stimulus shouldn't. Added by
+    # migration ``028_served_log_stim_id_2026_05_12``; nullable so
+    # singleton picks (no stimulus) and legacy rows stay valid.
+    stimulus_id = IntegerField(null=True, index=True)
 
     class Meta:
         database = db
         indexes = (
             (("user_id", "served_at"), False),
             (("question_id", "user_id", "served_at"), False),
+            (("stimulus_id", "user_id", "served_at"), False),
         )
 
 

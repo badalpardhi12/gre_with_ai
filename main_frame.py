@@ -720,6 +720,24 @@ class MainFrame(wx.Frame):
                         time_spent_seconds=seconds,
                         time_to_answer_ms=int(seconds * 1000) if seconds else None,
                     )
+                    # Fire-and-forget Elo update. A rating-service failure
+                    # must never block answer persistence — we log WARN
+                    # and move on. Ungraded / skipped responses
+                    # (is_correct is None) are no-ops in the service.
+                    try:
+                        from services.rating_service import update_on_response
+                        update_on_response(
+                            user_id="local",
+                            question_id=qid,
+                            is_correct=correctness.get(qid),
+                        )
+                    except Exception:
+                        from services.log import get_logger
+                        get_logger("main_frame").warning(
+                            "rating_service.update_on_response failed for qid=%s",
+                            qid,
+                            exc_info=True,
+                        )
 
         # Section-level adaptation
         self.exam.end_current_section()

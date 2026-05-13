@@ -11,6 +11,7 @@ with prompt/options/user_response/explanation by
 import wx
 import wx.lib.scrolledpanel as scrolled
 
+from widgets.latex_inline_text import latex_inline_to_text
 from widgets.theme import Color
 
 
@@ -79,9 +80,12 @@ def _format_correct_answer(detail: dict) -> str:
         return ", ".join(
             f"{b}: {','.join(by_blank[b])}" for b in sorted(by_blank)
         )
-    # Show label) text for each correct option.
+    # Show label) text for each correct option. Option text often
+    # contains LaTeX inline-math (e.g. ``\(\frac{1}{3}\)``) from the
+    # shipped bank; normalise to readable Unicode so the summary row
+    # doesn't display raw macros.
     return "; ".join(
-        f"{o.get('label', '?')}) {(o.get('text') or '')[:80]}"
+        f"{o.get('label', '?')}) {latex_inline_to_text(o.get('text') or '')[:80]}"
         for o in correct
     )
 
@@ -190,13 +194,20 @@ class AnswerReviewDialog(wx.Dialog):
             stim_label = wx.StaticText(card, label="Passage:")
             stim_label.SetForegroundColour(Color.TEXT_SECONDARY)
             sizer.Add(stim_label, 0, wx.LEFT | wx.RIGHT, 12)
-            stim_body = wx.StaticText(card, label=(stim["content"] or "")[:600])
+            stim_body = wx.StaticText(
+                card,
+                label=latex_inline_to_text((stim["content"] or "")[:600]),
+            )
             stim_body.Wrap(800)
             sizer.Add(stim_body, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
 
-        # Prompt
+        # Prompt. Live question view uses a KaTeX WebView (MathView);
+        # this dialog renders many cards in a ScrolledPanel where a
+        # WebView per card would be prohibitively heavy, so we
+        # normalise inline-math LaTeX into readable Unicode via the
+        # same helper the answer-options use on the live screen.
         prompt = detail.get("prompt") or "(no prompt)"
-        prompt_text = wx.StaticText(card, label=prompt)
+        prompt_text = wx.StaticText(card, label=latex_inline_to_text(prompt))
         prompt_text.Wrap(820)
         f = prompt_text.GetFont()
         f.SetWeight(wx.FONTWEIGHT_BOLD)
@@ -209,7 +220,7 @@ class AnswerReviewDialog(wx.Dialog):
             sizer.Add(wx.StaticLine(card), 0, wx.EXPAND | wx.ALL, 6)
             for o in options:
                 label = o.get("label", "")
-                text = o.get("text", "")
+                text = latex_inline_to_text(o.get("text", ""))
                 marker = "  "
                 if o.get("is_correct"):
                     marker = "✓ "
@@ -256,7 +267,7 @@ class AnswerReviewDialog(wx.Dialog):
             f.SetWeight(wx.FONTWEIGHT_BOLD)
             heading.SetFont(f)
             sizer.Add(heading, 0, wx.LEFT | wx.RIGHT | wx.TOP, 12)
-            body = wx.StaticText(card, label=expl)
+            body = wx.StaticText(card, label=latex_inline_to_text(expl))
             body.Wrap(820)
             sizer.Add(body, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 12)
         else:

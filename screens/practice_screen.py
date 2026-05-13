@@ -95,10 +95,11 @@ class PracticeScreen(wx.Panel):
         self._on_section_test: Optional[Callable] = None   # callable(measure: str)
         self._on_full_mock: Optional[Callable] = None
         self._on_resume: Optional[Callable] = None
+        self._on_review_due: Optional[Callable] = None
         self._build_ui()
 
     def set_handlers(self, quick_drill=None, section_test=None,
-                     full_mock=None, resume=None):
+                     full_mock=None, resume=None, review_due=None):
         if quick_drill is not None:
             self._on_quick_drill = quick_drill
         if section_test is not None:
@@ -107,6 +108,8 @@ class PracticeScreen(wx.Panel):
             self._on_full_mock = full_mock
         if resume is not None:
             self._on_resume = resume
+        if review_due is not None:
+            self._on_review_due = review_due
 
     def set_resume_visible(self, visible: bool):
         """Show/hide the "Resume in-progress test" banner. Called by
@@ -122,6 +125,10 @@ class PracticeScreen(wx.Panel):
             self._refresh_recent()
         except Exception:
             logger.exception("recent practice refresh failed")
+        try:
+            self._refresh_review_banner()
+        except Exception:
+            logger.exception("review-due banner refresh failed")
 
     # ── layout ────────────────────────────────────────────────────────
 
@@ -143,6 +150,17 @@ class PracticeScreen(wx.Panel):
         self._resume_banner.Hide()
         outer.Add(
             self._resume_banner, 0, wx.EXPAND |
+            wx.LEFT | wx.RIGHT | wx.BOTTOM, ui_scale.space(5),
+        )
+
+        # "Due for Review (N)" banner — surfaces items the user
+        # scheduled via the error-log "Schedule Redo" button (P2.E2).
+        # Hidden on first build; ``refresh()`` shows it when there are
+        # items due.
+        self._review_banner = self._make_review_banner()
+        self._review_banner.Hide()
+        outer.Add(
+            self._review_banner, 0, wx.EXPAND |
             wx.LEFT | wx.RIGHT | wx.BOTTOM, ui_scale.space(5),
         )
 
@@ -229,6 +247,55 @@ class PracticeScreen(wx.Panel):
 
         panel.SetSizer(row)
         return panel
+
+    def _make_review_banner(self):
+        """"Due for Review (N)" callout for items queued via the
+        error-log Schedule-Redo button (P2.E2). Draws the due-count
+        lazily on refresh(); clicking "Start Review" triggers the
+        review-mode practice handler."""
+        panel = wx.Panel(self)
+        panel.SetBackgroundColour(Color.ACCENT)
+        row = wx.BoxSizer(wx.HORIZONTAL)
+
+        text = wx.StaticText(panel, label="↻  Due for Review: 0 items")
+        text.SetForegroundColour(Color.TEXT_INVERSE)
+        f = text.GetFont()
+        f.SetWeight(wx.FONTWEIGHT_BOLD)
+        f.SetPointSize(f.GetPointSize() + 1)
+        text.SetFont(f)
+        row.Add(text, 1, wx.ALIGN_CENTER_VERTICAL | wx.ALL,
+                ui_scale.space(3))
+        self._review_text = text
+
+        start_btn = SecondaryButton(panel, label="Start Review")
+        start_btn.Bind(
+            wx.EVT_BUTTON,
+            lambda _: self._on_review_due and self._on_review_due(),
+        )
+        row.Add(start_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL,
+                ui_scale.space(2))
+
+        panel.SetSizer(row)
+        return panel
+
+    def _refresh_review_banner(self):
+        """Show the "Due for Review" banner iff the user has items due.
+        Pulled lazily here (rather than on every frame nav) so a long
+        error-log queue doesn't have to hit the DB unnecessarily."""
+        try:
+            from services import srs
+            n = srs.due_items_count("local")
+        except Exception:
+            logger.exception("due_items_count failed")
+            n = 0
+        if n > 0:
+            self._review_text.SetLabel(
+                f"↻  Due for Review: {n} item{'s' if n != 1 else ''}"
+            )
+            self._review_banner.Show()
+        else:
+            self._review_banner.Hide()
+        self.Layout()
 
     # ── recent ────────────────────────────────────────────────────────
 

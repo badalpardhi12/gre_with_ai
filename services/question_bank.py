@@ -481,6 +481,30 @@ def user_stats(user_id: str = "local",
 class QuestionBankService:
     """Query and select questions for test assembly and drills."""
 
+    def select_review_queue(self, count=20, user_id="local"):
+        """Return up to ``count`` question IDs from the FSRS due-review
+        queue (P2.E2). Items come from ``services.srs.get_due_items`` —
+        populated by the error-log Schedule-Redo button and by review
+        lapses. Retired items are filtered so a long-stale row doesn't
+        surface a deleted question.
+
+        Returns [] if nothing is due; callers decide how to handle the
+        empty case (we don't auto-fall-back here — review mode should
+        be honest about "nothing to review")."""
+        from services import srs
+        ids = srs.get_due_items(user_id=user_id, limit=max(1, int(count)))
+        if not ids:
+            return []
+        live_ids = [
+            r.id for r in Question.select(Question.id).where(
+                (Question.id.in_(ids)) & (Question.status == "live")
+            )
+        ]
+        # Preserve the srs ordering (oldest due first).
+        order = {qid: i for i, qid in enumerate(ids)}
+        live_ids.sort(key=lambda q: order.get(q, 1_000_000))
+        return live_ids
+
     def select_drill_smart(self, subtopic, count=10, user_id="local",
                            avoid_recent_days=14):
         """Smart drill selection for a single subtopic.

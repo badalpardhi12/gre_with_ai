@@ -305,6 +305,7 @@ class MainFrame(wx.Frame):
             section_test=self._start_section_test,
             full_mock=lambda: self._start_test("full_mock", "simulation"),
             resume=self._resume_in_progress_test,
+            review_due=self._on_start_review_due,
         )
         self.screens["insights"].set_handlers(
             update_plan=self._open_plan_dialog,
@@ -1227,6 +1228,73 @@ class MainFrame(wx.Frame):
 
     # ── Today-screen helpers ─────────────────────────────────────────
 
+    def _on_start_review_due(self):
+        """Launch a practice session over the user's FSRS-due items
+        (P2.E2). Drawn from ``srs.get_due_items`` — items surfaced via
+        the error-log Schedule-Redo button or past review lapses. Runs
+        as a ``test_type='review'`` drill so per-question scoring still
+        flows through the normal Response / scoring path."""
+        from models.exam_session import (
+            ExamSession, SectionType, SectionState,
+        )
+        from models.database import Question as _Q
+        from services import srs
+
+        ids = srs.get_due_items("local", limit=20)
+        if not ids:
+            wx.MessageBox(
+                "Nothing is due for review yet.\n\n"
+                "The Practice screen's \"Due for Review\" queue fills up "
+                "from Schedule-Redo on the Error Log and from past review "
+                "lapses.",
+                "Due for Review", wx.OK | wx.ICON_INFORMATION,
+            )
+            return
+
+        # Drop any ids that have since been retired.
+        live_ids = [
+            r.id for r in _Q.select(_Q.id).where(
+                (_Q.id.in_(ids)) & (_Q.status == "live")
+            )
+        ]
+        order = {qid: i for i, qid in enumerate(ids)}
+        ids = sorted(live_ids, key=lambda q: order.get(q, 1_000_000))
+
+        if not ids:
+            wx.MessageBox(
+                "Your review queue contains only retired questions. "
+                "They'll clear automatically on next practice.",
+                "Due for Review", wx.OK | wx.ICON_INFORMATION,
+            )
+            return
+
+        ids = self.question_bank.enforce_cluster_atomicity(
+            ids, strict_count=True, max_oversize=3,
+        )
+
+        rows = list(_Q.select(_Q.id, _Q.measure).where(_Q.id.in_(ids)))
+        n_quant = sum(1 for r in rows if r.measure == "quant")
+        majority_quant = n_quant > (len(ids) - n_quant)
+        sec_type = (SectionType.QUANT_S1 if majority_quant
+                    else SectionType.VERBAL_S1)
+
+        self.exam = ExamSession(test_type="review", mode="learning")
+        self.exam.section_order = [sec_type]
+        section_state = SectionState(
+            section_type=sec_type, question_ids=ids,
+            time_limit=len(ids) * 90,
+        )
+        section_state.display_label = f"Due for Review ({len(ids)} items)"
+        self.exam.sections[sec_type] = section_state
+        self.exam._question_bank = self.question_bank
+        db.connect(reuse_if_open=True)
+        self.db_session = DBSession.create(
+            test_type="review", mode="learning",
+            state="in_progress", started_at=datetime.now(),
+            section_order=json.dumps([sec_type.value]),
+        )
+        self._show_section_instructions()
+
     def _on_start_quick_drill(self):
         """Build a 10-question mixed drill targeting the user's weak topics.
 
@@ -1445,14 +1513,27 @@ class MainFrame(wx.Frame):
         dlg.Destroy()
 
     def _schedule_redo_from_error_log(self, qid: int):
-        """Stub: FSRS wiring arrives in P2.E2. For now, log intent + toast."""
+        """Wire the error-log "Schedule Redo" button into the FSRS item
+        scheduler (P2.E2). Creates or resets an ``ItemReview`` so the
+        item surfaces in the next "Due for Review" practice session."""
         from services.log import get_logger
-        get_logger("main_frame").info(
-            "schedule_redo intent from error-log: qid=%s", qid)
+        from services import srs
+
+        logger_ = get_logger("main_frame")
+        try:
+            srs.schedule_redo("local", qid)
+        except Exception:
+            logger_.exception("schedule_redo failed for qid=%s", qid)
+            wx.MessageBox(
+                f"Could not schedule Question {qid} for redo (see log).",
+                "Scheduled", wx.OK | wx.ICON_ERROR,
+            )
+            return
+        logger_.info("schedule_redo wrote ItemReview for qid=%s", qid)
         wx.MessageBox(
             f"Question {qid} scheduled for redo.\n\n"
-            "FSRS queue wiring arrives in P2.E2; for now this logs intent so "
-            "you can find the item in the error log again.",
+            "It will surface in the Practice screen's \"Due for Review\" "
+            "queue within the next few minutes.",
             "Scheduled",
             wx.OK | wx.ICON_INFORMATION,
         )

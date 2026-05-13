@@ -447,6 +447,34 @@ class FlashcardReview(BaseModel):
         )
 
 
+class ItemReview(BaseModel):
+    """FSRS scheduling state for a single user-question pair (P2.E2).
+
+    Mirrors ``FlashcardReview`` but scoped to ``Question`` items rather
+    than vocab words. Populated by ``services.srs.review_item`` and the
+    "Schedule Redo" button on the error-log screen; consumed by the
+    "Due for Review" practice mode.
+    """
+    id = AutoField()
+    user_id = CharField(default="local", index=True)
+    question_id = IntegerField(index=True)
+    # FSRS-5 state machine: new → learning → review (→ relearning on lapse)
+    state = CharField(default="new")
+    stability = FloatField(default=0.0)
+    difficulty = FloatField(default=5.0)
+    last_review_at = DateTimeField(null=True)
+    next_due_at = DateTimeField(index=True, null=True)
+    n_reviews = IntegerField(default=0)
+    n_lapses = IntegerField(default=0)
+    created_at = DateTimeField(default=datetime.now)
+
+    class Meta:
+        indexes = (
+            (("user_id", "question_id"), True),   # unique per user
+            (("user_id", "next_due_at"), False),  # due-queue lookup
+        )
+
+
 # ── Lessons ──────────────────────────────────────────────────────────
 
 class Lesson(BaseModel):
@@ -644,6 +672,7 @@ ALL_TABLES = [
     QuestionFlag,
     ServedLog,
     ItemRating,
+    ItemReview,
     SyntheticGenerationRun,
 ]
 

@@ -1011,6 +1011,51 @@ def _025_item_rating_2026_05_12():
     )
 
 
+def _026_item_review_fsrs_2026_05_12():
+    """P2.E2 — create ``itemreview`` table for per-question FSRS state.
+
+    Parallel to ``flashcardreview`` (vocab) but keyed on ``question_id``
+    and scoped per-user. Fresh DBs already pick up the table via
+    ``db.create_tables(ALL_TABLES, safe=True)`` in ``init_db``; the
+    CREATE TABLE IF NOT EXISTS below is a no-op there but required on
+    DBs that already ran ``init_db`` before ``ItemReview`` was added.
+
+    Idempotent — CREATE TABLE IF NOT EXISTS + CREATE INDEX IF NOT EXISTS.
+    """
+    db = _get_db()
+    stmts = (
+        "CREATE TABLE IF NOT EXISTS itemreview ("
+        "  id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,"
+        "  user_id VARCHAR(255) NOT NULL DEFAULT 'local',"
+        "  question_id INTEGER NOT NULL,"
+        "  state VARCHAR(32) NOT NULL DEFAULT 'new',"
+        "  stability REAL NOT NULL DEFAULT 0.0,"
+        "  difficulty REAL NOT NULL DEFAULT 5.0,"
+        "  last_review_at DATETIME,"
+        "  next_due_at DATETIME,"
+        "  n_reviews INTEGER NOT NULL DEFAULT 0,"
+        "  n_lapses INTEGER NOT NULL DEFAULT 0,"
+        "  created_at DATETIME NOT NULL"
+        ")",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_itemreview_user_question "
+        "ON itemreview(user_id, question_id)",
+        "CREATE INDEX IF NOT EXISTS idx_itemreview_user_due "
+        "ON itemreview(user_id, next_due_at)",
+        "CREATE INDEX IF NOT EXISTS idx_itemreview_user_id "
+        "ON itemreview(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_itemreview_question_id "
+        "ON itemreview(question_id)",
+        "CREATE INDEX IF NOT EXISTS idx_itemreview_next_due_at "
+        "ON itemreview(next_due_at)",
+    )
+    for stmt in stmts:
+        try:
+            db.execute_sql(stmt)
+        except OperationalError as e:
+            if not _is_benign_schema_error(e):
+                raise
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -1054,6 +1099,8 @@ MIGRATIONS = [
      _024_response_time_ms_2026_05_12),
     ("025_item_rating_2026_05_12",
      _025_item_rating_2026_05_12),
+    ("026_item_review_fsrs_2026_05_12",
+     _026_item_review_fsrs_2026_05_12),
 ]
 
 

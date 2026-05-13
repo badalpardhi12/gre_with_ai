@@ -1,0 +1,25 @@
+{
+  "high_target_user": {
+    "q2_count": 15,
+    "q2_mean_rating": 0.5999999999999999,
+    "s1_correct_count": 12,
+    "s1_mean_rating": 0.05908516787926448,
+    "s1_total": 12,
+    "s2_band_applied": "hard",
+    "theta_estimate": 0.059085167879264516
+  },
+  "meta": {
+    "generated_for": "P3.S1 section-CAT wire-up",
+    "random_seed_high": 20260512,
+    "random_seed_mixed": 20260513
+  },
+  "mixed_accuracy_user": {
+    "q2_count": 15,
+    "q2_mean_rating": 0.28,
+    "s1_correct_count": 8,
+    "s1_mean_rating": 0.2213763030442727,
+    "s1_total": 12,
+    "s2_band_applied": "medium",
+    "theta_estimate": -0.10534749680954554
+  }
+}

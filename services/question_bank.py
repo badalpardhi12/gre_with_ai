@@ -619,7 +619,8 @@ class QuestionBankService:
                                    exclude_ids=None,
                                    exclude_user_seen=None,
                                    recent_seen_days=DEFAULT_RECENT_SEEN_DAYS,
-                                   mastery_cooldown_days=DEFAULT_MASTERY_COOLDOWN_DAYS):
+                                   mastery_cooldown_days=DEFAULT_MASTERY_COOLDOWN_DAYS,
+                                   target_theta=None):
         """
         Select `count` question IDs respecting real GRE question-type composition
         and keeping RC/DI clusters atomic.
@@ -638,6 +639,18 @@ class QuestionBankService:
         adjusted pool can't satisfy the section, a warning is logged and
         the assembler falls back to the full pool (sans in-session exclusions)
         for the shortfall.
+
+        Phase 3 S1 section-CAT: when ``target_theta`` is a float, candidate
+        clusters are ranked by maximum-information at theta — approximating
+        Fisher info via ``p*(1-p)`` where ``p`` is the Elo expected score
+        derived from each item's rating in ``services.rating_service``. The
+        ``difficulty_band`` filter becomes a SOFT weight (0.5 multiplier on
+        off-band clusters) instead of a hard SQL ``WHERE``, so a hard-
+        routed user still sees mostly band-4/5 items but the assembler
+        never short-ships because of a thin band pool. When
+        ``target_theta`` is ``None`` or rating_service is unavailable, the
+        assembler preserves its pre-S1 band-switch behavior exactly —
+        this is a non-breaking wire-up.
 
         Deficits in any subtype are filled with the most flexible neighbor
         (rc_single for verbal, mcq_single for quant), then any remaining shortfall
@@ -789,6 +802,7 @@ class QuestionBankService:
                 target=target_count,
                 difficulty_band=difficulty_band,
                 exclude=exclude,
+                target_theta=target_theta,
             )
             selected_ids.extend(taken)
             exclude.update(taken)
@@ -804,6 +818,7 @@ class QuestionBankService:
                 target=deficit,
                 difficulty_band=difficulty_band,
                 exclude=exclude,
+                target_theta=target_theta,
             )
             selected_ids.extend(extra)
             exclude.update(extra)
@@ -818,6 +833,7 @@ class QuestionBankService:
                 target=deficit,
                 difficulty_band=difficulty_band,
                 exclude=exclude,
+                target_theta=target_theta,
             )
             selected_ids.extend(extra)
             exclude.update(extra)
@@ -854,6 +870,7 @@ class QuestionBankService:
                     target=deficit,
                     difficulty_band="medium",
                     exclude=exclude,
+                    target_theta=target_theta,
                 )
                 selected_ids.extend(extra)
                 exclude.update(extra)
@@ -885,6 +902,7 @@ class QuestionBankService:
                     target=deficit,
                     difficulty_band=difficulty_band,
                     exclude=partial_exclude,
+                    target_theta=target_theta,
                 )
                 selected_ids.extend(extra)
                 exclude.update(extra)
@@ -906,6 +924,7 @@ class QuestionBankService:
                 target=deficit,
                 difficulty_band=difficulty_band,
                 exclude=relaxed_exclude,
+                target_theta=target_theta,
             )
             selected_ids.extend(extra)
             deficit -= len(extra)
@@ -951,7 +970,7 @@ class QuestionBankService:
         return targets
 
     def _take_cluster_aware(self, measure, subtype, target, difficulty_band,
-                             exclude):
+                             exclude, target_theta=None):
         """Pick up to ``target`` question IDs, pulling full clusters atomically.
 
         ``subtype=None`` means "any subtype for this measure". Questions are
@@ -959,20 +978,53 @@ class QuestionBankService:
         A cluster is admitted only if it fits in the remaining budget; if the
         next candidate cluster is too large, we skip it and look for a smaller
         one instead of truncating.
+
+        Phase 3 S1: when ``target_theta`` is a float, the ``difficulty_band``
+        is applied as a SOFT WEIGHT instead of a hard SQL ``WHERE`` — pool
+        query widens to all live items, clusters get a theta-info score
+        ( ``sum p_i*(1-p_i)`` ), off-band clusters are down-weighted by
+        0.5, and the top-ranked clusters feed into the existing
+        ``_randomesque_pick`` for randomesque tie-breaking.
         """
         if target <= 0:
             return []
 
+        # Theta-active path uses the wide pool so it can soft-weight off-band.
+        # When rating_service is unreachable (or target_theta is None) we stay
+        # on the legacy hard-WHERE path — no regression.
+        theta_active = target_theta is not None
+        ratings_map = {}
+        probe = None
+        if theta_active:
+            try:
+                from services import rating_service  # local import
+                probe = rating_service.get_rating
+            except Exception:
+                theta_active = False
+                probe = None
+
+        # Pre-probe: if target_theta was requested but rating_service yields
+        # no ratings for the measure's live pool at all, degrade to legacy
+        # hard-WHERE band filter BEFORE we build the query. This keeps the
+        # section-assembly behaviour of "band=hard → every pick >= 4"
+        # intact for fresh DBs / missing-rating environments.
+        if theta_active and probe is not None:
+            from models.database import ItemRating
+            if ItemRating.select().limit(1).count() == 0:
+                theta_active = False
+
         query = (Question
-                 .select(Question.id, Question.subtype, Question.stimulus)
+                 .select(Question.id, Question.subtype, Question.stimulus,
+                         Question.difficulty_target)
                  .where((Question.measure == measure) &
                         (Question.status == "live")))
         if subtype is not None:
             query = query.where(Question.subtype == subtype)
-        if difficulty_band == "easy":
-            query = query.where(Question.difficulty_target <= 2)
-        elif difficulty_band == "hard":
-            query = query.where(Question.difficulty_target >= 4)
+        if not theta_active:
+            if difficulty_band == "easy":
+                query = query.where(Question.difficulty_target <= 2)
+            elif difficulty_band == "hard":
+                query = query.where(Question.difficulty_target >= 4)
         if exclude:
             query = query.where(Question.id.not_in(list(exclude)))
 
@@ -986,14 +1038,48 @@ class QuestionBankService:
 
         # Group by cluster key
         clusters = {}
+        cluster_diffs = {}  # cluster_key -> list of difficulty_targets
         for q in candidates:
             key = _cluster_group(q)
             clusters.setdefault(key, []).append(q.id)
+            cluster_diffs.setdefault(key, []).append(q.difficulty_target or 3)
 
-        # Shuffle cluster order (seeds) but keep ids inside each cluster
-        # stable — the full sibling set lands together.
         cluster_keys = list(clusters.keys())
-        random.shuffle(cluster_keys)
+        if theta_active:
+            # Fetch ratings for all candidate qids; if NONE have ratings,
+            # degrade to legacy path so we don't silently skip CAT.
+            qids_for_ratings = [q.id for q in candidates]
+            ratings_map = {qid: probe(qid) for qid in qids_for_ratings}
+            any_rated = any(v is not None for v in ratings_map.values())
+            if not any_rated:
+                # Belt-and-suspenders: we built the query wide (no band
+                # WHERE) when theta was active. Now that we're falling
+                # back, apply the band filter in-memory so the caller
+                # still gets hard-WHERE semantics and we don't surface
+                # off-band items via the degraded-rating path.
+                theta_active = False
+                if difficulty_band == "easy":
+                    clusters = {
+                        k: v for k, v in clusters.items()
+                        if any((cluster_diffs[k][i] or 3) <= 2
+                               for i in range(len(v)))
+                    }
+                elif difficulty_band == "hard":
+                    clusters = {
+                        k: v for k, v in clusters.items()
+                        if any((cluster_diffs[k][i] or 3) >= 4
+                               for i in range(len(v)))
+                    }
+                cluster_keys = list(clusters.keys())
+
+        if theta_active:
+            cluster_keys = self._rank_clusters_by_info(
+                cluster_keys, clusters, cluster_diffs, ratings_map,
+                target_theta, difficulty_band,
+            )
+        else:
+            # Legacy: random cluster order.
+            random.shuffle(cluster_keys)
 
         picked = []
         remaining = target
@@ -1051,6 +1137,87 @@ class QuestionBankService:
             )
 
         return picked
+
+    @staticmethod
+    def _rank_clusters_by_info(cluster_keys, clusters, cluster_diffs,
+                                ratings_map, target_theta, difficulty_band):
+        """Rank candidate clusters by approximate Fisher information at theta.
+
+        For each item ``i`` in a cluster we compute an Elo expected score
+        ``p_i = 1 / (1 + 10 ** ((rating_i - theta) / THETA_SCALE))`` and
+        approximate its information as ``p_i * (1 - p_i)``. The cluster
+        score is the sum of per-item info across its qids.
+
+        Band soft-weight (P3.S1 spec): off-band clusters are multiplied
+        by 0.5 so in-band items lead when info is comparable, but the
+        band is never a hard gate. A cluster is "off-band" if NONE of
+        its qids falls in the requested band.
+
+        Theta-aware tie-break: top-5 most-informative clusters are
+        shuffled uniformly so two back-to-back selections don't land
+        the exact same clusters. Mirrors the ``_randomesque_pick``
+        pattern at cluster granularity.
+
+        Graceful: clusters whose qids have no rating get a neutral
+        score (0.0) — they still appear, just not at the front.
+        """
+        THETA_SCALE = 0.4  # mirror rating_service.THETA_SCALE
+        try:
+            theta = float(target_theta)
+        except (TypeError, ValueError):
+            random.shuffle(cluster_keys)
+            return cluster_keys
+
+        def _info_for_cluster(key):
+            qids = clusters.get(key, [])
+            if not qids:
+                return 0.0, False  # (score, in_band)
+            total = 0.0
+            in_band = False
+            diffs = cluster_diffs.get(key, [])
+            for qid, diff in zip(qids, diffs):
+                rating = ratings_map.get(qid)
+                if rating is None:
+                    continue
+                try:
+                    p = 1.0 / (1.0 + 10.0 ** (
+                        (float(rating) - theta) / THETA_SCALE))
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                total += p * (1.0 - p)
+                d = diff or 3
+                if difficulty_band == "easy" and d <= 2:
+                    in_band = True
+                elif difficulty_band == "hard" and d >= 4:
+                    in_band = True
+                elif difficulty_band == "medium" and d == 3:
+                    in_band = True
+            return total, in_band
+
+        scored = []
+        for key in cluster_keys:
+            raw, in_band = _info_for_cluster(key)
+            # Soft band weight: in-band clusters keep full info score,
+            # off-band clusters are halved (spec: 0.5). We add a small
+            # additive in-band bonus so that when info is close (theta
+            # near band boundary) the in-band cluster still leads — this
+            # preserves the accuracy-router's band signal as a CAT hint
+            # rather than letting max-info drag Q2 back to a noisier
+            # central band.
+            weight = 1.0 if in_band else 0.5
+            bonus = 0.1 if in_band else 0.0
+            scored.append((raw * weight + bonus, key))
+
+        # Highest-info first; deterministic tie-break on key repr so the
+        # sort is stable before we inject randomness on the top slice.
+        scored.sort(key=lambda pair: (-pair[0], repr(pair[1])))
+
+        top_m = max(1, min(5, len(scored)))
+        head_pool = scored[:top_m]
+        tail = scored[top_m:]
+        random.shuffle(head_pool)
+        random.shuffle(tail)
+        return [key for _score, key in (head_pool + tail)]
 
     def enforce_cluster_atomicity(self, question_ids, strict_count=False,
                                     max_oversize=3):

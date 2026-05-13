@@ -382,12 +382,30 @@ class ExamSession:
             # so the deferred S2 assembly respects consecutive-mock dedup.
             prev_mock_qids = getattr(self, '_prev_mock_qids', set())
             exclude_for_s2 = list(set(s1_ids) | set(prev_mock_qids))
+
+            # Phase 3 S1: compute running theta from the user's response
+            # history and pass it to the composer as a soft-weight signal.
+            # The legacy ``difficulty_band`` above is retained as fallback
+            # — a non-finite theta (rating_service unavailable, fresh DB)
+            # degrades gracefully inside ``scoring.compute_theta`` and the
+            # composer reverts to the band-switch hard-WHERE path.
+            target_theta = None
+            try:
+                from services.scoring import compute_theta
+                target_theta = compute_theta(
+                    user_id=getattr(self, "_user_id", "local"),
+                )
+            except Exception:
+                # Any failure here MUST NOT block S2 assembly.
+                target_theta = None
+
             q_ids = qb.select_questions_composed(
                 measure=measure,
                 count=q_count,
                 difficulty_band=band,
                 exclude_ids=exclude_for_s2,
                 exclude_user_seen=getattr(self, "_user_id", "local"),
+                target_theta=target_theta,
             )
             self.sections[s2_type].question_ids = q_ids
 

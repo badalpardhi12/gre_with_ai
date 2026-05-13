@@ -11,6 +11,32 @@ from services.log import get_logger
 logger = get_logger("scoring")
 
 
+# ── Theta estimation facade (P3.S1) ───────────────────────────────────
+
+def compute_theta(user_id: str = "local", window: int = 40) -> float:
+    """Running user theta estimate — caller-friendly facade around
+    ``services.rating_service.get_user_theta``.
+
+    Returns a finite float. Graceful fallback: when rating_service is
+    unavailable (fresh clone, import error) or its estimate returns a
+    non-finite value, we return ``0.0`` so section-CAT routing treats
+    the user as theta=0 rather than crashing selection.
+
+    Phase 3 S1 wire-up: ``models.exam_session`` calls this after S1 to
+    drive S2 section-level adaptive item selection.
+    """
+    try:
+        from services import rating_service  # local import — keeps cycles clean
+        theta = float(rating_service.get_user_theta(user_id=user_id, window=window))
+    except Exception:
+        logger.debug("compute_theta: rating_service unavailable, defaulting to 0.0",
+                     exc_info=True)
+        return 0.0
+    if not math.isfinite(theta):
+        return 0.0
+    return theta
+
+
 # ── Scaled Score Lookup (approximation) ───────────────────────────────
 # Maps (raw_correct, difficulty_band) -> (estimated_low, estimated_high)
 # Based on publicly available ETS percentile data and score ranges 130-170.

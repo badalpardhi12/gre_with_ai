@@ -651,12 +651,80 @@ class QuestionBankService:
             exclude.update(extra)
             deficit -= len(extra)
 
-        # Pool-exhaustion fallback: ignore dedup (but not in-session exclusions)
-        # and try once more so we never ship a short section.
+        # Pool-exhaustion fallback (P1.R4). Prior behavior dropped the
+        # ``dedup_exclude`` set immediately on shortfall, which re-served
+        # items the user had just seen in the last 30 days. The three
+        # branches below widen the pool in increasing-aggressiveness order
+        # so recently-seen items are preserved as long as possible:
+        #
+        #   1. Band widening (easy/hard → medium): keeps the FULL
+        #      dedup_exclude but looks outside the requested difficulty
+        #      band. Matches how ETS composes sections when a difficulty
+        #      tier is thin.
+        #   2. Partial dedup drop: keeps items seen within the last 7 days
+        #      out of the pool but lets older-than-7d recently-seen /
+        #      mastered items back in. Gives the learner variety while
+        #      still protecting "I literally just saw this".
+        #   3. Full drop: original behavior — relax every dedup exclusion
+        #      except in-session. Logged at WARN so it shows up in the
+        #      wild.
+        if deficit > 0:
+            # Branch 1: widen the difficulty band before touching dedup.
+            if difficulty_band in ("easy", "hard"):
+                logger.info(
+                    "select_questions_composed: %s pool short %d items at "
+                    "band=%s; widening to medium before relaxing dedup",
+                    measure, deficit, difficulty_band,
+                )
+                extra = self._take_cluster_aware(
+                    measure=measure,
+                    subtype=None,
+                    target=deficit,
+                    difficulty_band="medium",
+                    exclude=exclude,
+                )
+                selected_ids.extend(extra)
+                exclude.update(extra)
+                deficit -= len(extra)
+
         if deficit > 0 and dedup_exclude:
+            # Branch 2: partial-dedup — protect only items served within
+            # the last 7 days. Uses ``get_recently_seen_ids`` which reads
+            # Response; on a fresh-launch user with an empty Response
+            # table this helper returns the empty set, in which case we
+            # short-circuit through to the full-drop branch below. After
+            # R3 lands, this helper will additionally cover ServedLog.
+            seven_day_floor = get_recently_seen_ids(
+                days_back=7, user_id=exclude_user_seen or "local",
+            )
+            if seven_day_floor:
+                logger.info(
+                    "select_questions_composed: %s still short %d after "
+                    "band-widening; relaxing dedup but protecting %d "
+                    "items seen in last 7 days",
+                    measure, deficit, len(seven_day_floor),
+                )
+                partial_exclude = (set(in_session_exclude)
+                                   | set(selected_ids)
+                                   | set(seven_day_floor))
+                extra = self._take_cluster_aware(
+                    measure=measure,
+                    subtype=None,
+                    target=deficit,
+                    difficulty_band=difficulty_band,
+                    exclude=partial_exclude,
+                )
+                selected_ids.extend(extra)
+                exclude.update(extra)
+                deficit -= len(extra)
+
+        if deficit > 0 and dedup_exclude:
+            # Branch 3: full drop — last resort. Preserves pre-R4
+            # behavior so we never ship a short section, but logs at
+            # WARN so we can see how often this actually fires.
             logger.warning(
                 "select_questions_composed: %s pool exhausted after dedup "
-                "(%d-item shortfall); relaxing dedup filter",
+                "(%d-item shortfall); dropping all dedup filters",
                 measure, deficit,
             )
             relaxed_exclude = set(in_session_exclude) | set(selected_ids)

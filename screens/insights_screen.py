@@ -21,6 +21,7 @@ from models.database import (
     MasteryRecord, StudyPlan,
 )
 from services.log import get_logger
+from services.mastery import heatmap_data
 from services.score_forecast import overall_forecast, forecast_history
 from services.study_plan import get_active_plan
 from services.timing_analytics import per_subtype_p50_p90, outliers
@@ -57,6 +58,7 @@ class InsightsScreen(wx.Panel):
             (self._refresh_mastery, "mastery"),
             (self._refresh_plan, "plan"),
             (self._refresh_timing, "timing"),
+            (self._refresh_freshness, "freshness"),
             (self._refresh_history, "history"),
         ):
             try:
@@ -103,6 +105,10 @@ class InsightsScreen(wx.Panel):
 
         # Timing panel (P2.E3): per-subtype P50/P90 bars + outlier count.
         col.Add(self._build_timing_card(), 0, wx.EXPAND |
+                wx.LEFT | wx.RIGHT | wx.TOP, ui_scale.space(5))
+
+        # Subtopic strength × freshness grid (P3.S4).
+        col.Add(self._build_freshness_card(), 0, wx.EXPAND |
                 wx.LEFT | wx.RIGHT | wx.TOP, ui_scale.space(5))
 
         # History list
@@ -200,6 +206,24 @@ class InsightsScreen(wx.Panel):
         ))
         self._timing_body.Add(self._timing_summary, 0, wx.BOTTOM,
                               ui_scale.space(2))
+        return card
+
+    def _build_freshness_card(self):
+        card = Card(self.content, title="SUBTOPIC STRENGTH & FRESHNESS")
+        self._freshness_body = card.body
+        self._freshness_card = card
+
+        self._freshness_summary = wx.StaticText(card, label="Loading…")
+        self._freshness_summary.SetForegroundColour(Color.TEXT_SECONDARY)
+        self._freshness_summary.SetFont(wx.Font(
+            ui_scale.text_sm(), wx.FONTFAMILY_DEFAULT,
+            wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL,
+        ))
+        self._freshness_body.Add(self._freshness_summary, 0, wx.BOTTOM,
+                                 ui_scale.space(2))
+
+        self._freshness_grid = _FreshnessGrid(card)
+        self._freshness_body.Add(self._freshness_grid, 1, wx.EXPAND)
         return card
 
     def _build_history_card(self):
@@ -423,6 +447,29 @@ class InsightsScreen(wx.Panel):
         row.Add(stat_lbl, 0, wx.ALIGN_CENTER_VERTICAL)
         return row
 
+    def _refresh_freshness(self):
+        rows = heatmap_data()
+        if not rows:
+            self._freshness_summary.SetLabel(
+                "No subtopics found yet — seed the question bank or "
+                "complete a drill to populate the heatmap.")
+            self._freshness_grid.set_data([])
+            return
+
+        seen = [r for r in rows if r["days_since_seen"] is not None]
+        stale = [r for r in seen if (r["days_since_seen"] or 0) > 14]
+        weak_and_forgotten = [
+            r for r in seen
+            if r["mastery_decayed"] < 0.3 and (r["days_since_seen"] or 0) > 7
+        ]
+        self._freshness_summary.SetLabel(
+            f"{len(seen)} subtopic{'s' if len(seen) != 1 else ''} attempted  ·  "
+            f"{len(stale)} stale (>14d)  ·  "
+            f"{len(weak_and_forgotten)} weak + forgotten  ·  "
+            "row colour = mastery band, saturation = freshness"
+        )
+        self._freshness_grid.set_data(rows)
+
     def _refresh_history(self):
         self._history_list.DeleteAllItems()
         rows = (DBSession
@@ -476,3 +523,236 @@ class _SegmentedBar(wx.Panel):
             gc.SetBrush(wx.Brush(color))
             gc.DrawRoundedRectangle(0, 0, max(2, w * self._fraction), h,
                                     radius)
+
+
+# ── Subtopic × freshness heatmap (P3.S4) ──────────────────────────────
+
+# Freshness bins (days-since-last-seen, right-exclusive upper bounds).
+_FRESHNESS_BINS = [
+    ("<7d", 0, 7),
+    ("7–14d", 7, 14),
+    ("14–30d", 14, 30),
+    (">30d", 30, float("inf")),
+]
+
+
+def _freshness_bin_index(days):
+    """Return 0..3 for the bin that ``days`` falls into. Unseen → None."""
+    if days is None:
+        return None
+    for i, (_label, lo, hi) in enumerate(_FRESHNESS_BINS):
+        if lo <= days < hi:
+            return i
+    return len(_FRESHNESS_BINS) - 1
+
+
+def _mastery_band_color(m: float) -> wx.Colour:
+    """Red < 0.3, yellow 0.3–0.7, green > 0.7."""
+    if m < 0.3:
+        return Color.DANGER
+    if m < 0.7:
+        return Color.WARNING
+    return Color.SUCCESS
+
+
+def _blend(fg: wx.Colour, bg: wx.Colour, saturation: float) -> wx.Colour:
+    """Linear blend between ``bg`` (saturation=0) and ``fg`` (saturation=1)."""
+    s = max(0.0, min(1.0, saturation))
+    return wx.Colour(
+        int(bg.Red()   + (fg.Red()   - bg.Red())   * s),
+        int(bg.Green() + (fg.Green() - bg.Green()) * s),
+        int(bg.Blue()  + (fg.Blue()  - bg.Blue())  * s),
+    )
+
+
+class _FreshnessGrid(wx.Panel):
+    """Custom-painted grid: rows = subtopics, cols = freshness bins.
+
+    Cell fill uses the mastery-band colour, blended toward BG_SURFACE as
+    the subtopic goes stale (fresher = more saturated). Hover / click
+    reveals a tooltip with the exact numbers.
+    """
+
+    ROW_H = 22
+    HEADER_H = 22
+    LABEL_W = 220
+    CELL_W = 90
+    PADDING = 6
+    MAX_ROWS = 40   # scrolling handled by the parent ScrolledWindow
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.SetBackgroundColour(Color.BG_SURFACE)
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self._rows: list = []
+        self._cells: list = []   # list of (wx.Rect, row_dict, bin_index)
+        self._hover_idx = None
+        self.Bind(wx.EVT_PAINT, self._on_paint)
+        self.Bind(wx.EVT_MOTION, self._on_motion)
+        self.Bind(wx.EVT_LEAVE_WINDOW, self._on_leave)
+        self.Bind(wx.EVT_LEFT_UP, self._on_click)
+
+    def set_data(self, rows):
+        # heatmap_data already sorts by decayed ascending; cap to MAX_ROWS
+        # so the card stays scannable. The rest is still reachable via
+        # study-plan priority.
+        self._rows = list(rows or [])[: self.MAX_ROWS]
+        n = len(self._rows)
+        row_h = ui_scale.font_size(self.ROW_H)
+        header_h = ui_scale.font_size(self.HEADER_H)
+        pad = ui_scale.space(self.PADDING // 2 or 1)
+        height = header_h + n * row_h + 2 * pad
+        self.SetMinSize((-1, max(ui_scale.font_size(60), height)))
+        if self.GetParent():
+            self.GetParent().Layout()
+        self.Refresh()
+
+    # ── painting ──────────────────────────────────────────────────────
+
+    def _on_paint(self, _):
+        dc = wx.AutoBufferedPaintDC(self)
+        dc.SetBackground(wx.Brush(Color.BG_SURFACE))
+        dc.Clear()
+        gc = wx.GraphicsContext.Create(dc)
+
+        self._cells = []
+
+        w, _ = self.GetClientSize()
+        pad = ui_scale.space(1)
+        label_w = ui_scale.font_size(self.LABEL_W)
+        n_bins = len(_FRESHNESS_BINS)
+        # Shrink cell_w if the card is narrower than the nominal layout.
+        available = max(ui_scale.font_size(120), w - label_w - 2 * pad)
+        cell_w = max(ui_scale.font_size(40), available // n_bins)
+        row_h = ui_scale.font_size(self.ROW_H)
+        header_h = ui_scale.font_size(self.HEADER_H)
+
+        header_font = wx.Font(
+            ui_scale.text_xs(), wx.FONTFAMILY_DEFAULT,
+            wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD,
+        )
+        sub_font = wx.Font(
+            ui_scale.text_sm(), wx.FONTFAMILY_TELETYPE,
+            wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL,
+        )
+        meta_font = wx.Font(
+            ui_scale.text_xs(), wx.FONTFAMILY_TELETYPE,
+            wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL,
+        )
+
+        # Column headers
+        gc.SetFont(header_font, Color.TEXT_SECONDARY)
+        gc.DrawText("subtopic", pad, pad)
+        for i, (label, _lo, _hi) in enumerate(_FRESHNESS_BINS):
+            x = pad + label_w + i * cell_w
+            tw, _ = gc.GetTextExtent(label)
+            gc.DrawText(label, x + (cell_w - tw) // 2, pad)
+
+        if not self._rows:
+            gc.SetFont(sub_font, Color.TEXT_TERTIARY)
+            gc.DrawText(
+                "No subtopic data yet.", pad, pad + header_h,
+            )
+            return
+
+        # Rows
+        for row_i, row in enumerate(self._rows):
+            y = pad + header_h + row_i * row_h
+
+            # Row label (subtopic)
+            sub = row["subtopic"]
+            # Truncate to the label column width in chars.
+            gc.SetFont(sub_font, Color.TEXT_PRIMARY)
+            label_text = sub if len(sub) <= 26 else sub[:25] + "…"
+            gc.DrawText(label_text, pad, y + ui_scale.space(1))
+
+            bin_idx = _freshness_bin_index(row["days_since_seen"])
+            m = row["mastery_decayed"]
+            raw = row["mastery_raw"]
+            n_resp = row["n_responses"]
+
+            band_color = _mastery_band_color(m)
+            # Saturation: 1.0 at 0 days, 0.15 floor at >=30d so stale cells
+            # stay visible but muted. Unseen → flat elevated grey.
+            days = row["days_since_seen"]
+            if days is None:
+                saturation = 0.0
+            else:
+                saturation = max(0.15, 1.0 - min(1.0, days / 30.0))
+
+            for c_i, (_label, _lo, _hi) in enumerate(_FRESHNESS_BINS):
+                cell_x = pad + label_w + c_i * cell_w
+                rect = wx.Rect(
+                    cell_x + 1, y + 1, cell_w - 2, row_h - 2,
+                )
+                # Empty cells (outside this row's bin) use a flat neutral
+                # tile so the grid's layout is still visible.
+                if bin_idx is None or c_i != bin_idx:
+                    gc.SetBrush(wx.Brush(Color.BG_ELEVATED))
+                    gc.SetPen(wx.TRANSPARENT_PEN)
+                    gc.DrawRectangle(rect.x, rect.y, rect.width, rect.height)
+                else:
+                    fill = _blend(band_color, Color.BG_ELEVATED, saturation)
+                    gc.SetBrush(wx.Brush(fill))
+                    gc.SetPen(wx.TRANSPARENT_PEN)
+                    gc.DrawRectangle(rect.x, rect.y, rect.width, rect.height)
+                    # Overlay numeric mastery % inside the cell.
+                    gc.SetFont(meta_font, Color.TEXT_PRIMARY)
+                    pct = f"{int(round(m * 100))}%"
+                    tw, th = gc.GetTextExtent(pct)
+                    gc.DrawText(
+                        pct,
+                        rect.x + (rect.width - tw) // 2,
+                        rect.y + (rect.height - th) // 2,
+                    )
+                    self._cells.append((rect, row, c_i))
+
+        # Hover tooltip
+        if self._hover_idx is not None and 0 <= self._hover_idx < len(self._cells):
+            rect, row, _ = self._cells[self._hover_idx]
+            days = row["days_since_seen"]
+            days_txt = "never" if days is None else f"{days:.1f}d ago"
+            tip = (
+                f"{row['subtopic']}  ·  raw {int(round(row['mastery_raw']*100))}%  "
+                f"→ decayed {int(round(row['mastery_decayed']*100))}%  ·  "
+                f"n={row['n_responses']}  ·  last seen {days_txt}"
+            )
+            gc.SetFont(meta_font, Color.TEXT_SECONDARY)
+            tw, th = gc.GetTextExtent(tip)
+            # Draw tooltip at bottom-left of the widget so it's always
+            # visible even when hovering the last row.
+            tip_x = pad
+            tip_y = self.GetClientSize().GetHeight() - th - pad
+            gc.SetBrush(wx.Brush(Color.BG_PAGE))
+            gc.SetPen(wx.Pen(Color.BORDER, 1))
+            gc.DrawRoundedRectangle(
+                tip_x - 4, tip_y - 2, tw + 8, th + 4,
+                ui_scale.space(1),
+            )
+            gc.SetFont(meta_font, Color.TEXT_PRIMARY)
+            gc.DrawText(tip, tip_x, tip_y)
+
+    # ── events ────────────────────────────────────────────────────────
+
+    def _hit(self, pos):
+        for i, (rect, _row, _c) in enumerate(self._cells):
+            if rect.Contains(pos):
+                return i
+        return None
+
+    def _on_motion(self, evt):
+        idx = self._hit(evt.GetPosition())
+        if idx != self._hover_idx:
+            self._hover_idx = idx
+            self.Refresh()
+
+    def _on_leave(self, _):
+        if self._hover_idx is not None:
+            self._hover_idx = None
+            self.Refresh()
+
+    def _on_click(self, evt):
+        idx = self._hit(evt.GetPosition())
+        if idx is not None:
+            self._hover_idx = idx
+            self.Refresh()

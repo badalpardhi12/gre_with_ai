@@ -1307,7 +1307,7 @@ class MainFrame(wx.Frame):
             ExamSession, SectionType, SectionState, SECTION_META,
         )
         from models.taxonomy import VERBAL_TAXONOMY, QUANT_TAXONOMY
-        from services.mastery import weakness_ranking
+        from services.mastery import decayed_weakness_ranking
 
         verbal_subs = {
             sub for td in VERBAL_TAXONOMY.values()
@@ -1319,7 +1319,7 @@ class MainFrame(wx.Frame):
         }
 
         try:
-            weak = weakness_ranking(limit=20)
+            weak = decayed_weakness_ranking(limit=20)
         except Exception:
             weak = []
 

@@ -19,7 +19,7 @@ from models.database import db, StudyPlan, DiagnosticResult, Question, MasteryRe
 from models.taxonomy import get_taxonomy_summary
 from services.llm_service import llm_service
 from services.log import get_logger
-from services.mastery import weakness_ranking, get_all_mastery
+from services.mastery import weakness_ranking, get_all_mastery, get_all_decayed_mastery
 from services.srs import stats as vocab_stats
 
 logger = get_logger("study_plan")
@@ -83,17 +83,26 @@ def _build_context(diagnostic, user_id: str = "local"):
     else:
         parts.append("DIAGNOSTIC: not yet completed")
 
-    # Live mastery scores (from any drills the user has done)
-    mastery = get_all_mastery(user_id)
+    # Live mastery scores (from any drills the user has done), with the
+    # forgetting-curve decay applied so subtopics the student hasn't
+    # touched in weeks are treated as weaker and rise in priority for the
+    # coach. Raw mastery (no decay) is kept on disk; decay is read-time
+    # only. See services.mastery.decayed_mastery.
+    mastery = get_all_decayed_mastery(user_id)
+    raw = get_all_mastery(user_id)
     if mastery:
         sorted_m = sorted(mastery.items(), key=lambda kv: kv[1])
         weakest = sorted_m[:8]
         strongest = sorted_m[-3:]
-        parts.append("\nMASTERY (from completed drills):")
+        parts.append("\nMASTERY (decayed for freshness; from completed drills):")
         for sub, score in weakest:
-            parts.append(f"  WEAK   {sub}: {int(score*100)}%")
+            raw_score = raw.get(sub, score)
+            tag = f" (raw {int(raw_score*100)}%)" if abs(raw_score - score) > 0.02 else ""
+            parts.append(f"  WEAK   {sub}: {int(score*100)}%{tag}")
         for sub, score in strongest:
-            parts.append(f"  STRONG {sub}: {int(score*100)}%")
+            raw_score = raw.get(sub, score)
+            tag = f" (raw {int(raw_score*100)}%)" if abs(raw_score - score) > 0.02 else ""
+            parts.append(f"  STRONG {sub}: {int(score*100)}%{tag}")
     else:
         parts.append("\nMASTERY: no drills completed yet")
 

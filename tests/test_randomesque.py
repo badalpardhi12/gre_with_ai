@@ -27,24 +27,76 @@ from services.question_bank import _randomesque_pick
 # Helpers
 # --------------------------------------------------------------------------
 
-def _install_fake_rating_service(ratings, theta):
-    """Register a synthetic ``services.rating_service`` module for the
-    duration of a test. Returns the module so callers can tweak it.
+def _install_fake_rating_service(ratings, theta, monkeypatch=None):
+    """Override ``services.rating_service.get_rating`` /
+    ``get_user_theta`` with synthetic in-memory stand-ins for the
+    duration of a test.
+
+    P2 E4 landed a real ``services.rating_service`` module on main, so
+    simply dropping a synthetic module into ``sys.modules`` no longer
+    works — ``from services import rating_service`` resolves against
+    the already-imported attribute on the ``services`` package. Instead
+    we patch the two callables on the real module; ``monkeypatch``
+    reverts them automatically at teardown. When a ``monkeypatch``
+    fixture isn't provided (legacy call sites) we mutate the module
+    directly and rely on the ``_clean_rating_service_module`` autouse
+    fixture to restore originals.
+
+    Returns a simple namespace mirroring the old API (``get_user_theta``
+    / ``get_rating``) in case callers want to tweak the overrides.
     """
-    mod = types.ModuleType("services.rating_service")
-    mod.get_user_theta = lambda: theta
-    mod.get_rating = lambda qid: ratings.get(qid)
-    sys.modules["services.rating_service"] = mod
-    return mod
+    from services import rating_service as real_rs
+
+    def _theta():
+        return theta
+
+    def _rating(qid):
+        return ratings.get(qid)
+
+    if monkeypatch is not None:
+        monkeypatch.setattr(real_rs, "get_user_theta", _theta)
+        monkeypatch.setattr(real_rs, "get_rating", _rating)
+    else:
+        _PATCHED_ORIGINALS.setdefault(
+            "get_user_theta", real_rs.get_user_theta)
+        _PATCHED_ORIGINALS.setdefault(
+            "get_rating", real_rs.get_rating)
+        real_rs.get_user_theta = _theta
+        real_rs.get_rating = _rating
+
+    ns = types.SimpleNamespace(
+        get_user_theta=_theta, get_rating=_rating)
+    return ns
+
+
+# Stash for non-monkeypatch callers; restored by the autouse fixture.
+_PATCHED_ORIGINALS: dict = {}
 
 
 def _remove_fake_rating_service():
-    sys.modules.pop("services.rating_service", None)
+    """Restore any direct-attribute overrides and clear stray sys.modules
+    entries from older test patterns."""
+    if _PATCHED_ORIGINALS:
+        try:
+            from services import rating_service as real_rs
+            for name, fn in _PATCHED_ORIGINALS.items():
+                setattr(real_rs, name, fn)
+        except Exception:
+            pass
+        _PATCHED_ORIGINALS.clear()
+    # Some tests in this file still install a raw module into
+    # sys.modules (e.g. the "rating_service raises" case). Leave their
+    # own teardown to them, but make sure we don't leak a stale entry
+    # into the next test's import resolution.
+    mod = sys.modules.get("services.rating_service")
+    if mod is not None and not hasattr(mod, "_ensure_rating"):
+        # Not the real module — drop it so the real one re-resolves.
+        sys.modules.pop("services.rating_service", None)
 
 
 @pytest.fixture(autouse=True)
 def _clean_rating_service_module():
-    """Every test starts with no fake rating_service installed, and
+    """Every test starts with the real rating_service intact, and
     cleanup happens even on failure."""
     _remove_fake_rating_service()
     yield

@@ -183,12 +183,21 @@ def import_to_db(clusters: List[DICluster],
     entirely — the whole point of this re-extraction is to produce
     multi-question sets, so a lone question (which would be another
     singleton) is dropped.
+
+    Phase 1.4 hook: per-question dedup against the live bank. A flagged
+    duplicate is counted toward ``q_skipped``. Note that DI items share
+    a chart stimulus, so the embedding stage's stimulus-head feature
+    legitimately raises cosine across siblings; the cross-encoder
+    rerank handles that — see services/dedup/embedding_stage.py.
     """
     from models.database import (
         db, init_db, Question, QuestionOption, Stimulus,
     )
+    from services.dedup import get_dedup_service
     init_db()
     db.connect(reuse_if_open=True)
+
+    dedup_svc = get_dedup_service()
 
     stim_n = 0
     q_inserted = 0
@@ -227,6 +236,18 @@ def import_to_db(clusters: List[DICluster],
                     .first()
                 )
                 if exists:
+                    q_skipped += 1
+                    continue
+
+                # Phase 1.4: dedup against the live bank.
+                opt_texts = [t for (_lbl, t) in dq.options]
+                dup_qid = dedup_svc.find_dup_for(
+                    prompt=dq.prompt,
+                    stimulus_content=cluster.stimulus_text or "",
+                    options=opt_texts,
+                    source=SOURCE_TAG,
+                )
+                if dup_qid is not None:
                     q_skipped += 1
                     continue
 

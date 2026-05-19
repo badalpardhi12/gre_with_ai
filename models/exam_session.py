@@ -19,6 +19,44 @@ from config import (
 )
 
 
+# Phase 7.2 (OQ1 Path B, 2026-05-18) — ETS 3-tier raw-count routing.
+# BrightLink Prep thresholds for the post-September 2023 format. The
+# thresholds are tunable here so future calibration data (e.g. our own
+# theta benchmark vs. ETS percentile tables) can shift them without
+# hunting magic numbers across the codebase. Each dict maps tier-name
+# to the MINIMUM correct-count required to ROUTE TO THAT TIER.
+#   * Quant: ≥8 correct → Hard, ≥4 correct → Medium, else Easy.
+#     (Reference: BrightLink Prep + Magoosh — assumes 12-question S1.)
+#   * Verbal: ≥9 correct → Hard, ≥5 correct → Medium, else Easy.
+#
+# Theta is still computed per response and persisted as a side-signal
+# for cluster ranking and diagnostics — see ``services.scoring`` and
+# ``docs/adaptivity_design.md`` — but the ROUTING decision (which band
+# the next section gets) comes from the tier, not theta.
+QUANT_TIER_THRESHOLDS = {"hard": 8, "medium": 4}  # >=8 hard, >=4 medium, else easy
+VERBAL_TIER_THRESHOLDS = {"hard": 9, "medium": 5}
+
+
+def _resolve_tier(measure: str, correct_count: int):
+    """Return the ETS 3-tier routing decision for ``correct_count`` correct.
+
+    ``measure`` is "verbal" or "quant"; case-insensitive. Defaults to
+    ``"medium"`` for unknown measures so AWA/drill paths never crash.
+    Returns one of ``"easy"``, ``"medium"``, ``"hard"``.
+    """
+    if measure == "quant":
+        thresholds = QUANT_TIER_THRESHOLDS
+    elif measure == "verbal":
+        thresholds = VERBAL_TIER_THRESHOLDS
+    else:
+        return "medium"
+    if correct_count >= thresholds["hard"]:
+        return "hard"
+    if correct_count >= thresholds["medium"]:
+        return "medium"
+    return "easy"
+
+
 def get_previous_mock_qids(user_id="local"):
     """Return the set of question IDs assigned to the user's most-recent
     COMPLETED full mock session.
@@ -340,7 +378,18 @@ class ExamSession:
             self._adapt_next_section(current_type)
 
     def _adapt_next_section(self, completed_type):
-        """Adapt S2 difficulty based on S1 correctness, then load S2 questions."""
+        """Adapt S2 difficulty based on S1 correctness, then load S2 questions.
+
+        Phase 7.2 (OQ1 Path B, 2026-05-18) — replaces the legacy continuous
+        percentage-based routing with ETS's 3-tier raw-count routing per
+        ``QUANT_TIER_THRESHOLDS`` / ``VERBAL_TIER_THRESHOLDS``. The legacy
+        config thresholds (``ADAPT_EASY_THRESHOLD`` / ``ADAPT_HARD_THRESHOLD``)
+        are no longer consulted — they remain in ``config.py`` only as a
+        fallback for any test or external tool that imports them. Theta is
+        still computed and passed to the question bank as a side-signal for
+        cluster ranking; the section-routing decision (which difficulty band
+        S2 gets) is the tier alone. See ``docs/adaptivity_design.md``.
+        """
         s1 = self.sections[completed_type]
         correctness = getattr(s1, '_correctness', {})
         total = s1.total_questions
@@ -360,18 +409,17 @@ class ExamSession:
         # If the user didn't answer anything, default to medium so we don't
         # punish a skipped section by routing them to easy (lowering ceiling).
         if not correctness:
-            band = "medium"
+            tier = "medium"
         else:
             correct_count = sum(1 for v in correctness.values() if v)
-            pct_correct = correct_count / total
-            if pct_correct < ADAPT_EASY_THRESHOLD:
-                band = "easy"
-            elif pct_correct > ADAPT_HARD_THRESHOLD:
-                band = "hard"
-            else:
-                band = "medium"
+            tier = _resolve_tier(measure, correct_count)
 
-        self.sections[s2_type].difficulty_band = band
+        # ``difficulty_band`` mirrors the tier for backwards compat with
+        # the SectionState attr that downstream UI screens (and the
+        # main_frame persistence path) read. The new ``routing_tier``
+        # attr is the canonical signal for Phase 7+ callers.
+        self.sections[s2_type].difficulty_band = tier
+        self.sections[s2_type].routing_tier = tier
 
         # Now load S2 questions with the adapted difficulty
         _, _, _, q_count = SECTION_META[s2_type]
@@ -383,12 +431,11 @@ class ExamSession:
             prev_mock_qids = getattr(self, '_prev_mock_qids', set())
             exclude_for_s2 = list(set(s1_ids) | set(prev_mock_qids))
 
-            # Phase 3 S1: compute running theta from the user's response
-            # history and pass it to the composer as a soft-weight signal.
-            # The legacy ``difficulty_band`` above is retained as fallback
-            # — a non-finite theta (rating_service unavailable, fresh DB)
-            # degrades gracefully inside ``scoring.compute_theta`` and the
-            # composer reverts to the band-switch hard-WHERE path.
+            # Phase 3 S1 + Phase 7.2: compute running theta as a SIDE-SIGNAL
+            # for the composer's Fisher-info ranking. Theta no longer drives
+            # routing (the tier above does); a non-finite theta degrades
+            # gracefully inside ``scoring.compute_theta`` and the composer
+            # falls back to tier-only ranking.
             target_theta = None
             try:
                 from services.scoring import compute_theta
@@ -402,10 +449,11 @@ class ExamSession:
             q_ids = qb.select_questions_composed(
                 measure=measure,
                 count=q_count,
-                difficulty_band=band,
+                difficulty_band=tier,
                 exclude_ids=exclude_for_s2,
                 exclude_user_seen=getattr(self, "_user_id", "local"),
                 target_theta=target_theta,
+                routing_tier=tier,
             )
             self.sections[s2_type].question_ids = q_ids
 

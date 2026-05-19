@@ -19,6 +19,16 @@ book-specific answer-key parser, tag each resulting question with
 ``source='ets_big_book_2nd_ed'``, and feed the stimulus images
 through the build-time figure audit flow described in
 ``docs/figure_audit_2026_05_11.md`` before anything goes live.
+
+Phase 1.4 (dedup) note
+----------------------
+This stub does NOT perform any DB writes — it only round-trips a
+synthesised PDF through marker. There is therefore no
+``Question.create`` call to wrap with a dedup check. The downstream
+``extract_ets_bigbook.py`` (the real D2 pipeline) is the script that
+calls :func:`services.dedup.get_dedup_service` before each insert.
+If you ever extend this stub to write rows, mirror the dedup hook
+from ``extract_ets_bigbook.import_to_db``.
 """
 
 from __future__ import annotations

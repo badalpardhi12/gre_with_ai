@@ -62,7 +62,7 @@ SKIP_DIRS = {
     "__pycache__",
     "node_modules",
     ".claude",
-    ".local",           # offline notes — explicitly allowed to mention Floodgate
+    ".local",           # offline notes
     "tmp_ocr",
     "build",
     "dist",
@@ -78,8 +78,8 @@ SCAN_EXTS = {
     ".json", ".sh",
 }
 
-# Individual files we skip — the script itself, its test, and the
-# implementation plan that discusses the migration explicitly.
+# Individual files we skip — the script itself, and its test (both
+# necessarily contain the keyword list as part of their definition).
 SKIP_FILES = {
     REPO_ROOT / "scripts" / "audit_apple_refs.py",
     REPO_ROOT / "tests" / "test_audit_apple_refs.py",

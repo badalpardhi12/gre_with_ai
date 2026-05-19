@@ -515,11 +515,19 @@ def apply_reformat(items: List[RawItem], llm) -> Tuple[List[RawItem], int]:
 def import_to_db(items: List[RawItem]) -> Tuple[int, int]:
     """Idempotent insert with (source, source_anchor) as the unique key.
 
+    Phase 1.4 hook: every candidate is run through the two-stage dedup
+    service before insert. Items that match an existing live question
+    are counted as ``skipped_existing`` and the dedup service appends
+    a structured-log entry.
+
     Returns (inserted, skipped_existing).
     """
     from models.database import db, init_db, Question, QuestionOption, NumericAnswer
+    from services.dedup import get_dedup_service
     init_db()
     db.connect(reuse_if_open=True)
+
+    dedup_svc = get_dedup_service()
 
     inserted = 0
     skipped = 0
@@ -532,6 +540,18 @@ def import_to_db(items: List[RawItem]) -> Tuple[int, int]:
                 .first()
             )
             if exists:
+                skipped += 1
+                continue
+
+            # Phase 1.4: dedup against the live bank.
+            opt_texts = [t for (_lbl, t) in item.options]
+            dup_qid = dedup_svc.find_dup_for(
+                prompt=item.prompt,
+                stimulus_content=item.passage or "",
+                options=opt_texts,
+                source=item.source,
+            )
+            if dup_qid is not None:
                 skipped += 1
                 continue
 

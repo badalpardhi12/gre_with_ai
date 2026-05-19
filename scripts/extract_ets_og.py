@@ -600,12 +600,19 @@ def import_to_db(items: List[ETSQuestion]) -> Tuple[int, int]:
     Figure-bearing items are tagged via ``figure_refs`` and the
     provenance blob so that the existing vision-audit pipeline picks
     them up on its next pass (see docs/figure_audit_2026_05_11.md).
+
+    Phase 1.4 hook: every candidate is run through the two-stage dedup
+    service before insert. Items the service flags as duplicates of an
+    existing live question are dropped (with a structured-log entry).
     """
     from models.database import (
         db, init_db, Question, QuestionOption, NumericAnswer, Stimulus,
     )
+    from services.dedup import get_dedup_service
     init_db()
     db.connect(reuse_if_open=True)
+
+    dedup_svc = get_dedup_service()
 
     inserted = 0
     skipped = 0
@@ -618,6 +625,20 @@ def import_to_db(items: List[ETSQuestion]) -> Tuple[int, int]:
                 .first()
             )
             if exists:
+                skipped += 1
+                continue
+
+            # Dedup against the live bank (Phase 1.4). For RC items the
+            # stimulus text is fed in so the embedding stage gets the
+            # discriminating prompt + a passage head.
+            opt_texts = [t for (_lbl, t) in item.options]
+            dup_qid = dedup_svc.find_dup_for(
+                prompt=item.prompt,
+                stimulus_content=item.stimulus_text or "",
+                options=opt_texts,
+                source=SOURCE_TAG,
+            )
+            if dup_qid is not None:
                 skipped += 1
                 continue
 

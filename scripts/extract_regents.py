@@ -480,11 +480,16 @@ def import_to_db(items: List[RegentsQuestion]) -> Tuple[int, int]:
     """Insert parsed questions into the DB with status='candidate'.
 
     Idempotent via (source, source_anchor) — re-running won't duplicate.
-    Returns (inserted, skipped_existing).
+    Items that the dedup service flags as duplicates of an existing live
+    question are skipped (and a structured log line is written by the
+    dedup service itself). Returns (inserted, skipped_existing).
     """
     from models.database import db, init_db, Question, QuestionOption
+    from services.dedup import get_dedup_service
     init_db()
     db.connect(reuse_if_open=True)
+
+    dedup_svc = get_dedup_service()
 
     inserted = 0
     skipped = 0
@@ -499,6 +504,19 @@ def import_to_db(items: List[RegentsQuestion]) -> Tuple[int, int]:
                 .first()
             )
             if exists:
+                skipped += 1
+                continue
+
+            # Dedup against the live bank (Phase 1.4 hook). The
+            # service's decision log records both accepts and rejects.
+            opt_texts = [t for (_lbl, t) in item.options]
+            dup_qid = dedup_svc.find_dup_for(
+                prompt=item.prompt,
+                stimulus_content="",
+                options=opt_texts,
+                source=item.source,
+            )
+            if dup_qid is not None:
                 skipped += 1
                 continue
 

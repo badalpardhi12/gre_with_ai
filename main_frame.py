@@ -715,6 +715,7 @@ class MainFrame(wx.Frame):
                     measure=measure,
                     section_index=sec_idx,
                     difficulty_band=getattr(section, 'difficulty_band', 'medium'),
+                    routing_tier=getattr(section, 'routing_tier', None),
                     time_limit_seconds=time_limit,
                     time_used_seconds=section.time_used,
                     started_at=section.started_at,

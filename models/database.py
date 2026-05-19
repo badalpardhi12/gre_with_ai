@@ -258,6 +258,18 @@ class SectionResult(BaseModel):
                                 choices=[
                                     ("easy", "Easy"), ("medium", "Medium"), ("hard", "Hard"),
                                 ])
+    # Phase 7.2 — ETS 3-tier raw-count routing decision (OQ1 Path B).
+    # NULL on AWA, on pre-Phase-7 SectionResult rows, and on the first
+    # section of each measure (no prior section to route from). When set,
+    # the value is the tier picked for THIS section based on the prior
+    # section's correct-count using QUANT_TIER_THRESHOLDS /
+    # VERBAL_TIER_THRESHOLDS in models.exam_session. Theta is still
+    # computed as a side-signal for cluster ranking but is not the routing
+    # decision — see docs/adaptivity_design.md.
+    routing_tier = CharField(null=True,
+                             choices=[
+                                 ("easy", "Easy"), ("medium", "Medium"), ("hard", "Hard"),
+                             ])
     time_limit_seconds = IntegerField()
     time_used_seconds = IntegerField(default=0)
     started_at = DateTimeField(null=True)

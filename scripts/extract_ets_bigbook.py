@@ -621,12 +621,19 @@ def import_to_db(
 
     Commits atomically per-test so a crash leaves a clean partial state.
     Idempotent via ``(source, source_anchor)``.
+
+    Phase 1.4 hook: items the dedup service flags as duplicates of an
+    existing live question are skipped (counted toward
+    ``skipped_existing``). The service writes its own structured log.
     """
     from models.database import (
         db, init_db, Question, QuestionOption, Stimulus,
     )
+    from services.dedup import get_dedup_service
     init_db()
     db.connect(reuse_if_open=True)
+
+    dedup_svc = get_dedup_service()
 
     # Group by test so each test commits atomically.
     by_test: Dict[int, List[BigBookQuestion]] = {}
@@ -659,6 +666,18 @@ def import_to_db(
                     .first()
                 )
                 if exists:
+                    skipped_existing += 1
+                    continue
+
+                # Phase 1.4: dedup against the live bank before insert.
+                opt_texts = [t for (_lbl, t) in item.options]
+                dup_qid = dedup_svc.find_dup_for(
+                    prompt=item.prompt,
+                    stimulus_content=item.stimulus_text or "",
+                    options=opt_texts,
+                    source=item.source,
+                )
+                if dup_qid is not None:
                     skipped_existing += 1
                     continue
 

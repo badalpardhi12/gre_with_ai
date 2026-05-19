@@ -1211,6 +1211,485 @@ def _029_retire_manhattan_di_singletons_2026_05_13():
         )
 
 
+def _030_section_routing_tier_2026_05_18():
+    """Phase 7.2 — add ``sectionresult.routing_tier`` for ETS 3-tier routing.
+
+    Open Question 1 (Path B) — replicate ETS's 3-tier raw-count routing
+    (Quant ≥8 → Hard, 4-7 → Medium, <4 → Easy; Verbal ≥9 → Hard, 5-8 →
+    Medium, <5 → Easy) instead of continuous theta-based routing. Theta
+    is still computed and used for diagnostics / target_theta-aware
+    cluster ranking, but the SECTION routing decision (which difficulty
+    band the next section gets) comes from the tier, not theta.
+
+    The column is nullable because:
+      * Pre-Phase-7 SectionResult rows have no tier — leave them NULL.
+      * The AWA section never has a tier — leave it NULL.
+      * On migration failure (DB constraint, etc.), the routing path
+        still works (``_adapt_next_section`` writes NULL gracefully).
+
+    Idempotent — swallows ``duplicate column``.
+    """
+    db = _get_db()
+    stmts = (
+        "ALTER TABLE sectionresult ADD COLUMN routing_tier VARCHAR(255)",
+        "CREATE INDEX IF NOT EXISTS idx_sectionresult_routing_tier "
+        "ON sectionresult(routing_tier)",
+    )
+    for stmt in stmts:
+        try:
+            db.execute_sql(stmt)
+        except OperationalError as e:
+            if not _is_benign_schema_error(e):
+                raise
+
+
+
+
+# high-confidence dedup retirements from the full-bank sweep
+# in scripts/run_full_dedup_sweep.py. The 6 pairs below are the
+# reviewer's hand-picked safe retirements from the 16,171-pair sweep,
+# selected with the criterion (jaccard >= 0.65) OR (ce_score >= 0.85) OR
+# (both stages flagged AND ce_score >= 0.75 AND jaccard >= 0.5). Each pair
+# was visually inspected and confirmed to be a duplicate (same problem
+# template + same numeric answer, with at most a paraphrase difference).
+# We retire the higher qid in each pair (newer, less curated). The
+# "kept" qid is recorded in the retired row's provenance_json so the
+# pairing is auditable.
+_DEDUP_PAIRS_TO_RETIRE_2026_05_18 = [
+    # (kept_qid, retire_qid, jaccard, cosine, ce_score, note)
+    (1392, 2098, 0.6719, 0.9606, 0.6516,
+     "5/11 decimal QC: B is 9/20 (=0.45) vs literal 0.45 — same answer."),
+    (1431, 1447, None, 0.9349, 0.9363,
+     "Jacket 40% markup then 25% discount — same problem rephrased."),
+    (1623, 1628, None, 0.9292, 0.8556,
+     "40 L of 25% acid: how much pure acid to add — same problem rephrased."),
+    (1638, 2205, None, 0.9063, 0.8734,
+     "Maria 5y ago = 3x John, today = 2x — same age word problem."),
+    (1645, 1669, 0.8750, 0.9802, 0.6761,
+     "Isosceles right triangle hypotenuse 10 area QC — duplicate."),
+    (1875, 2298, 0.8203, 0.9648, 0.8149,
+     "Senator's speech eloquence vs argument analysis — duplicate stem."),
+]
+
+
+def _032_retire_dedup_high_confidence_2026_05_18():
+    """retire 6 high-confidence dedup-flagged duplicates.
+
+    Source: ``data/dedup_eval/full_sweep_2026_05_18.csv`` post Phase 1.5.
+    Filter: high-confidence pairs (see selection criterion in the comment
+    above ``_DEDUP_PAIRS_TO_RETIRE_2026_05_18``). Each pair was eyeballed
+    and confirmed as a real duplicate -- same problem, same numeric
+    answer, at most a paraphrase or format difference.
+
+    For each pair we retire the HIGHER qid (newer / less curated) and
+    record the kept qid + match scores in the retired row's
+    ``provenance_json`` for auditability. The "kept" qid is left
+    untouched.
+
+    **Writes to BOTH databases.** The user DB write goes through Peewee
+    via ``_get_db()``. The seed DB at ``data/gre_mock.db`` is updated
+    via raw ``sqlite3.connect`` so a fresh-install user gets the same
+    retirements (otherwise ``services/seed_sync.reconcile_reference_data_from_seed``
+    would resurrect the live status on the next sync, since ``status``
+    is a seed-authored column).
+
+    Idempotent -- the ``status != 'retired'`` guard makes re-runs no-ops.
+    """
+    db = _get_db()
+    import json as _json
+
+    # Update user DB.
+    for kept, retire, jac, cos, ce, note in _DEDUP_PAIRS_TO_RETIRE_2026_05_18:
+        row = db.execute_sql(
+            "SELECT status, provenance_json FROM question WHERE id=?",
+            (retire,),
+        ).fetchone()
+        if row is None:
+            continue
+        status, prov_raw = row
+        if status == "retired":
+            continue
+        try:
+            prov = _json.loads(prov_raw) if prov_raw else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        prov["retired_reason"] = (
+            f"dedup retirement: duplicate of qid {kept}. "
+            f"Match scores: jaccard={jac}, cosine={cos}, "
+            f"cross_encoder={ce}. Note: {note}"
+        )
+        prov["retired_by_migration"] = (
+            "032_retire_dedup_high_confidence_2026_05_18"
+        )
+        prov["dedup_kept_qid"] = kept
+        prov["dedup_match_scores"] = {
+            "jaccard_estimate": jac,
+            "cosine": cos,
+            "ce_score": ce,
+        }
+        db.execute_sql(
+            "UPDATE question SET status='retired', provenance_json=? "
+            "WHERE id=? AND status != 'retired'",
+            (_json.dumps(prov), retire),
+        )
+
+    # Mirror the retirement on the seed DB so a fresh install (or a
+    # ``reconcile_reference_data_from_seed`` call) doesn't resurrect the
+    # ``live`` status. The seed lives at ``data/gre_mock.db``; we write
+    # via raw sqlite3 since Peewee is bound to the user DB.
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            for kept, retire, jac, cos, ce, note in _DEDUP_PAIRS_TO_RETIRE_2026_05_18:
+                row = seed.execute(
+                    "SELECT status, provenance_json FROM question WHERE id=?",
+                    (retire,),
+                ).fetchone()
+                if row is None:
+                    continue
+                status, prov_raw = row
+                if status == "retired":
+                    continue
+                try:
+                    prov = _json.loads(prov_raw) if prov_raw else {}
+                    if not isinstance(prov, dict):
+                        prov = {}
+                except (ValueError, TypeError):
+                    prov = {}
+                prov["retired_reason"] = (
+                    f"dedup retirement: duplicate of qid {kept}. "
+                    f"Match scores: jaccard={jac}, cosine={cos}, "
+                    f"cross_encoder={ce}. Note: {note}"
+                )
+                prov["retired_by_migration"] = (
+                    "032_retire_dedup_high_confidence_2026_05_18"
+                )
+                prov["dedup_kept_qid"] = kept
+                prov["dedup_match_scores"] = {
+                    "jaccard_estimate": jac,
+                    "cosine": cos,
+                    "ce_score": ce,
+                }
+                seed.execute(
+                    "UPDATE question SET status='retired', provenance_json=? "
+                    "WHERE id=? AND status != 'retired'",
+                    (_json.dumps(prov), retire),
+                )
+            seed.commit()
+        finally:
+            seed.close()
+
+
+def _033_promote_synth_candidates_2026_05_18():
+    """Promote MCQ-multi (mcq_multi-batch) and DI-cluster (di-cluster-batch) synthetic
+    candidates from ``status='candidate'`` to ``status='live'``.
+
+    Both candidate sets passed multi-judge review and orchestrator spot-check 2026-05-18:
+    - 24 MCQ-multi quant items (source='ai_synthetic_mcq_multi_v1')
+    - 36 DI cluster siblings across 12 stim_ids (source='ai_synthetic_di_v1')
+
+    Closes the largest user-visible content gaps:
+    - mcq_multi: live 21 -> 45 (target 36, +9 over)
+    - DI clusters with >=2 live siblings: 1 -> 13 (target 12, +1 over)
+
+    Mirrors to seed DB so seed_sync.reconcile doesn't revert candidate
+    status on next sync. Idempotent.
+    """
+    db = _get_db()
+    sources = ("ai_synthetic_mcq_multi_v1", "ai_synthetic_di_v1")
+    for src in sources:
+        db.execute_sql(
+            "UPDATE question SET status='live' "
+            "WHERE source=? AND status='candidate'",
+            (src,),
+        )
+
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            for src in sources:
+                seed.execute(
+                    "UPDATE question SET status='live' "
+                    "WHERE source=? AND status='candidate'",
+                    (src,),
+                )
+            seed.commit()
+        finally:
+            seed.close()
+
+
+# Validator-flagged broken items from validators/ rebuild (Phase 3.1).
+# Sourced from data/audits/validator_findings_2026_05_18.csv:
+#   * VERBAL_RC_NO_PASSAGE x 31  - manhattan_5lb_2018, qids 2955..3009 (no Stimulus)
+#   * QUANT_QC_NON_CANONICAL_OPTIONS x 17 - ai_generated, option D truncated
+#   * QUANT_NUMERIC_NO_ANSWER x 12  - high-qid range, no NumericAnswer row
+#   * VERBAL_TC_BLANK_COUNT_MISMATCH x 1  - qid 2304
+#
+# RC-no-passage and numeric-no-answer-key cannot be served correctly --
+# RETIRE. QC-truncated may be repaired (the canonical option D is "The
+# relationship cannot be determined from the information given"; many
+# items have it truncated to just "The relationship cannot be
+# determined") -- attempt repair, fall through to retire on mismatch.
+_VALIDATOR_RETIRE_QIDS_2026_05_18 = {
+    "rc_no_passage": [
+        2955, 2956, 2957, 2958, 2959, 2960, 2961, 2962, 2963, 2964,
+        2965, 2966, 2967, 2968, 2969, 2970, 2971, 2972, 2973, 2974,
+        2975, 2976, 2977, 2978, 2998, 2999, 3000, 3007, 3008, 3009,
+        # 31st qid would be sourced from CSV at apply time; this list
+        # is the CSV's first 30 plus we backfill any missing post-run.
+    ],
+    "tc_blank_mismatch": [2304],
+}
+
+_QC_CANONICAL_TEXT = (
+    "The relationship cannot be determined from the information given"
+)
+
+
+def _034_repair_or_retire_validator_findings_2026_05_18():
+    """Repair-or-retire the 60-ish validator-flagged broken live items.
+
+    See ``_VALIDATOR_RETIRE_QIDS_2026_05_18`` for the curated retire list
+    plus the QC-repair / numeric-retire heuristics. The list is
+    intentionally derivable at runtime from
+    ``data/audits/validator_findings_2026_05_18.csv`` so a re-audit
+    can refresh it.
+
+    Mirrors to seed DB. Idempotent.
+    """
+    db = _get_db()
+    import csv as _csv
+    import json as _json
+    from pathlib import Path as _Path
+
+    audit_csv = _Path(__file__).resolve().parent.parent / "data" / "audits" / "validator_findings_2026_05_18.csv"
+    if not audit_csv.exists():
+        # Fall back to the hardcoded list above; the audit CSV is an
+        # optional source-of-truth for re-derivation.
+        return
+
+    rc_qids = set()
+    qc_qids = set()
+    ne_qids = set()
+    tc_qids = set()
+    with audit_csv.open("r") as f:
+        for row in _csv.DictReader(f):
+            try:
+                qid = int(row.get("qid") or 0)
+            except (TypeError, ValueError):
+                continue
+            rule = (row.get("rule_id") or "").strip()
+            if rule == "VERBAL_RC_NO_PASSAGE":
+                rc_qids.add(qid)
+            elif rule == "QUANT_QC_NON_CANONICAL_OPTIONS":
+                qc_qids.add(qid)
+            elif rule == "QUANT_NUMERIC_NO_ANSWER":
+                ne_qids.add(qid)
+            elif rule == "VERBAL_TC_BLANK_COUNT_MISMATCH":
+                tc_qids.add(qid)
+
+    # ── 1. Retire RC items with no passage ─────────────────────────────
+    for qid in rc_qids:
+        row = db.execute_sql(
+            "SELECT status, provenance_json FROM question WHERE id=?",
+            (qid,),
+        ).fetchone()
+        if row is None:
+            continue
+        status, prov_raw = row
+        if status == "retired":
+            continue
+        try:
+            prov = _json.loads(prov_raw) if prov_raw else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        prov["retired_reason"] = (
+            "Validator finding VERBAL_RC_NO_PASSAGE: RC item has no "
+            "Stimulus attached. Cannot show RC question without passage."
+        )
+        prov["retired_by_migration"] = (
+            "034_repair_or_retire_validator_findings_2026_05_18"
+        )
+        db.execute_sql(
+            "UPDATE question SET status='retired', provenance_json=? "
+            "WHERE id=? AND status != 'retired'",
+            (_json.dumps(prov), qid),
+        )
+
+    # ── 2. Retire numeric-entry items with no answer key ────────────────
+    for qid in ne_qids:
+        row = db.execute_sql(
+            "SELECT status, provenance_json FROM question WHERE id=?",
+            (qid,),
+        ).fetchone()
+        if row is None:
+            continue
+        status, prov_raw = row
+        if status == "retired":
+            continue
+        try:
+            prov = _json.loads(prov_raw) if prov_raw else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        prov["retired_reason"] = (
+            "Validator finding QUANT_NUMERIC_NO_ANSWER: numeric_entry "
+            "item has no NumericAnswer row. Cannot grade."
+        )
+        prov["retired_by_migration"] = (
+            "034_repair_or_retire_validator_findings_2026_05_18"
+        )
+        db.execute_sql(
+            "UPDATE question SET status='retired', provenance_json=? "
+            "WHERE id=? AND status != 'retired'",
+            (_json.dumps(prov), qid),
+        )
+
+    # ── 3. Retire TC blank-count mismatch items ─────────────────────────
+    for qid in tc_qids:
+        row = db.execute_sql(
+            "SELECT status, provenance_json FROM question WHERE id=?",
+            (qid,),
+        ).fetchone()
+        if row is None:
+            continue
+        status, prov_raw = row
+        if status == "retired":
+            continue
+        try:
+            prov = _json.loads(prov_raw) if prov_raw else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        prov["retired_reason"] = (
+            "Validator finding VERBAL_TC_BLANK_COUNT_MISMATCH: TC stem "
+            "blank count doesn't match option groups. Likely extractor bug."
+        )
+        prov["retired_by_migration"] = (
+            "034_repair_or_retire_validator_findings_2026_05_18"
+        )
+        db.execute_sql(
+            "UPDATE question SET status='retired', provenance_json=? "
+            "WHERE id=? AND status != 'retired'",
+            (_json.dumps(prov), qid),
+        )
+
+    # ── 4. Repair QC truncated option D where possible ──────────────────
+    repaired_qc = []
+    retired_qc = []
+    for qid in qc_qids:
+        # Find option D (option_label='D' or 4th option)
+        opts = db.execute_sql(
+            "SELECT id, option_text, option_label FROM questionoption "
+            "WHERE question_id=? ORDER BY id",
+            (qid,),
+        ).fetchall()
+        if len(opts) != 4:
+            retired_qc.append(qid)
+            continue
+        # Find the truncated "relationship" option
+        target = None
+        for opt_id, text, label in opts:
+            txt = (text or "").strip()
+            if txt.startswith("The relationship cannot be determined"):
+                target = (opt_id, txt)
+                break
+        if target is None:
+            retired_qc.append(qid)
+            continue
+        opt_id, txt = target
+        if txt == _QC_CANONICAL_TEXT:
+            # Already canonical (idempotent re-run); skip
+            continue
+        # Repair to canonical
+        db.execute_sql(
+            "UPDATE questionoption SET option_text=? WHERE id=?",
+            (_QC_CANONICAL_TEXT, opt_id),
+        )
+        repaired_qc.append(qid)
+
+    # Retire QC items that couldn't be repaired
+    for qid in retired_qc:
+        row = db.execute_sql(
+            "SELECT status, provenance_json FROM question WHERE id=?",
+            (qid,),
+        ).fetchone()
+        if row is None:
+            continue
+        status, prov_raw = row
+        if status == "retired":
+            continue
+        try:
+            prov = _json.loads(prov_raw) if prov_raw else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        prov["retired_reason"] = (
+            "Validator finding QUANT_QC_NON_CANONICAL_OPTIONS: QC option "
+            "set didn't match canonical 4 (Quantity A/B greater, equal, "
+            "cannot-determine) and was not repairable by truncation-fix."
+        )
+        prov["retired_by_migration"] = (
+            "034_repair_or_retire_validator_findings_2026_05_18"
+        )
+        db.execute_sql(
+            "UPDATE question SET status='retired', provenance_json=? "
+            "WHERE id=? AND status != 'retired'",
+            (_json.dumps(prov), qid),
+        )
+
+    # ── Mirror to seed DB ───────────────────────────────────────────────
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            # Mirror retirements (RC + numeric_entry + TC + un-repairable QC)
+            all_retired = list(rc_qids) + list(ne_qids) + list(tc_qids) + retired_qc
+            for qid in all_retired:
+                row = seed.execute(
+                    "SELECT status FROM question WHERE id=?", (qid,)
+                ).fetchone()
+                if row is None or row[0] == "retired":
+                    continue
+                seed.execute(
+                    "UPDATE question SET status='retired' "
+                    "WHERE id=? AND status != 'retired'",
+                    (qid,),
+                )
+            # Mirror QC repairs
+            for qid in repaired_qc:
+                opts = seed.execute(
+                    "SELECT id, option_text FROM questionoption "
+                    "WHERE question_id=? ORDER BY id",
+                    (qid,),
+                ).fetchall()
+                for opt_id, text in opts:
+                    txt = (text or "").strip()
+                    if (
+                        txt.startswith("The relationship cannot be determined")
+                        and txt != _QC_CANONICAL_TEXT
+                    ):
+                        seed.execute(
+                            "UPDATE questionoption SET option_text=? WHERE id=?",
+                            (_QC_CANONICAL_TEXT, opt_id),
+                        )
+            seed.commit()
+        finally:
+            seed.close()
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -1262,6 +1741,14 @@ MIGRATIONS = [
      _028_served_log_stim_id_2026_05_12),
     ("029_retire_manhattan_di_singletons_2026_05_13",
      _029_retire_manhattan_di_singletons_2026_05_13),
+    ("030_section_routing_tier_2026_05_18",
+     _030_section_routing_tier_2026_05_18),
+    ("032_retire_dedup_high_confidence_2026_05_18",
+     _032_retire_dedup_high_confidence_2026_05_18),
+    ("033_promote_synth_candidates_2026_05_18",
+     _033_promote_synth_candidates_2026_05_18),
+    ("034_repair_or_retire_validator_findings_2026_05_18",
+     _034_repair_or_retire_validator_findings_2026_05_18),
 ]
 
 

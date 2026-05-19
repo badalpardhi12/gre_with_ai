@@ -12,6 +12,20 @@ import sys
 
 import pytest
 
+
+def pytest_configure(config):
+    """Register custom markers used by the dedup test suites."""
+    config.addinivalue_line(
+        "markers",
+        "slow: tests that load heavy ML models or require GPU; "
+        "skipped by default in fast pre-commit runs (use -m \"not slow\").",
+    )
+    config.addinivalue_line(
+        "markers",
+        "timeout(seconds): per-test wall-clock budget (informational only "
+        "unless pytest-timeout is installed).",
+    )
+
 # Make the project root importable when pytest is run from any cwd.
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if PROJECT_ROOT not in sys.path:
@@ -34,16 +48,26 @@ def temp_db(tmp_path, monkeypatch):
     # the patched DB_PATH. Also evict any service modules that captured
     # `from models.database import db, …` at import time, otherwise their
     # bindings stay pointing at the previous test's DB.
-    for prefix in ("models", "services"):
-        for mod in [m for m in list(sys.modules) if m.startswith(prefix + ".")
-                    or m == prefix]:
-            del sys.modules[mod]
+    def _evict_models_services():
+        for prefix in ("models", "services"):
+            for mod in [m for m in list(sys.modules) if m.startswith(prefix + ".")
+                        or m == prefix]:
+                del sys.modules[mod]
+
+    _evict_models_services()
 
     from models.database import db, init_db, ALL_TABLES  # noqa: F401
     init_db()
     yield db
     if not db.is_closed():
         db.close()
+    # Evict again at teardown so the next non-temp_db test (e.g. ones that
+    # call init_db() at module scope against the live DB) gets a fresh import
+    # that re-binds against the now-restored config.DB_PATH. Without this,
+    # the cached module's ``db`` SqliteDatabase object is still pointed at
+    # the (now-vanished) tmp_path and downstream tests see "no rows" because
+    # they're querying a different SQLite file than they meant to.
+    _evict_models_services()
 
 
 @pytest.fixture

@@ -432,9 +432,12 @@ def _anchor_for(item: GeneratedItem) -> str:
 
 def upsert_accepted(result: PipelineResult) -> Optional[int]:
     """Insert an accepted item into the DB. Returns the new question id
-    on insert, ``None`` on duplicate. Caller is responsible for opening
-    a DB connection."""
+    on insert, ``None`` on duplicate (either the (source, anchor) key
+    already exists, or the dedup service flagged the item as a near /
+    paraphrase duplicate of an existing live question). Caller is
+    responsible for opening a DB connection."""
     from models.database import Question, QuestionOption, NumericAnswer
+    from services.dedup import get_dedup_service
 
     item = result.item
     assert item is not None and result.accepted, \
@@ -448,6 +451,30 @@ def upsert_accepted(result: PipelineResult) -> Optional[int]:
         .first()
     )
     if exists:
+        return None
+
+    # Phase 1.4 hook: dedup against the live bank. Synthetic items have
+    # the highest collision risk because the generator can rediscover a
+    # previously-shipped problem; the dedup service catches both lexical
+    # and paraphrase clones.
+    raw_opts = item.options or []
+    opt_texts: List[str] = []
+    for opt in raw_opts:
+        opt_str = str(opt).strip()
+        # "B) 17" → "17". Stem-only text (no labels) is what
+        # find_dup_for expects.
+        if len(opt_str) >= 2 and opt_str[1] in (")", "."):
+            opt_texts.append(opt_str[2:].strip())
+        else:
+            opt_texts.append(opt_str)
+    dedup_svc = get_dedup_service()
+    dup_qid = dedup_svc.find_dup_for(
+        prompt=item.stem,
+        stimulus_content="",
+        options=opt_texts,
+        source=SOURCE_TAG,
+    )
+    if dup_qid is not None:
         return None
 
     provenance_payload = {

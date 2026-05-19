@@ -166,11 +166,32 @@ VERBAL_COMPOSITION = {
 }
 
 QUANT_COMPOSITION = {
-    "qc": 0.30,                  # ~4 per 12-question section
-    "mcq_single": 0.40,          # ~5 per 12-question section
-    "mcq_multi": 0.05,           # ~1 per section
-    "numeric_entry": 0.05,       # ~1 per section
-    "data_interp": 0.20,         # ~2-3 per section
+    # 7.1: aligned to Magoosh-estimated real GRE composition 2026-05-18.
+    # Source: Magoosh — GRE Format and Section Breakdown (single-vendor estimate, flag).
+    # Applied to 12-Q (V1) and 15-Q (V2) sections via _composition_targets:
+    "qc": 0.33,                  # ~4 per 12-Q section, ~5 per 15-Q section
+    "mcq_single": 0.37,          # ~4 per 12-Q section, ~6 per 15-Q section
+    "mcq_multi": 0.09,           # ~1 per 12-Q section, ~1 per 15-Q section
+    "numeric_entry": 0.09,       # ~1 per 12-Q section, ~1 per 15-Q section
+    "data_interp": 0.11,         # ~1 DI cluster of 3 Q per section
+}
+
+
+# Phase 7.2 — ETS 3-tier difficulty-mix (Path B routing, OQ1 resolution
+# 2026-05-18). When ``select_questions_composed`` receives a ``routing_tier``
+# argument, the tier→difficulty mix below replaces the legacy hard-WHERE
+# / theta-soft-weight band gate. Each row sums to 1.0 across the 5
+# difficulty levels (band 1 = easiest, band 5 = hardest). Targets per
+# BrightLink Prep tier shapes (report.md §3.4):
+#   * 'easy'   → 65–70% L1+L2, 25–30% L3, ~5%  L4+L5
+#   * 'medium' → ~20%  L1+L2, ~60% L3, ~20% L4+L5
+#   * 'hard'   → ~5%   L1+L2, 25–30% L3, 65–70% L4+L5
+# Used as soft probability weights when ranking candidate clusters; we
+# never hard-gate so a thin band pool can still ship a full section.
+TIER_DIFFICULTY_MIX = {
+    "easy": {1: 0.35, 2: 0.32, 3: 0.28, 4: 0.04, 5: 0.01},
+    "medium": {1: 0.10, 2: 0.10, 3: 0.60, 4: 0.15, 5: 0.05},
+    "hard": {1: 0.01, 2: 0.04, 3: 0.28, 4: 0.32, 5: 0.35},
 }
 
 # ETS blueprint: every Quant section contains exactly one DI *set* of 3
@@ -204,6 +225,17 @@ DI_CLUSTER_MIN_SIZE = 1
 # The floor scales with section length so the figure density stays in
 # the 25–33% band regardless of whether the caller asks for Q1 (12) or
 # Q2 (15): 3/12 ≈ 25%, 4/15 ≈ 27%.
+#
+# 7.3: floor values gated on Phase 5+6 figure synthesis closing the live
+# geometry-MCQ image gap; current pool is too thin for higher floors per
+# docs/implementation_plan_2026_05_18.md. Centralized as module-level
+# constants so a Phase 6 follow-up can flip them with a one-line edit.
+# Pre-Phase-5/6 (low figure pool): keep at 3/4 to avoid serving repeats.
+QUANT_FIGURE_FLOOR_SHORT = 3   # active; raise to 5 after Phase 5/6 close gap
+QUANT_FIGURE_FLOOR_LONG = 4    # active; raise to 7 after Phase 5/6 close gap
+QUANT_FIGURE_SECTION_BOUNDARY = 12  # count threshold splitting "short" from "long"
+
+
 def _quant_figure_floor(count, pool_size=None):
     """Minimum figure-bearing items for a Quant section of size ``count``.
 
@@ -211,8 +243,13 @@ def _quant_figure_floor(count, pool_size=None):
     back off proportionally — forcing 3-of-43 into every section drives
     the same items into heavy rotation. At the small end we still keep
     ≥1 figure to honor the ETS composition pattern.
+
+    The floor values come from the ``QUANT_FIGURE_FLOOR_SHORT`` /
+    ``QUANT_FIGURE_FLOOR_LONG`` module constants so Phase 6 can raise
+    them once the figure-gap pool closes (per Phase 7.3 plan, 2026-05-18).
     """
-    base = 3 if count <= 12 else 4
+    base = (QUANT_FIGURE_FLOOR_SHORT if count <= QUANT_FIGURE_SECTION_BOUNDARY
+            else QUANT_FIGURE_FLOOR_LONG)
     if pool_size is None:
         return base
     soft = max(1, min(base, pool_size // 8))
@@ -703,7 +740,8 @@ class QuestionBankService:
                                    exclude_user_seen=None,
                                    recent_seen_days=DEFAULT_RECENT_SEEN_DAYS,
                                    mastery_cooldown_days=DEFAULT_MASTERY_COOLDOWN_DAYS,
-                                   target_theta=None):
+                                   target_theta=None,
+                                   routing_tier=None):
         """
         Select `count` question IDs respecting real GRE question-type composition
         and keeping RC/DI clusters atomic.
@@ -734,6 +772,16 @@ class QuestionBankService:
         ``target_theta`` is ``None`` or rating_service is unavailable, the
         assembler preserves its pre-S1 band-switch behavior exactly —
         this is a non-breaking wire-up.
+
+        Phase 7.2 (Path B): when ``routing_tier`` is one of
+        ``'easy' / 'medium' / 'hard'``, candidate clusters are ranked by
+        the ETS 3-tier difficulty mix in ``TIER_DIFFICULTY_MIX``. The
+        tier wins over ``difficulty_band`` for the soft-weight stage
+        (the difficulty mix is a finer-grained probability map than the
+        coarse 3-band gate). ``target_theta`` continues to contribute as
+        a side-signal for Fisher-info ranking when present. When
+        ``routing_tier`` is ``None``, the legacy band-switch + theta path
+        runs unchanged — backwards compatible.
 
         Deficits in any subtype are filled with the most flexible neighbor
         (rc_single for verbal, mcq_single for quant), then any remaining shortfall
@@ -905,6 +953,7 @@ class QuestionBankService:
                 difficulty_band=difficulty_band,
                 exclude=exclude,
                 target_theta=target_theta,
+                routing_tier=routing_tier,
             )
             selected_ids.extend(taken)
             exclude.update(taken)
@@ -921,6 +970,7 @@ class QuestionBankService:
                 difficulty_band=difficulty_band,
                 exclude=exclude,
                 target_theta=target_theta,
+                routing_tier=routing_tier,
             )
             selected_ids.extend(extra)
             exclude.update(extra)
@@ -936,6 +986,7 @@ class QuestionBankService:
                 difficulty_band=difficulty_band,
                 exclude=exclude,
                 target_theta=target_theta,
+                routing_tier=routing_tier,
             )
             selected_ids.extend(extra)
             exclude.update(extra)
@@ -973,6 +1024,7 @@ class QuestionBankService:
                     difficulty_band="medium",
                     exclude=exclude,
                     target_theta=target_theta,
+                    routing_tier=routing_tier,
                 )
                 selected_ids.extend(extra)
                 exclude.update(extra)
@@ -1005,6 +1057,7 @@ class QuestionBankService:
                     difficulty_band=difficulty_band,
                     exclude=partial_exclude,
                     target_theta=target_theta,
+                    routing_tier=routing_tier,
                 )
                 selected_ids.extend(extra)
                 exclude.update(extra)
@@ -1027,6 +1080,7 @@ class QuestionBankService:
                 difficulty_band=difficulty_band,
                 exclude=relaxed_exclude,
                 target_theta=target_theta,
+                routing_tier=routing_tier,
             )
             selected_ids.extend(extra)
             deficit -= len(extra)
@@ -1072,7 +1126,7 @@ class QuestionBankService:
         return targets
 
     def _take_cluster_aware(self, measure, subtype, target, difficulty_band,
-                             exclude, target_theta=None):
+                             exclude, target_theta=None, routing_tier=None):
         """Pick up to ``target`` question IDs, pulling full clusters atomically.
 
         ``subtype=None`` means "any subtype for this measure". Questions are
@@ -1087,6 +1141,14 @@ class QuestionBankService:
         ( ``sum p_i*(1-p_i)`` ), off-band clusters are down-weighted by
         0.5, and the top-ranked clusters feed into the existing
         ``_randomesque_pick`` for randomesque tie-breaking.
+
+        Phase 7.2 (Path B, OQ1): when ``routing_tier`` is one of
+        ``'easy' / 'medium' / 'hard'``, the ``TIER_DIFFICULTY_MIX`` table
+        replaces the band soft-weight stage. The tier weight is a
+        finer-grained probability map across all 5 difficulty levels
+        (band 1..5) so the section composition matches the BrightLink
+        Prep tier shapes (report.md §3.4) without hard-gating any band.
+        Tier weighting stacks with theta info when both are present.
         """
         if target <= 0:
             return []
@@ -1115,6 +1177,15 @@ class QuestionBankService:
             if ItemRating.select().limit(1).count() == 0:
                 theta_active = False
 
+        # Phase 7.2 (Path B) — tier routing. When the caller supplies a
+        # ``routing_tier`` that maps to ``TIER_DIFFICULTY_MIX``, the tier
+        # mix replaces the hard-band WHERE during pool query and supplies
+        # a probability weight in cluster ranking. Like ``theta_active``,
+        # this is a SOFT signal — pool stays wide so a thin level pool
+        # never short-ships the section.
+        tier_active = (routing_tier is not None
+                       and routing_tier in TIER_DIFFICULTY_MIX)
+
         query = (Question
                  .select(Question.id, Question.subtype, Question.stimulus,
                          Question.difficulty_target)
@@ -1122,7 +1193,7 @@ class QuestionBankService:
                         (Question.status == "live")))
         if subtype is not None:
             query = query.where(Question.subtype == subtype)
-        if not theta_active:
+        if not theta_active and not tier_active:
             if difficulty_band == "easy":
                 query = query.where(Question.difficulty_target <= 2)
             elif difficulty_band == "hard":
@@ -1158,26 +1229,30 @@ class QuestionBankService:
                 # WHERE) when theta was active. Now that we're falling
                 # back, apply the band filter in-memory so the caller
                 # still gets hard-WHERE semantics and we don't surface
-                # off-band items via the degraded-rating path.
+                # off-band items via the degraded-rating path. When the
+                # tier path is also active we keep clusters wide — the
+                # tier weighting alone is enough to bias selection.
                 theta_active = False
-                if difficulty_band == "easy":
-                    clusters = {
-                        k: v for k, v in clusters.items()
-                        if any((cluster_diffs[k][i] or 3) <= 2
-                               for i in range(len(v)))
-                    }
-                elif difficulty_band == "hard":
-                    clusters = {
-                        k: v for k, v in clusters.items()
-                        if any((cluster_diffs[k][i] or 3) >= 4
-                               for i in range(len(v)))
-                    }
-                cluster_keys = list(clusters.keys())
+                if not tier_active:
+                    if difficulty_band == "easy":
+                        clusters = {
+                            k: v for k, v in clusters.items()
+                            if any((cluster_diffs[k][i] or 3) <= 2
+                                   for i in range(len(v)))
+                        }
+                    elif difficulty_band == "hard":
+                        clusters = {
+                            k: v for k, v in clusters.items()
+                            if any((cluster_diffs[k][i] or 3) >= 4
+                                   for i in range(len(v)))
+                        }
+                    cluster_keys = list(clusters.keys())
 
-        if theta_active:
+        if theta_active or tier_active:
             cluster_keys = self._rank_clusters_by_info(
                 cluster_keys, clusters, cluster_diffs, ratings_map,
                 target_theta, difficulty_band,
+                routing_tier=routing_tier,
             )
         else:
             # Legacy: random cluster order.
@@ -1242,7 +1317,8 @@ class QuestionBankService:
 
     @staticmethod
     def _rank_clusters_by_info(cluster_keys, clusters, cluster_diffs,
-                                ratings_map, target_theta, difficulty_band):
+                                ratings_map, target_theta, difficulty_band,
+                                routing_tier=None):
         """Rank candidate clusters by approximate Fisher information at theta.
 
         For each item ``i`` in a cluster we compute an Elo expected score
@@ -1255,62 +1331,108 @@ class QuestionBankService:
         band is never a hard gate. A cluster is "off-band" if NONE of
         its qids falls in the requested band.
 
+        Phase 7.2 (Path B): when ``routing_tier`` is supplied, the tier
+        difficulty mix from ``TIER_DIFFICULTY_MIX`` provides a
+        finer-grained weight per item difficulty level (1..5). The
+        per-item weight is averaged across the cluster, then multiplied
+        into the existing info score. When ``target_theta`` is missing
+        (e.g., fresh DB / no ratings), the tier weight alone drives
+        ranking — info score collapses to a constant (1.0) so tier-mix
+        is the entire signal.
+
         Theta-aware tie-break: top-5 most-informative clusters are
         shuffled uniformly so two back-to-back selections don't land
         the exact same clusters. Mirrors the ``_randomesque_pick``
         pattern at cluster granularity.
 
         Graceful: clusters whose qids have no rating get a neutral
-        score (0.0) — they still appear, just not at the front.
+        score (0.0) when only theta is active — they still appear, just
+        not at the front. With tier active, no-rating clusters score by
+        tier-mix only, which is still a meaningful signal.
         """
         THETA_SCALE = 0.4  # mirror rating_service.THETA_SCALE
+        tier_mix = TIER_DIFFICULTY_MIX.get(routing_tier) if routing_tier else None
+        theta_value = None
         try:
-            theta = float(target_theta)
+            theta_value = float(target_theta) if target_theta is not None else None
         except (TypeError, ValueError):
+            theta_value = None
+
+        if theta_value is None and tier_mix is None:
+            # Neither signal — fall back to random.
             random.shuffle(cluster_keys)
             return cluster_keys
 
-        def _info_for_cluster(key):
+        def _score_cluster(key):
+            """Return (score, in_band) for a candidate cluster."""
             qids = clusters.get(key, [])
             if not qids:
-                return 0.0, False  # (score, in_band)
-            total = 0.0
-            in_band = False
+                return 0.0, False
             diffs = cluster_diffs.get(key, [])
+            in_band = False
+            info_total = 0.0
+            tier_total = 0.0
+            tier_n = 0
+            n_with_info = 0
             for qid, diff in zip(qids, diffs):
-                rating = ratings_map.get(qid)
-                if rating is None:
-                    continue
-                try:
-                    p = 1.0 / (1.0 + 10.0 ** (
-                        (float(rating) - theta) / THETA_SCALE))
-                except (TypeError, ValueError, OverflowError):
-                    continue
-                total += p * (1.0 - p)
                 d = diff or 3
+                # Theta info contribution (only when we have a rating).
+                if theta_value is not None:
+                    rating = ratings_map.get(qid)
+                    if rating is not None:
+                        try:
+                            p = 1.0 / (1.0 + 10.0 ** (
+                                (float(rating) - theta_value) / THETA_SCALE))
+                            info_total += p * (1.0 - p)
+                            n_with_info += 1
+                        except (TypeError, ValueError, OverflowError):
+                            pass
+                # Tier-mix contribution (cluster level — average over qids).
+                if tier_mix is not None:
+                    tier_total += tier_mix.get(d, 0.0)
+                    tier_n += 1
+                # Band-membership flag (P3.S1 soft weight bookkeeping).
                 if difficulty_band == "easy" and d <= 2:
                     in_band = True
                 elif difficulty_band == "hard" and d >= 4:
                     in_band = True
                 elif difficulty_band == "medium" and d == 3:
                     in_band = True
-            return total, in_band
+
+            # Compose the final score:
+            #   * info_total (if theta active) — Fisher info at theta.
+            #   * tier_weight (if tier active) — average TIER_DIFFICULTY_MIX
+            #     value across the cluster's items.
+            # Multiplicative when both present; tier alone when theta
+            # collapses (no ratings); info alone when no tier.
+            tier_weight = (tier_total / tier_n) if tier_n else 0.0
+            if theta_value is not None and tier_mix is not None:
+                # Floor the info contribution at a small constant so a
+                # cluster with zero theta info but a strong tier weight
+                # can still beat the noise floor.
+                info_factor = info_total if n_with_info > 0 else 1e-3
+                score = info_factor * (tier_weight + 0.05)
+            elif tier_mix is not None:
+                score = tier_weight
+            else:
+                score = info_total
+            return score, in_band
 
         scored = []
         for key in cluster_keys:
-            raw, in_band = _info_for_cluster(key)
-            # Soft band weight: in-band clusters keep full info score,
-            # off-band clusters are halved (spec: 0.5). We add a small
-            # additive in-band bonus so that when info is close (theta
-            # near band boundary) the in-band cluster still leads — this
-            # preserves the accuracy-router's band signal as a CAT hint
-            # rather than letting max-info drag Q2 back to a noisier
-            # central band.
-            weight = 1.0 if in_band else 0.5
-            bonus = 0.1 if in_band else 0.0
-            scored.append((raw * weight + bonus, key))
+            raw, in_band = _score_cluster(key)
+            # Band soft weight: in-band clusters keep full score, off-band
+            # are halved (P3.S1 spec). Skipped under tier path because the
+            # tier mix already encodes a finer-grained per-level weight,
+            # and applying both stacks the bias.
+            if tier_mix is None:
+                weight = 1.0 if in_band else 0.5
+                bonus = 0.1 if in_band else 0.0
+                scored.append((raw * weight + bonus, key))
+            else:
+                scored.append((raw, key))
 
-        # Highest-info first; deterministic tie-break on key repr so the
+        # Highest score first; deterministic tie-break on key repr so the
         # sort is stable before we inject randomness on the top slice.
         scored.sort(key=lambda pair: (-pair[0], repr(pair[1])))
 

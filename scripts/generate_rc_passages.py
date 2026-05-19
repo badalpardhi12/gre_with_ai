@@ -530,10 +530,21 @@ def upsert_candidate(candidate: RCCandidate) -> Tuple[int, int, bool]:
     ``was_reused=True`` if a Stimulus with the same source_hash already
     existed — in that case we do NOT insert new Questions (the prior
     run already did).
+
+    Phase 1.4 hook: each candidate question is run through the dedup
+    service before insert. If every question in a passage is dropped
+    as a duplicate, the Stimulus is rolled back too — RC passages with
+    zero live questions have no purpose and would just orphan the row.
+    Note that DI/RC siblings often share a stimulus and would normally
+    look identical to a coarse cosine measure, but the cross-encoder
+    rerank handles that — see services/dedup/embedding_stage.py.
     """
     from models.database import db, init_db, Stimulus, Question, QuestionOption
+    from services.dedup import get_dedup_service
     init_db()
     db.connect(reuse_if_open=True)
+
+    dedup_svc = get_dedup_service()
 
     # Idempotency: look up existing Stimulus by source_hash in render_spec.
     # render_spec is a JSON blob, so we scan narrowly (RC passages are
@@ -566,6 +577,16 @@ def upsert_candidate(candidate: RCCandidate) -> Tuple[int, int, bool]:
 
         inserted = 0
         for idx, item in enumerate(candidate.questions):
+            # Phase 1.4: dedup against the live bank.
+            dup_qid = dedup_svc.find_dup_for(
+                prompt=item["stem"],
+                stimulus_content=candidate.passage_text or "",
+                options=list(item.get("options", []) or []),
+                source=SOURCE_TAG,
+            )
+            if dup_qid is not None:
+                continue
+
             provenance_payload = {
                 "pipeline": "ai_generated_rc_v2",
                 "source_label": candidate.source_label,

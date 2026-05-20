@@ -20,7 +20,7 @@
 ## How to run
 
 ```
-venv/bin/python main.py
+venv/bin/python app.py
 ```
 
 ## How to test

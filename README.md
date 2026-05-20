@@ -18,7 +18,7 @@ A best-in-class offline GRE preparation platform: section-adaptive mock tests, a
 git clone https://github.com/badalpardhi12/gre_with_ai.git
 cd gre_with_ai
 chmod +x setup.sh && ./setup.sh        # builds venv, runs migrations, optional API-key prompt
-venv/bin/python main.py                # launches the app
+venv/bin/python app.py                 # launches the app
 ```
 
 `setup.sh` is idempotent. Re-run it after every `git pull`. An OpenRouter key is optional — skip the prompt and the app still runs every offline feature.
@@ -362,7 +362,7 @@ Each of these builds items tagged with a unique `source=` and writes `provenance
 source venv/bin/activate
 
 # Run the app
-python main.py
+python app.py
 
 # Run the test suite (533 tests, < 60s on an M-series Mac)
 venv/bin/python -m pytest tests/ -q

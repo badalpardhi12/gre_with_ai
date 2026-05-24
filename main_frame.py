@@ -189,6 +189,13 @@ class MainFrame(wx.Frame):
         view_menu.Append(2014, "&Insights\tCtrl+5", "Forecast, history, study plan")
         view_menu.Append(2015, "&Error Log\tCtrl+6",
                          "Review every wrong answer with auto-classified errors")
+        view_menu.AppendSeparator()
+        view_menu.Append(2020, "Zoom &In\tCtrl++",
+                         "Increase question/explanation text size")
+        view_menu.Append(2021, "Zoom &Out\tCtrl+-",
+                         "Decrease question/explanation text size")
+        view_menu.Append(2022, "&Reset Zoom\tCtrl+0",
+                         "Reset text size to default")
         menubar.Append(view_menu, "&View")
 
         # Help menu
@@ -206,6 +213,9 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _: self._on_sidebar_select("vocab"), id=2013)
         self.Bind(wx.EVT_MENU, lambda _: self._on_sidebar_select("insights"), id=2014)
         self.Bind(wx.EVT_MENU, lambda _: self._on_sidebar_select("error_log"), id=2015)
+        self.Bind(wx.EVT_MENU, lambda _: self._adjust_zoom(+1), id=2020)
+        self.Bind(wx.EVT_MENU, lambda _: self._adjust_zoom(-1), id=2021)
+        self.Bind(wx.EVT_MENU, lambda _: self._adjust_zoom(0), id=2022)
         self.Bind(wx.EVT_MENU, lambda _: self._show_settings(), id=wx.ID_PREFERENCES)
         self.Bind(wx.EVT_MENU, lambda _: self._show_about(), id=wx.ID_ABOUT)
         self.Bind(wx.EVT_MENU, lambda _: self.Close(), id=wx.ID_EXIT)
@@ -1083,6 +1093,50 @@ class MainFrame(wx.Frame):
         dlg = LLMSettingsDialog(self)
         dlg.ShowModal()
         dlg.Destroy()
+
+    def _adjust_zoom(self, direction: int) -> None:
+        """View > Zoom In/Out/Reset.
+
+        ``direction``:
+          +1 → bump font_size_multiplier by FONT_SIZE_STEP
+          -1 → drop by FONT_SIZE_STEP
+           0 → reset to 1.0
+
+        Persists the new value via ``save_user_pref`` and re-renders the
+        current screen so the change is visible immediately. Bounds are
+        clamped to FONT_SIZE_MIN/MAX.
+        """
+        from config import (
+            load_user_prefs, save_user_pref,
+            FONT_SIZE_MIN, FONT_SIZE_MAX, FONT_SIZE_STEP,
+        )
+        from widgets import ui_scale
+
+        if direction == 0:
+            new_value = 1.0
+        else:
+            current = load_user_prefs().get("font_size_multiplier", 1.0)
+            step = FONT_SIZE_STEP if direction > 0 else -FONT_SIZE_STEP
+            new_value = round(current + step, 2)
+            new_value = max(FONT_SIZE_MIN, min(FONT_SIZE_MAX, new_value))
+
+        save_user_pref("font_size_multiplier", new_value)
+        ui_scale.invalidate_user_zoom_cache()
+
+        # Re-render current screen so new font size lands without restart.
+        try:
+            current_name = getattr(self, "_current_screen_name", None)
+            if current_name and hasattr(self, "_show_screen"):
+                self._show_screen(current_name)
+        except Exception:
+            # Re-render is best-effort — the next natural navigation will
+            # pick up the new size regardless.
+            pass
+
+        # Status-bar feedback if a status bar is mounted.
+        sb = self.GetStatusBar() if hasattr(self, "GetStatusBar") else None
+        if sb:
+            sb.SetStatusText(f"Text size: {int(round(new_value * 100))}%")
 
     # ── New screen handlers ──────────────────────────────────────────
 

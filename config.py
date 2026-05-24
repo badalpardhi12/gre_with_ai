@@ -134,7 +134,7 @@ def load_llm_config():
 
 
 def save_llm_config(api_key=None, base_url=None, model=None, max_tokens=None,
-                    include_ai_synthetic=None):
+                    include_ai_synthetic=None, font_size_multiplier=None):
     """Persist runtime LLM settings to JSON.
 
     Writes atomically (temp file + os.replace) so an interrupted save can't
@@ -171,6 +171,8 @@ def save_llm_config(api_key=None, base_url=None, model=None, max_tokens=None,
         data["max_tokens"] = max_tokens
     if include_ai_synthetic is not None:
         data["include_ai_synthetic"] = bool(include_ai_synthetic)
+    if font_size_multiplier is not None:
+        data["font_size_multiplier"] = clamp_font_multiplier(font_size_multiplier)
 
     tmp_path = LLM_CONFIG_PATH.with_suffix(LLM_CONFIG_PATH.suffix + ".tmp")
     with open(tmp_path, "w") as f:
@@ -187,7 +189,27 @@ def save_llm_config(api_key=None, base_url=None, model=None, max_tokens=None,
 # Keep narrow surface; add new keys here as they appear in settings.
 USER_PREF_DEFAULTS = {
     "include_ai_synthetic": True,   # show synthetic items in mock tests
+    "font_size_multiplier": 1.0,    # zoom factor for question/explanation text
+                                    # (1.0 = baseline; user-adjustable via
+                                    # View menu / Cmd-+ / Cmd-- / Cmd-0).
+                                    # Clamped to FONT_SIZE_RANGE on save.
 }
+
+# Hard bounds on the font multiplier; the View menu enforces these.
+FONT_SIZE_MIN = 0.8
+FONT_SIZE_MAX = 1.8
+FONT_SIZE_STEP = 0.1
+
+
+def clamp_font_multiplier(value):
+    """Coerce a font multiplier into the allowed range, default 1.0 on bad input."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    if v != v:  # NaN
+        return 1.0
+    return max(FONT_SIZE_MIN, min(FONT_SIZE_MAX, v))
 
 
 def load_user_prefs():
@@ -203,6 +225,8 @@ def load_user_prefs():
     for key in USER_PREF_DEFAULTS:
         if key in cfg:
             out[key] = cfg[key]
+    # Clamp the font multiplier in case the JSON was hand-edited out of bounds.
+    out["font_size_multiplier"] = clamp_font_multiplier(out.get("font_size_multiplier", 1.0))
     return out
 
 
@@ -212,5 +236,7 @@ def save_user_pref(key, value):
         raise KeyError(f"Unknown user pref: {key!r}")
     if key == "include_ai_synthetic":
         save_llm_config(include_ai_synthetic=value)
+    elif key == "font_size_multiplier":
+        save_llm_config(font_size_multiplier=clamp_font_multiplier(value))
     else:  # pragma: no cover — guarded above
         raise KeyError(f"No save handler for pref: {key!r}")

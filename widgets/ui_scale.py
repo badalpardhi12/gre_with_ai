@@ -4,6 +4,10 @@ Centralized UI scaling and font helpers.
 Scales fonts based on display size so the app looks proportional on
 high-resolution screens (Retina, 2K, 4K) — wxPython does not auto-scale
 font sizes by DPI on macOS by default.
+
+The user-visible *zoom* multiplier (Cmd-+ / Cmd-- / Cmd-0 from the
+View menu) layers on top of the display-DPI auto-scale. It's persisted
+in ``llm_config.json`` via ``config.save_user_pref("font_size_multiplier", ...)``.
 """
 import wx
 
@@ -41,18 +45,34 @@ def get_scale_factor():
 
 
 _SCALE = None
+_USER_ZOOM = None
+
+
+def _get_user_zoom():
+    """User-controlled zoom factor (cached). Falls back to 1.0 if config
+    is unavailable (e.g. during early import before DATA_DIR exists)."""
+    global _USER_ZOOM
+    if _USER_ZOOM is None:
+        try:
+            from config import load_user_prefs, clamp_font_multiplier
+            _USER_ZOOM = clamp_font_multiplier(
+                load_user_prefs().get("font_size_multiplier", 1.0)
+            )
+        except Exception:
+            _USER_ZOOM = 1.0
+    return _USER_ZOOM
 
 
 def scale():
-    """Cached scale factor (computed once)."""
+    """Cached scale factor (display-DPI auto-scale × user zoom)."""
     global _SCALE
     if _SCALE is None:
         _SCALE = get_scale_factor()
-    return _SCALE
+    return _SCALE * _get_user_zoom()
 
 
 def invalidate_scale_cache():
-    """Drop the cached scale factor.
+    """Drop the cached display-DPI scale factor.
 
     Call from the main frame's `wx.EVT_DISPLAY_CHANGED` handler so moving
     the window between displays of different DPI rescales fonts on the next
@@ -60,6 +80,14 @@ def invalidate_scale_cache():
     """
     global _SCALE
     _SCALE = None
+
+
+def invalidate_user_zoom_cache():
+    """Drop the cached user-zoom multiplier so the next ``scale()`` call
+    re-reads it from disk. Call after ``config.save_user_pref(
+    "font_size_multiplier", v)``."""
+    global _USER_ZOOM
+    _USER_ZOOM = None
 
 
 def font_size(base):
@@ -119,5 +147,11 @@ def make_font(size, weight=wx.FONTWEIGHT_NORMAL,
 
 
 def get_dashboard_html_font_pt():
-    """Font size in points for the MathView HTML rendering (for prompts/lessons)."""
-    return font_size(15)
+    """Font size in points for the MathView HTML rendering (for prompts/lessons).
+
+    Baseline 16pt at scale=1.0 — modestly larger than the previous 15pt
+    default in response to user feedback that question text rendered too
+    small. Layered with the user's font_size_multiplier (Cmd-+/-/0) and
+    the display-DPI auto-scale via ``font_size()``.
+    """
+    return font_size(16)

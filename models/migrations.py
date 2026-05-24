@@ -1690,6 +1690,129 @@ def _034_repair_or_retire_validator_findings_2026_05_18():
             seed.close()
 
 
+# Quant blocker rows surfaced by scripts/audit_data_corruption.py at
+# launch time. Each row's explanation makes the answer recoverable, OR
+# the row is unanswerable (chart/figure missing) and must be retired.
+# (qid, action, payload):
+#   "retire" → status='retired' with provenance reason
+#   "repair_numeric" → add a NumericAnswer row with (exact_value, tolerance)
+_AUDIT_QUANT_FIXES_2026_05_24 = [
+    (4219, "retire",
+     "princeton numeric_entry shipped without a NumericAnswer row; "
+     "answer not reliably recoverable from explanation."),
+    (4359, "retire",
+     "princeton numeric_entry shipped without a NumericAnswer row; "
+     "answer not reliably recoverable from explanation."),
+    (4771, "repair_numeric",
+     {"exact_value": 4 / 216, "tolerance": 0.001,
+      "note": "Damon rolls 3 dice, P(total > 16) = 4/216 = 1/54"}),
+    (4993, "retire",
+     "kaplan numeric_entry references a chart that is not attached as "
+     "a Stimulus; cannot be answered without the missing series table."),
+    (4997, "retire",
+     "kaplan numeric_entry references a percentile table that is not "
+     "attached as a Stimulus; cannot be answered without the table."),
+]
+
+
+def _035_audit_quant_fixes_2026_05_24():
+    """Repair-or-retire the 5 quant blocker rows surfaced by the launch
+    audit (``scripts/audit_data_corruption.py``).
+
+    Mirrors to seed DB. Idempotent — skips items already retired or
+    already carrying a NumericAnswer.
+    """
+    db = _get_db()
+    import json as _json
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+
+    def _retire_question_row(conn, qid, reason, *, raw_sql=False):
+        if raw_sql:
+            row = conn.execute(
+                "SELECT status, provenance_json FROM question WHERE id=?",
+                (qid,)
+            ).fetchone()
+        else:
+            row = conn.execute_sql(
+                "SELECT status, provenance_json FROM question WHERE id=?",
+                (qid,)
+            ).fetchone()
+        if row is None:
+            return False
+        status, prov_raw = row
+        if status == "retired":
+            return False
+        try:
+            prov = _json.loads(prov_raw) if prov_raw else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        prov["retired_reason"] = reason
+        prov["retired_by_migration"] = "035_audit_quant_fixes_2026_05_24"
+        sql = ("UPDATE question SET status='retired', provenance_json=? "
+               "WHERE id=? AND status != 'retired'")
+        if raw_sql:
+            conn.execute(sql, (_json.dumps(prov), qid))
+        else:
+            conn.execute_sql(sql, (_json.dumps(prov), qid))
+        return True
+
+    # ── User DB pass (Peewee) ────────────────────────────────────────
+    for qid, action, payload in _AUDIT_QUANT_FIXES_2026_05_24:
+        if action == "retire":
+            _retire_question_row(db, qid, payload)
+        elif action == "repair_numeric":
+            # Guard: skip when the parent question doesn't exist (e.g. on
+            # a freshly-bootstrapped test DB) to avoid FK violations.
+            q_exists = db.execute_sql(
+                "SELECT 1 FROM question WHERE id=?", (qid,)
+            ).fetchone()
+            if not q_exists:
+                continue
+            row = db.execute_sql(
+                "SELECT id FROM numericanswer WHERE question_id=?", (qid,)
+            ).fetchone()
+            if row is None:
+                db.execute_sql(
+                    "INSERT INTO numericanswer "
+                    "(question_id, exact_value, tolerance, mode) "
+                    "VALUES (?, ?, ?, ?)",
+                    (qid, float(payload["exact_value"]),
+                     float(payload["tolerance"]), "exact"),
+                )
+
+    # ── Seed DB pass (raw sqlite) ────────────────────────────────────
+    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            for qid, action, payload in _AUDIT_QUANT_FIXES_2026_05_24:
+                if action == "retire":
+                    _retire_question_row(seed, qid, payload, raw_sql=True)
+                elif action == "repair_numeric":
+                    q_exists = seed.execute(
+                        "SELECT 1 FROM question WHERE id=?", (qid,)
+                    ).fetchone()
+                    if not q_exists:
+                        continue
+                    row = seed.execute(
+                        "SELECT id FROM numericanswer WHERE question_id=?",
+                        (qid,)
+                    ).fetchone()
+                    if row is None:
+                        seed.execute(
+                            "INSERT INTO numericanswer "
+                            "(question_id, exact_value, tolerance, mode) "
+                            "VALUES (?, ?, ?, ?)",
+                            (qid, float(payload["exact_value"]),
+                             float(payload["tolerance"]), "exact"),
+                        )
+            seed.commit()
+        finally:
+            seed.close()
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -1749,6 +1872,8 @@ MIGRATIONS = [
      _033_promote_synth_candidates_2026_05_18),
     ("034_repair_or_retire_validator_findings_2026_05_18",
      _034_repair_or_retire_validator_findings_2026_05_18),
+    ("035_audit_quant_fixes_2026_05_24",
+     _035_audit_quant_fixes_2026_05_24),
 ]
 
 

@@ -62,11 +62,23 @@ def classify_verbal_answer_key(question, options):
         opt_text_clean = opt.option_text.lower().strip()
         option_texts[opt.option_label] = opt_text_clean
     
+    # Multi-blank TC items use option labels like ``blank1_A``, ``blank2_B``
+    # rather than single letters A-F. Strategy 1's "correct answer is X"
+    # regex matches a single A-F letter; on a multi-blank item, that single
+    # letter has no canonical relationship to the multi-blank labels (the
+    # explanation usually names blanks by sub-label like "blank1_B"). Skip
+    # Strategy 1 in that case to avoid stray-letter false positives.
+    is_multi_blank = any("_" in lbl for lbl in option_texts.keys())
+
     # Strategy 1: Explicit "correct answer is X"
-    explicit_match = re.search(
-        r'correct\s+answer\s+(?:is|=|:)?\s*\(?([A-F])\)?',
-        explanation, re.IGNORECASE
-    )
+    # The trailing ``\b`` is critical: without it, ``correct answer because``
+    # matches with stated_answer='B' (the leading letter of "because").
+    explicit_match = None
+    if not is_multi_blank:
+        explicit_match = re.search(
+            r'correct\s+answer\s+(?:is|=|:)?\s*\(?([A-F])\)?\b',
+            explanation, re.IGNORECASE,
+        )
     if explicit_match:
         stated_answer = explicit_match.group(1).upper()
         if stated_answer in correct_labels:
@@ -77,20 +89,40 @@ def classify_verbal_answer_key(question, options):
                 f"Says {stated_answer}, marked {','.join(correct_labels)}"
             )
     
-    # Strategy 2: Quoted words not in this question's options
+    # Strategy 2: Quoted words not in this question's options OR prompt.
+    # Quoted words frequently appear in the explanation as clue words copied
+    # from the prompt itself (e.g. the prompt has "vegetarians sometimes call"
+    # and the explanation says "from 'vegetarians' and 'animal-free'"). Those
+    # are legitimate references to the prompt, not external contamination —
+    # so we count a quote as "found" if it appears in either an option OR
+    # the prompt body. We also strip trailing/leading punctuation so
+    # ``"discovery."`` matches a prompt that uses ``discovery`` without the
+    # period.
+    _STRIP_PUNCT = '.,;:!?—–'
+
     quoted_words = set()
     for m in re.finditer(r'"([^"]+)"', explanation):
         word = m.group(1).lower().strip()
         quoted_words.add(word)
-    
-    found_in_options = set()
+
+    prompt_lower = (question.prompt or "").lower()
+    found_in_options_or_prompt = set()
     for quote in quoted_words:
+        haystack_keys = [quote, quote.strip(_STRIP_PUNCT)]
+        # Match if any normalized form appears in the prompt
+        if any(k and k in prompt_lower for k in haystack_keys):
+            found_in_options_or_prompt.add(quote)
+            continue
+        # Or in any option's text
+        matched_in_opt = False
         for label, opt_text in option_texts.items():
-            if quote in opt_text:
-                found_in_options.add(quote)
+            if any(k and k in opt_text for k in haystack_keys):
+                matched_in_opt = True
                 break
-    
-    external_quotes = quoted_words - found_in_options
+        if matched_in_opt:
+            found_in_options_or_prompt.add(quote)
+
+    external_quotes = quoted_words - found_in_options_or_prompt
     if external_quotes and len(external_quotes) >= 2:
         return ("Explanation-from-other", str(list(external_quotes)[:3]))
     
@@ -195,20 +227,34 @@ def audit_database(verbose=False, export_json=False, ids_only=False,
         prompt = q.prompt or ""
 
         if q.subtype == "numeric_entry":
-            if na and isinstance(na.exact_value, (int, float)):
-                pass  # valid
-            else:
+            # A numeric_entry is gradeable when EITHER:
+            #   - mode in {"exact","integer","decimal"} and exact_value is set, OR
+            #   - mode == "fraction" and numerator + non-zero denominator are set
+            valid = False
+            if na is not None:
+                if isinstance(na.exact_value, (int, float)):
+                    valid = True
+                elif (na.mode == "fraction"
+                      and isinstance(na.numerator, (int, float))
+                      and isinstance(na.denominator, (int, float))
+                      and na.denominator != 0):
+                    valid = True
+            if not valid:
                 quant_issues["numeric_broken"] += 1
         elif q.subtype in ("mcq_single", "qc"):
             correct_count = sum(1 for opt in options if opt.is_correct)
             if correct_count != 1:
                 quant_issues["mcq_key_broken"] += 1
 
-        # Structural check: QC must declare both Quantity A: and Quantity B:
+        # Structural check: QC must declare both Quantity A and Quantity B
         # in the prompt — otherwise the user can't see the comparison.
+        # Accept either "Quantity A:" plain-text OR "Quantity A" within a
+        # LaTeX bold/cell formatter (no trailing colon required), so items
+        # rendered via ``\textbf{Quantity A}`` or ``\begin{tabular}`` cells
+        # don't trigger the regex falsely.
         if q.subtype == "qc":
-            has_a = re.search(r"Quantity\s*A\s*:", prompt, re.I) is not None
-            has_b = re.search(r"Quantity\s*B\s*:", prompt, re.I) is not None
+            has_a = re.search(r"Quantity\s*A\b", prompt, re.I) is not None
+            has_b = re.search(r"Quantity\s*B\b", prompt, re.I) is not None
             if not (has_a and has_b):
                 quant_issues["qc_missing_quantity_labels"] += 1
 
@@ -237,17 +283,24 @@ def audit_database(verbose=False, export_json=False, ids_only=False,
     report["quant_issues"] = dict(quant_issues)
     
     # ──── WORST QUESTIONS ────
+    # Only "Answer-key likely WRONG" and "Option-text leakage" are
+    # high-precision corruption signals worth blocking on. The
+    # "Explanation-from-other" heuristic produces a long tail of
+    # false positives whenever the explanation paraphrases the prompt
+    # in quoted clue-words; it's still tracked in the report for
+    # diagnostic browsing but does NOT contribute to the launch-time
+    # warning.
     worst = (
         verbal_categories.get("Answer-key likely WRONG", []) +
-        verbal_categories.get("Explanation-from-other", []) +
         verbal_categories.get("Option-text leakage", [])
     )
+    explanation_drift = verbal_categories.get("Explanation-from-other", [])
     
     for q_info in worst[:5]:
         q = Question.get_by_id(q_info['id'])
         options = list(QuestionOption.select().where(QuestionOption.question == q))
         correct_labels = {opt.option_label for opt in options if opt.is_correct}
-        
+
         report["worst_questions"].append({
             'id': q.id,
             'subtype': q.subtype,
@@ -256,6 +309,11 @@ def audit_database(verbose=False, export_json=False, ids_only=False,
             'explanation_preview': q.explanation[:150] if q.explanation else "",
             'issue': q_info['details'],
         })
+
+    # Track the heuristic "Explanation-from-other" tail separately so
+    # callers can still surface it for review without it tripping the
+    # launch warning.
+    report["explanation_drift_count"] = len(explanation_drift)
     
     # ──── LLM ARTIFACTS ────
     artifact_query = Question.select().where(

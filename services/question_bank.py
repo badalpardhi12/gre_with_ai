@@ -861,6 +861,11 @@ class QuestionBankService:
             # subtypes) when the bank has no multi-sibling figure
             # clusters. Each pick is subtracted from its subtype's
             # remaining target so the composition ratios still balance.
+            #
+            # ``cluster_cooldown_stims`` is forwarded so a chart/table we
+            # just shipped in another mock isn't re-served here under the
+            # 7-day cooldown; without this the figure-floor would silently
+            # bypass the cooldown the DI cluster respects.
             current_figure_count = self._count_figure_bearing(selected_ids)
             pool_size = self._quant_figure_pool_size(
                 difficulty_band=difficulty_band)
@@ -874,6 +879,7 @@ class QuestionBankService:
                     count=needed,
                     difficulty_band=difficulty_band,
                     exclude=exclude,
+                    exclude_stimulus_ids=cluster_cooldown_stims,
                 )
                 for qid, subtype in figs:
                     targets[subtype] = max(0, targets.get(subtype, 0) - 1)
@@ -1683,6 +1689,13 @@ class QuestionBankService:
         # Build a per-stimulus "preferred qid" map with one query so we
         # don't N+1. Pull id + content together so we can still rank
         # image-bearing stimuli over HTML-table ones.
+        #
+        # ``.dicts()`` is required here: peewee's model-class iteration
+        # does NOT attach aliased foreign-table columns to the row
+        # instance, so ``getattr(row, "stim_content", "")`` would always
+        # return empty and every figure-bearing item would silently fall
+        # into the table_buckets branch (mis-classifying images as
+        # tables). The dict coercion exposes the alias as a key.
         singleton_children = (
             Question.select(Question.id,
                             Question.stimulus_id,
@@ -1696,6 +1709,7 @@ class QuestionBankService:
         clause = _exclude_synthetic_clause()
         if clause is not None:
             singleton_children = singleton_children.where(clause)
+        singleton_children = singleton_children.dicts()
 
         # Bucket: stim_id -> list of candidate qids (there may be >1 if
         # the outer HAVING group collapsed duplicates). Rank: image-bearing
@@ -1703,18 +1717,18 @@ class QuestionBankService:
         image_buckets = {}   # stim_id -> list[qid]
         table_buckets = {}   # stim_id -> list[qid]
         for row in singleton_children:
-            qid = row.id
+            qid = row["id"]
             if exclude_ids and qid in exclude_ids:
                 continue
-            if row.stimulus_id in stim_block:
+            if row["stimulus"] in stim_block:
                 # P4.P3 cooldown — same chart shown within window.
                 continue
-            if difficulty_band == "easy" and (row.difficulty_target or 0) > 2:
+            if difficulty_band == "easy" and (row.get("difficulty_target") or 0) > 2:
                 continue
-            if difficulty_band == "hard" and (row.difficulty_target or 0) < 4:
+            if difficulty_band == "hard" and (row.get("difficulty_target") or 0) < 4:
                 continue
-            content = getattr(row, "stim_content", "") or ""
-            stim_id = row.stimulus_id
+            content = row.get("stim_content") or ""
+            stim_id = row["stimulus"]
             if "<img" in content or "data:image/" in content:
                 image_buckets.setdefault(stim_id, []).append(qid)
             else:
@@ -1793,22 +1807,34 @@ class QuestionBankService:
         """Count how many of ``qids`` have a figure-bearing stimulus
         (image or table). Used by ``select_questions_composed`` to
         decide whether the figure-floor top-up is still needed after
-        the DI cluster and earlier picks."""
+        the DI cluster and earlier picks.
+
+        Note: uses ``.dicts()`` so the aliased ``Stimulus.content`` column
+        surfaces as a primitive dict key. Peewee's model-class iteration
+        does NOT attach aliased foreign-table columns to the row instance —
+        prior to this, ``getattr(r, "c", "")`` always returned empty
+        and the figure-floor over-counted "needed" by 3, which caused
+        every Quant section to ship an extra 3 figure-bearing items on
+        top of the DI cluster (~6 DI/figure items in a 12-Q section
+        when the target is ~1).
+        """
         if not qids:
             return 0
         rows = (
             Question.select(Question.id, Stimulus.content.alias("c"))
             .join(Stimulus, on=(Stimulus.id == Question.stimulus))
             .where(Question.id.in_(list(qids)))
+            .dicts()
         )
         n = 0
         for r in rows:
-            c = getattr(r, "c", "") or ""
+            c = r.get("c") or ""
             if "<img" in c or "data:image/" in c or "<table" in c:
                 n += 1
         return n
 
-    def _select_quant_figure_singletons(self, count, difficulty_band, exclude):
+    def _select_quant_figure_singletons(self, count, difficulty_band, exclude,
+                                          exclude_stimulus_ids=None):
         """Pick ``count`` live Quant items whose stimulus carries a figure
         (image or table), subtype-agnostic.
 
@@ -1823,11 +1849,19 @@ class QuestionBankService:
         geometry diagrams) that ``_select_di_cluster`` can't surface
         (they all have ``n_siblings=1`` so fail the ``>=2`` gate). This
         helper fills the figure-floor gap directly.
+
+        ``exclude_stimulus_ids``: stim_ids that the 7-day cluster
+        cooldown forbids re-serving. Without this, the figure-floor
+        could pick a chart whose sibling was just shipped in another
+        recent mock — silently breaking the cooldown that
+        ``_select_di_cluster`` already respects.
         """
         if count <= 0:
             return []
+        stim_block = set(exclude_stimulus_ids or ())
         query = (
             Question.select(Question.id, Question.subtype,
+                            Question.stimulus_id,
                             Stimulus.content.alias("stim_content"))
             .join(Stimulus, on=(Stimulus.id == Question.stimulus))
             .where((Question.measure == "quant") &
@@ -1848,14 +1882,21 @@ class QuestionBankService:
         if clause is not None:
             query = query.where(clause)
 
+        # ``.dicts()`` exposes the aliased ``Stimulus.content`` as a dict
+        # key. Without this every row's ``stim_content`` would resolve
+        # to "" and the image/table classification below would silently
+        # collapse — see the comment on ``_count_figure_bearing`` for
+        # the full bug history.
         image_bearing = []
         table_bearing = []
-        for q in query:
-            content = getattr(q, "stim_content", "") or ""
+        for q in query.dicts():
+            if q.get("stimulus") in stim_block:
+                continue
+            content = q.get("stim_content") or ""
             if "<img" in content or "data:image/" in content:
-                image_bearing.append((q.id, q.subtype))
+                image_bearing.append((q["id"], q["subtype"]))
             else:
-                table_bearing.append((q.id, q.subtype))
+                table_bearing.append((q["id"], q["subtype"]))
         random.shuffle(image_bearing)
         random.shuffle(table_bearing)
         return (image_bearing + table_bearing)[:count]

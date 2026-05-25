@@ -2,7 +2,7 @@
 Modal that walks through every question in the just-finished section,
 showing the prompt, the user's answer, the correct answer, and the
 stored explanation. Reachable from ResultsScreen via the
-"📖 Review Answers + Explanations" button.
+"📖 Review & Report Questions" button.
 
 Pure presentation — receives a list of detail dicts already enriched
 with prompt/options/user_response/explanation by
@@ -96,7 +96,7 @@ class AnswerReviewDialog(wx.Dialog):
     def __init__(self, parent, question_details: list):
         super().__init__(
             parent,
-            title="Section Review — Answers & Explanations",
+            title="Section Review — Answers, Explanations & Report",
             size=(880, 720),
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
         )

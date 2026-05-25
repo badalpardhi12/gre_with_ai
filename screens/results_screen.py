@@ -77,13 +77,15 @@ class ResultsScreen(wx.Panel):
         btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
         btn_sizer.AddStretchSpacer()
 
-        review_btn = wx.Button(self, label="  📖 Review Answers + Explanations  ",
-                               size=(280, 40))
+        review_btn = wx.Button(self, label="  📖 Review & Report Questions  ",
+                               size=(300, 40))
         review_btn.SetFont(wx.Font(12, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
                                     wx.FONTWEIGHT_BOLD))
         review_btn.SetToolTip(
             "Walk through every question with your answer, the correct answer, "
-            "and the stored explanation."
+            "and the stored explanation. Each card has a 🚩 Report issue "
+            "button on the right for flagging wrong keys, broken figures, "
+            "or unanswerable questions."
         )
         review_btn.Bind(wx.EVT_BUTTON, self._on_review_answers)
         btn_sizer.Add(review_btn, 0, wx.ALL, 12)

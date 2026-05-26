@@ -2,10 +2,10 @@
   "content_db": {
     "by_difficulty_target": {
       "1": 305,
-      "2": 1152,
-      "3": 2090,
-      "4": 1466,
-      "5": 238
+      "2": 1169,
+      "3": 2106,
+      "4": 1479,
+      "5": 252
     },
     "by_full_facet": {
       "source=ai_generated|measure=quant|subtype=data_interp|difficulty_target=3|status=draft": 13,
@@ -63,6 +63,16 @@
       "source=ai_generated|measure=verbal|subtype=tc|difficulty_target=3|status=live": 24,
       "source=ai_generated|measure=verbal|subtype=tc|difficulty_target=4|status=live": 26,
       "source=ai_generated|measure=verbal|subtype=tc|difficulty_target=5|status=live": 25,
+      "source=ai_synthetic_v2|measure=quant|subtype=mcq_multi|difficulty_target=2|status=live": 5,
+      "source=ai_synthetic_v2|measure=quant|subtype=mcq_multi|difficulty_target=3|status=live": 4,
+      "source=ai_synthetic_v2|measure=quant|subtype=mcq_multi|difficulty_target=4|status=live": 13,
+      "source=ai_synthetic_v2|measure=quant|subtype=mcq_multi|difficulty_target=5|status=live": 2,
+      "source=ai_synthetic_v2|measure=quant|subtype=mcq_single|difficulty_target=2|status=live": 8,
+      "source=ai_synthetic_v2|measure=quant|subtype=mcq_single|difficulty_target=3|status=live": 7,
+      "source=ai_synthetic_v2|measure=quant|subtype=mcq_single|difficulty_target=5|status=live": 8,
+      "source=ai_synthetic_v2|measure=quant|subtype=numeric_entry|difficulty_target=2|status=live": 4,
+      "source=ai_synthetic_v2|measure=quant|subtype=numeric_entry|difficulty_target=3|status=live": 5,
+      "source=ai_synthetic_v2|measure=quant|subtype=numeric_entry|difficulty_target=5|status=live": 4,
       "source=ai_synthetic|measure=quant|subtype=data_interp|difficulty_target=1|status=draft": 1,
       "source=ai_synthetic|measure=quant|subtype=data_interp|difficulty_target=1|status=retired": 1,
       "source=ai_synthetic|measure=quant|subtype=data_interp|difficulty_target=2|status=draft": 5,
@@ -163,14 +173,14 @@
       "source=kaplan_2024|measure=quant|subtype=mcq_single|difficulty_target=3|status=live": 6,
       "source=kaplan_2024|measure=quant|subtype=mcq_single|difficulty_target=3|status=retired": 4,
       "source=kaplan_2024|measure=quant|subtype=numeric_entry|difficulty_target=2|status=draft": 3,
-      "source=kaplan_2024|measure=quant|subtype=numeric_entry|difficulty_target=2|status=live": 14,
-      "source=kaplan_2024|measure=quant|subtype=numeric_entry|difficulty_target=2|status=retired": 13,
+      "source=kaplan_2024|measure=quant|subtype=numeric_entry|difficulty_target=2|status=live": 13,
+      "source=kaplan_2024|measure=quant|subtype=numeric_entry|difficulty_target=2|status=retired": 14,
       "source=kaplan_2024|measure=quant|subtype=numeric_entry|difficulty_target=3|status=draft": 8,
       "source=kaplan_2024|measure=quant|subtype=numeric_entry|difficulty_target=3|status=live": 12,
       "source=kaplan_2024|measure=quant|subtype=numeric_entry|difficulty_target=3|status=retired": 11,
       "source=kaplan_2024|measure=quant|subtype=numeric_entry|difficulty_target=4|status=draft": 4,
-      "source=kaplan_2024|measure=quant|subtype=numeric_entry|difficulty_target=4|status=live": 17,
-      "source=kaplan_2024|measure=quant|subtype=numeric_entry|difficulty_target=4|status=retired": 9,
+      "source=kaplan_2024|measure=quant|subtype=numeric_entry|difficulty_target=4|status=live": 16,
+      "source=kaplan_2024|measure=quant|subtype=numeric_entry|difficulty_target=4|status=retired": 10,
       "source=kaplan_2024|measure=quant|subtype=qc|difficulty_target=3|status=draft": 4,
       "source=kaplan_2024|measure=quant|subtype=qc|difficulty_target=3|status=live": 6,
       "source=kaplan_2024|measure=verbal|subtype=rc_multi|difficulty_target=3|status=draft": 5,
@@ -284,11 +294,11 @@
       "source=princeton_2012|measure=quant|subtype=numeric_entry|difficulty_target=3|status=live": 19,
       "source=princeton_2012|measure=quant|subtype=numeric_entry|difficulty_target=3|status=retired": 10,
       "source=princeton_2012|measure=quant|subtype=numeric_entry|difficulty_target=4|status=draft": 9,
-      "source=princeton_2012|measure=quant|subtype=numeric_entry|difficulty_target=4|status=live": 8,
-      "source=princeton_2012|measure=quant|subtype=numeric_entry|difficulty_target=4|status=retired": 4,
+      "source=princeton_2012|measure=quant|subtype=numeric_entry|difficulty_target=4|status=live": 7,
+      "source=princeton_2012|measure=quant|subtype=numeric_entry|difficulty_target=4|status=retired": 5,
       "source=princeton_2012|measure=quant|subtype=numeric_entry|difficulty_target=5|status=draft": 6,
-      "source=princeton_2012|measure=quant|subtype=numeric_entry|difficulty_target=5|status=live": 11,
-      "source=princeton_2012|measure=quant|subtype=numeric_entry|difficulty_target=5|status=retired": 2,
+      "source=princeton_2012|measure=quant|subtype=numeric_entry|difficulty_target=5|status=live": 10,
+      "source=princeton_2012|measure=quant|subtype=numeric_entry|difficulty_target=5|status=retired": 3,
       "source=princeton_2012|measure=quant|subtype=qc|difficulty_target=2|status=draft": 12,
       "source=princeton_2012|measure=quant|subtype=qc|difficulty_target=2|status=live": 8,
       "source=princeton_2012|measure=quant|subtype=qc|difficulty_target=2|status=retired": 14,
@@ -338,12 +348,13 @@
       "source=princeton_2012|measure=verbal|subtype=tc|difficulty_target=5|status=retired": 1
     },
     "by_measure": {
-      "quant": 3120,
+      "quant": 3180,
       "verbal": 2131
     },
     "by_source": {
       "ai_generated": 1037,
       "ai_synthetic": 304,
+      "ai_synthetic_v2": 60,
       "imported": 1259,
       "kaplan_2024": 221,
       "manhattan_5lb_2018": 1439,
@@ -352,14 +363,14 @@
     "by_status": {
       "candidate": 35,
       "draft": 761,
-      "live": 2549,
-      "retired": 1906
+      "live": 2605,
+      "retired": 1910
     },
     "by_subtype": {
       "data_interp": 166,
-      "mcq_multi": 107,
-      "mcq_single": 1465,
-      "numeric_entry": 546,
+      "mcq_multi": 131,
+      "mcq_single": 1488,
+      "numeric_entry": 559,
       "qc": 836,
       "rc_multi": 149,
       "rc_select_passage": 20,
@@ -368,13 +379,13 @@
       "tc": 564
     },
     "totals": {
-      "all": 5251,
+      "all": 5311,
       "candidate": 35,
       "draft": 761,
-      "live": 2549,
+      "live": 2605,
       "pilot": 0,
       "pretest": 0,
-      "retired": 1906,
+      "retired": 1910,
       "review": 0
     }
   },
@@ -382,22 +393,83 @@
   "di_clusters": {
     "clusters": [
       {
+        "n_live": 3,
+        "stim_id": 1133,
+        "stimulus_type": "graph"
+      },
+      {
+        "n_live": 3,
+        "stim_id": 1134,
+        "stimulus_type": "table"
+      },
+      {
+        "n_live": 3,
+        "stim_id": 1135,
+        "stimulus_type": "graph"
+      },
+      {
+        "n_live": 3,
+        "stim_id": 1136,
+        "stimulus_type": "table"
+      },
+      {
+        "n_live": 3,
+        "stim_id": 1137,
+        "stimulus_type": "graph"
+      },
+      {
+        "n_live": 3,
+        "stim_id": 1138,
+        "stimulus_type": "graph"
+      },
+      {
+        "n_live": 3,
+        "stim_id": 1139,
+        "stimulus_type": "graph"
+      },
+      {
+        "n_live": 3,
+        "stim_id": 1140,
+        "stimulus_type": "graph"
+      },
+      {
+        "n_live": 3,
+        "stim_id": 1141,
+        "stimulus_type": "graph"
+      },
+      {
+        "n_live": 3,
+        "stim_id": 1142,
+        "stimulus_type": "graph"
+      },
+      {
+        "n_live": 3,
+        "stim_id": 1143,
+        "stimulus_type": "table"
+      },
+      {
+        "n_live": 3,
+        "stim_id": 1144,
+        "stimulus_type": "table"
+      },
+      {
         "n_live": 2,
         "stim_id": 1045,
         "stimulus_type": "graph"
       }
     ],
     "clusters_by_type": {
-      "graph": 1,
-      "table": 0
+      "graph": 9,
+      "table": 4
     },
-    "clusters_with_3plus_live_siblings": 0,
+    "clusters_with_3plus_live_siblings": 12,
     "clusters_with_4plus_live_siblings": 0,
-    "orphan_graph_table_stim": 262,
+    "orphan_graph_table_stim": 250,
     "sibling_count_distribution": {
-      "2": 1
+      "2": 1,
+      "3": 12
     },
-    "total_clusters": 1,
+    "total_clusters": 13,
     "total_graph_table_stim": 263
   },
   "figure_refs": {
@@ -405,11 +477,14 @@
       "verbal": 105
     },
     "by_measure_subtopic": {
-      "verbal|<empty>": 105
+      "verbal|<empty>": 45,
+      "verbal|tc_1_blank": 32,
+      "verbal|tc_2_blank": 16,
+      "verbal|tc_3_blank": 12
     },
     "total_with_figure_refs": 105
   },
-  "generated_at": "2026-05-19T05:58:50+00:00",
+  "generated_at": "2026-05-26T00:00:07+00:00",
   "irt_calibration": {
     "irt_a_non_null": 0,
     "irt_b_non_null": 0,
@@ -418,115 +493,158 @@
   },
   "taxonomy": {
     "global": {
-      "n_question_types": 20,
-      "n_subtopics": 61,
+      "n_question_types": 28,
+      "n_subtopics": 59,
       "n_topics": 24
     },
     "per_source": {
       "ai_generated": {
-        "n_question_types": 1,
+        "n_question_types": 8,
         "n_subtopics": 35,
-        "n_topics": 8,
+        "n_topics": 7,
         "question_type_dist": {
-          "<empty>": 1037
+          "<empty>": 316,
+          "data_interpretation": 3,
+          "multiple_choice": 232,
+          "numeric_entry": 71,
+          "quantitative_comparison": 96,
+          "reading_comprehension": 187,
+          "sentence_equivalence": 12,
+          "text_completion": 120
         },
         "subtopic_dist": {
-          "absolute_value": 17,
-          "circles": 26,
-          "coordinate_geometry": 22,
-          "counting_combinatorics": 25,
+          "absolute_value": 29,
+          "circles": 30,
+          "coordinate_geometry": 15,
+          "counting_combinatorics": 27,
           "data_interpretation": 44,
-          "descriptive_stats": 24,
-          "exponents_roots": 26,
-          "fractions_decimals": 41,
-          "functions": 39,
-          "inequalities": 38,
-          "issue_arts": 9,
-          "issue_business": 8,
-          "linear_equations_systems": 37,
+          "descriptive_stats": 23,
+          "exponents_roots": 25,
+          "fractions_decimals": 44,
+          "functions": 38,
+          "inequalities": 26,
+          "integers_number_properties": 2,
+          "linear_equations_systems": 35,
           "lines_angles": 7,
-          "percents": 23,
-          "probability": 42,
-          "quadratics": 44,
+          "percents": 35,
+          "probability": 43,
+          "quadratics": 47,
           "quadrilaterals_polygons": 24,
-          "ratios_proportions": 38,
+          "ratios_proportions": 27,
           "rc_detail": 35,
           "rc_inference": 53,
           "rc_main_idea": 53,
           "rc_structure_function": 3,
           "rc_tone_attitude": 39,
           "rc_vocab_in_context": 5,
-          "se_contrast": 12,
-          "sequences": 19,
-          "sets": 19,
+          "se_contrast": 8,
+          "se_synonyms": 4,
+          "sequences": 20,
+          "sets": 21,
           "solids_3d": 5,
           "spread_distributions": 40,
           "tc_1_blank": 41,
           "tc_2_blank": 57,
           "tc_3_blank": 30,
-          "triangles": 45,
-          "word_problems": 47
+          "triangles": 46,
+          "word_problems": 56
         },
         "topic_dist": {
-          "algebra": 244,
-          "arithmetic": 147,
-          "data_analysis": 194,
-          "geometry": 107,
-          "issue_task": 17,
+          "algebra": 246,
+          "arithmetic": 153,
+          "data_analysis": 198,
+          "geometry": 112,
           "reading_comprehension": 188,
           "sentence_equivalence": 12,
           "text_completion": 128
         }
       },
       "ai_synthetic": {
-        "n_question_types": 1,
-        "n_subtopics": 31,
+        "n_question_types": 6,
+        "n_subtopics": 32,
         "n_topics": 8,
         "question_type_dist": {
-          "<empty>": 304
+          "<empty>": 124,
+          "multiple_choice": 54,
+          "quantitative_comparison": 12,
+          "reading_comprehension": 55,
+          "sentence_equivalence": 22,
+          "text_completion": 37
         },
         "subtopic_dist": {
+          "absolute_value": 2,
           "circles": 5,
-          "coordinate_geometry": 5,
+          "coordinate_geometry": 4,
           "cr_assumption": 5,
           "cr_evaluate": 2,
           "cr_strengthen": 5,
-          "cr_weaken": 4,
+          "cr_weaken": 5,
           "data_interpretation": 25,
-          "descriptive_stats": 4,
-          "exponents_polynomials": 3,
-          "exponents_roots": 5,
+          "descriptive_stats": 5,
+          "exponents_roots": 2,
           "fractions_decimals": 1,
-          "functions": 6,
-          "inequalities": 5,
-          "integers_number_properties": 4,
-          "linear_equations_systems": 6,
-          "percents": 9,
+          "functions": 10,
+          "inequalities": 3,
+          "integers_number_properties": 3,
+          "linear_equations_systems": 5,
+          "percents": 16,
           "quadratics": 8,
-          "quadrilaterals_polygons": 3,
-          "ratios_proportions": 10,
-          "rc_detail": 15,
-          "rc_inference": 17,
+          "quadrilaterals_polygons": 7,
+          "ratios_proportions": 15,
+          "rc_detail": 16,
+          "rc_inference": 15,
           "rc_main_idea": 17,
           "rc_structure_function": 10,
           "rc_tone_attitude": 7,
-          "se_contrast": 10,
-          "se_synonyms": 22,
+          "se_contrast": 8,
+          "se_synonyms": 24,
+          "solids_3d": 1,
           "tc_1_blank": 28,
           "tc_2_blank": 11,
           "tc_3_blank": 11,
           "triangles": 9,
-          "word_problems": 32
+          "word_problems": 19
         },
         "topic_dist": {
-          "algebra": 60,
-          "arithmetic": 29,
-          "critical_reasoning": 16,
-          "data_analysis": 29,
-          "geometry": 22,
-          "reading_comprehension": 66,
+          "algebra": 47,
+          "arithmetic": 37,
+          "critical_reasoning": 17,
+          "data_analysis": 30,
+          "geometry": 26,
+          "reading_comprehension": 65,
           "sentence_equivalence": 32,
           "text_completion": 50
+        }
+      },
+      "ai_synthetic_v2": {
+        "n_question_types": 4,
+        "n_subtopics": 11,
+        "n_topics": 5,
+        "question_type_dist": {
+          "<empty>": 1,
+          "multiple_choice": 23,
+          "multiple_choice_select_all": 23,
+          "numeric_entry": 13
+        },
+        "subtopic_dist": {
+          "Basic Probability with Whole-Number Constraints": 1,
+          "data_interpretation": 19,
+          "descriptive_stats": 10,
+          "integers_number_properties": 4,
+          "percents": 7,
+          "probability": 7,
+          "quadratics": 3,
+          "quadrilaterals_polygons": 2,
+          "ratios_proportions": 2,
+          "solids_3d": 1,
+          "word_problems": 4
+        },
+        "topic_dist": {
+          "algebra": 7,
+          "arithmetic": 13,
+          "data_analysis": 36,
+          "geometry": 3,
+          "probability": 1
         }
       },
       "imported": {
@@ -653,45 +771,152 @@
         }
       },
       "manhattan_5lb_2018": {
-        "n_question_types": 1,
-        "n_subtopics": 1,
-        "n_topics": 1,
+        "n_question_types": 10,
+        "n_subtopics": 41,
+        "n_topics": 9,
         "question_type_dist": {
-          "<empty>": 1439
+          "<empty>": 291,
+          "data_interpretation": 4,
+          "multiple_choice": 359,
+          "multiple_choice_select_all": 1,
+          "numeric_entry": 114,
+          "quantitative_comparison": 261,
+          "reading_comprehension": 158,
+          "reading_comprehension_multi": 32,
+          "sentence_equivalence": 115,
+          "text_completion": 104
         },
         "subtopic_dist": {
-          "<empty>": 1439
+          "<empty>": 291,
+          "absolute_value": 12,
+          "circles": 26,
+          "coordinate_geometry": 19,
+          "counting_combinatorics": 26,
+          "cr_assumption": 10,
+          "cr_evaluate": 6,
+          "cr_strengthen": 9,
+          "cr_weaken": 17,
+          "data_interpretation": 3,
+          "descriptive_stats": 41,
+          "exponents_roots": 39,
+          "fractions_decimals": 40,
+          "functions": 37,
+          "inequalities": 19,
+          "integers_number_properties": 85,
+          "linear_equations_systems": 44,
+          "lines_angles": 2,
+          "percents": 72,
+          "probability": 24,
+          "quadratics": 10,
+          "quadrilaterals_polygons": 18,
+          "ratios_proportions": 43,
+          "rc_detail": 26,
+          "rc_inference": 54,
+          "rc_main_idea": 16,
+          "rc_multi_answer": 30,
+          "rc_structure_function": 8,
+          "rc_tone_attitude": 2,
+          "rc_vocab_in_context": 12,
+          "se_contrast": 32,
+          "se_synonyms": 83,
+          "sequences": 20,
+          "sets": 8,
+          "solids_3d": 10,
+          "spread_distributions": 24,
+          "tc_1_blank": 48,
+          "tc_2_blank": 43,
+          "tc_3_blank": 13,
+          "triangles": 24,
+          "word_problems": 93
         },
         "topic_dist": {
-          "<empty>": 1439
+          "<empty>": 291,
+          "algebra": 234,
+          "arithmetic": 299,
+          "critical_reasoning": 42,
+          "data_analysis": 126,
+          "geometry": 80,
+          "reading_comprehension": 148,
+          "sentence_equivalence": 115,
+          "text_completion": 104
         }
       },
       "princeton_2012": {
-        "n_question_types": 1,
-        "n_subtopics": 1,
-        "n_topics": 1,
+        "n_question_types": 9,
+        "n_subtopics": 35,
+        "n_topics": 9,
         "question_type_dist": {
-          "<empty>": 991
+          "<empty>": 632,
+          "multiple_choice": 67,
+          "multiple_choice_select_all": 18,
+          "numeric_entry": 38,
+          "quantitative_comparison": 57,
+          "reading_comprehension": 28,
+          "reading_comprehension_multi": 13,
+          "sentence_equivalence": 78,
+          "text_completion": 60
         },
         "subtopic_dist": {
-          "<empty>": 991
+          "<empty>": 632,
+          "absolute_value": 3,
+          "circles": 12,
+          "coordinate_geometry": 1,
+          "counting_combinatorics": 13,
+          "cr_strengthen": 1,
+          "descriptive_stats": 2,
+          "exponents_roots": 4,
+          "fractions_decimals": 8,
+          "functions": 2,
+          "inequalities": 11,
+          "integers_number_properties": 14,
+          "linear_equations_systems": 16,
+          "lines_angles": 1,
+          "percents": 15,
+          "probability": 4,
+          "quadratics": 8,
+          "quadrilaterals_polygons": 9,
+          "ratios_proportions": 5,
+          "rc_detail": 6,
+          "rc_inference": 5,
+          "rc_main_idea": 9,
+          "rc_multi_answer": 13,
+          "rc_structure_function": 5,
+          "rc_tone_attitude": 2,
+          "se_contrast": 15,
+          "se_synonyms": 63,
+          "sets": 3,
+          "solids_3d": 9,
+          "spread_distributions": 3,
+          "tc_1_blank": 32,
+          "tc_2_blank": 16,
+          "tc_3_blank": 12,
+          "triangles": 14,
+          "word_problems": 23
         },
         "topic_dist": {
-          "<empty>": 991
+          "<empty>": 632,
+          "algebra": 64,
+          "arithmetic": 46,
+          "critical_reasoning": 1,
+          "data_analysis": 25,
+          "geometry": 45,
+          "reading_comprehension": 40,
+          "sentence_equivalence": 78,
+          "text_completion": 60
         }
       }
     }
   },
   "user_db": {
     "available": true,
-    "question_count_live": 2609,
+    "question_count_live": 2605,
     "question_count_total": 5311,
     "telemetry_table_counts": {
       "itemrating": 2606,
       "itemreview": 0,
-      "response": 50,
-      "servedlog": 0,
-      "session": 15,
+      "response": 77,
+      "servedlog": 27,
+      "session": 19,
       "sync_state": 1,
       "vocabcontextitem": 0
     }

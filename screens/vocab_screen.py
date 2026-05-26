@@ -298,7 +298,10 @@ class VocabScreen(wx.Panel):
         self._hide_response_buttons()
 
         from services.vocab_context_gen import _cached
-        cached = _cached(word.word)
+        # Difficulty must match the async-generation path below (which
+        # uses the ``get_or_generate`` default), or the cache probe
+        # silently misses every entry.
+        cached = _cached(word.word, "mid")
         if cached is not None:
             self._render_context_item(cached)
             return

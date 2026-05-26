@@ -26,16 +26,28 @@ logger = get_logger("vocab_context_gen")
 # cached passages stylistically out of spec. The (word, tier, version) tuple
 # is the cache key — a version bump invalidates old entries without a
 # destructive migration.
-PROMPT_VERSION = 1
+PROMPT_VERSION = 2
 
 _SYSTEM_PROMPT = (
-    "You are a GRE tutor. Write a single ~120-word mini-passage in GRE-register "
-    "prose (academic, precise, neither too formal nor conversational) that uses "
-    "the target word naturally and in context. The word's meaning should be "
-    "inferable from context clues — do not define it explicitly. Then write one "
-    "inference question whose correct answer hinges on the word's meaning in this "
-    "passage, with exactly three plausible distractors that a careless reader "
-    "might pick. Output valid JSON only — no prose, no markdown fences."
+    "You are a GRE vocabulary tutor. Produce a single ~120-word mini-passage "
+    "in GRE-register prose (academic, precise) that uses the TARGET WORD "
+    "naturally with strong context clues — but do NOT define the word "
+    "explicitly. Then write ONE multiple-choice question that DIRECTLY "
+    "tests the meaning of the target word in this passage, in the standard "
+    "GRE 'Sentence Equivalence / vocabulary in context' style. The question "
+    "stem MUST be one of these forms:\n"
+    "  • \"In context, the word 'X' most nearly means:\"\n"
+    "  • \"As used in the passage, 'X' most nearly means:\"\n"
+    "  • \"Which of the following could best replace 'X' in the passage "
+    "without changing its meaning?\"\n"
+    "The four options must each be a single word or short phrase that is a "
+    "candidate meaning for the target word. The correct option is a true "
+    "synonym (or near-synonym) for the target word AS USED in this passage. "
+    "The three distractors must be plausible — a careless reader might pick "
+    "them — but each must be unambiguously wrong on a careful reading. "
+    "Do NOT write a reading-comprehension inference question about the "
+    "passage's content; the only thing being tested is the word's meaning. "
+    "Output valid JSON only — no prose, no markdown fences."
 )
 
 
@@ -44,10 +56,14 @@ def _user_prompt(word: str, difficulty: str) -> str:
         f"Target word: {word}\n"
         f"Difficulty: {difficulty}\n\n"
         "Output JSON with exactly these keys:\n"
-        '  "passage": the ~120-word mini-passage (string)\n'
-        '  "question": the inference question stem (string)\n'
-        '  "correct_answer": the correct answer option text (string)\n'
-        '  "distractors": a list of exactly three wrong-answer strings\n'
+        '  "passage": the ~120-word mini-passage (string, must contain the '
+        f'target word "{word}")\n'
+        '  "question": one of the meaning-of-target-word stems above '
+        '(string, must literally name the target word in quotes)\n'
+        '  "correct_answer": a single word or short phrase that is a '
+        f'synonym for "{word}" as used in the passage (string)\n'
+        '  "distractors": exactly three single-word or short-phrase '
+        'wrong-answer candidates (each plausible but unambiguously wrong)\n'
     )
 
 

@@ -380,7 +380,7 @@ class VocabScreen(wx.Panel):
         passage_lbl.SetForegroundColour(Color.TEXT_PRIMARY)
         passage_lbl.SetFont(wx.Font(ui_scale.text_md(), wx.FONTFAMILY_DEFAULT,
                                     wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
-        passage_lbl.Wrap(ui_scale.font_size(700))
+        self._wrap_to_detail_panel(passage_lbl)
         self.detail_sizer.Add(passage_lbl, 0,
                               wx.LEFT | wx.RIGHT | wx.TOP,
                               ui_scale.space(2))
@@ -390,7 +390,7 @@ class VocabScreen(wx.Panel):
         q_lbl.SetForegroundColour(Color.TEXT_PRIMARY)
         q_lbl.SetFont(wx.Font(ui_scale.text_md(), wx.FONTFAMILY_DEFAULT,
                               wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD))
-        q_lbl.Wrap(ui_scale.font_size(700))
+        self._wrap_to_detail_panel(q_lbl)
         self.detail_sizer.Add(q_lbl, 0,
                               wx.LEFT | wx.RIGHT | wx.TOP,
                               ui_scale.space(3))
@@ -412,6 +412,22 @@ class VocabScreen(wx.Panel):
         self.detail_panel.FitInside()
         self.card_panel.Layout()
         self.Layout()
+
+    def _wrap_to_detail_panel(self, lbl, padding_px=48):
+        """Wrap a StaticText to the current width of self.detail_panel.
+
+        Why: a fixed pixel wrap (e.g. ``ui_scale.font_size(700)``) is
+        unsafe under user font zoom. At zoom ≥ ~1.4 the scaled value
+        exceeds the actual panel width and the StaticText overflows
+        instead of wrapping, clipping characters at the right edge.
+        Tracking the *container* width keeps wrap responsive.
+        """
+        avail = self.detail_panel.GetClientSize().GetWidth()
+        # Floor: if the panel hasn't laid out yet, fall back to a sane
+        # default so the first paint isn't a single un-wrapped line.
+        if avail <= padding_px * 2:
+            avail = 700 + padding_px * 2
+        lbl.Wrap(max(300, avail - padding_px))
 
     # ── Event handlers ─────────────────────────────────────────────────
 
@@ -446,7 +462,7 @@ class VocabScreen(wx.Panel):
         body_lbl.SetForegroundColour(Color.TEXT_PRIMARY)
         body_lbl.SetFont(wx.Font(ui_scale.text_md(), wx.FONTFAMILY_DEFAULT,
                                  wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL))
-        body_lbl.Wrap(ui_scale.font_size(700))
+        self._wrap_to_detail_panel(body_lbl)
         self.detail_sizer.Add(body_lbl, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM,
                               ui_scale.space(2))
 

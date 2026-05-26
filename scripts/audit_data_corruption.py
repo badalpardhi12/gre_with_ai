@@ -35,33 +35,148 @@ os.environ.setdefault('DATABASE_URL', 'sqlite:///data/gre_mock.db')
 from models.database import db, Question, QuestionOption, NumericAnswer, init_db
 
 
+def _count_option_label_defenses(explanation, option_labels):
+    """For each option label A-F (or blank1_A etc.), count how many times
+    the explanation explicitly *defends* that option.
+
+    A "defense" is one of two patterns:
+      AFTER -- a positive-verdict word ("correct", "right", "best",
+        "answer", "choose", "pick", "select", "fits") within ~25
+        characters AFTER the label mention. Catches "(C) CORRECT",
+        "C is the right answer".
+      BEFORE -- a verb-form positive word ("answer", "pick", "choose",
+        "select") within ~12 characters before the label. Catches
+        "answer (A)", "we pick C". The word must be one of the
+        verb-form ones; using broader words like "correct" or "best"
+        leads to false positives when one option's "(D) not correct"
+        is followed shortly by "(E)".
+
+    Negation cues ("not", "n't", "never", "don't", "doesn't",
+    "incorrect", "wrong") within the same windows DEFEAT the defense.
+    Catches "don't pick (B)", "(D) is not correct".
+
+    This very-tight window is by design — RC explanations frequently
+    discuss option foils ("(A) is wrong because (C) is the best
+    answer") and a wider window double-counts (A) on the
+    (C)-defending word "best".
+
+    Returns: dict[label] -> int
+    """
+    if not explanation or not option_labels:
+        return {}
+    text = explanation
+    counts = {lbl: 0 for lbl in option_labels}
+    # Positive-verdict words that, when right after a label mention,
+    # signal the explanation is endorsing that label.
+    positive_words_after = (
+        "correct", "right", "best", "answer", "choose", "chose",
+        "chosen", "pick", "picked", "select", "selected", "fits",
+        "fit",
+    )
+    pos_after_re = re.compile(
+        r"\b(" + "|".join(positive_words_after) + r")\b", re.I
+    )
+
+    # Tighter set for BEFORE-the-label matches: only verb forms that
+    # genuinely select the label ("answer (A)", "we pick C"). Words
+    # like "correct" or "best" produce too many false positives when
+    # the prior option's negative verdict ("(D) not correct.")
+    # spills onto the next label "(E)".
+    positive_words_before = (
+        "answer", "choose", "chose", "pick", "select",
+    )
+    pos_before_re = re.compile(
+        r"\b(" + "|".join(positive_words_before) + r")\b", re.I
+    )
+
+    # Negation cues. A defense is DEFEATED if one of these appears in
+    # the relevant window. Catches "don't pick (B)" and "(D) not
+    # correct".
+    negation_re = re.compile(
+        r"\b(not|n['’]t|never|don['’]t|doesn['’]t|didn['’]t|"
+        r"isn['’]t|wasn['’]t|aren['’]t|weren['’]t|cannot|can['’]t|"
+        r"won['’]t|wouldn['’]t|couldn['’]t|shouldn['’]t|"
+        r"incorrect|wrong)\b",
+        re.I,
+    )
+
+    AFTER_WINDOW = 25
+    BEFORE_WINDOW = 12
+    # Negation window for BEFORE matches has to be wider than the
+    # verb-window itself: "don't accidentally pick (B)" places "don't"
+    # ~22 chars before (B). Without this, the negation cue is missed
+    # and (B) gets a false defense.
+    NEG_BEFORE_WINDOW = 30
+
+    for lbl in option_labels:
+        # Build a label regex that requires word boundaries to avoid
+        # matching "A" inside "Anatomy". Multi-char labels like
+        # "blank1_C" are treated literally.
+        if "_" in lbl:
+            lbl_re = re.compile(r"\b" + re.escape(lbl) + r"\b", re.I)
+        else:
+            lbl_re = re.compile(r"\b" + re.escape(lbl) + r"\b")
+        for m in lbl_re.finditer(text):
+            start, end = m.start(), m.end()
+            after = text[end: min(len(text), end + AFTER_WINDOW)]
+            before = text[max(0, start - BEFORE_WINDOW): start]
+            wider_before = text[max(0, start - NEG_BEFORE_WINDOW): start]
+
+            after_pos = pos_after_re.search(after)
+            before_pos = pos_before_re.search(before)
+
+            if not (after_pos or before_pos):
+                continue
+
+            # Apply negation gate. Negation in the same window as the
+            # positive-verdict word voids the defense.
+            after_negated = (
+                after_pos is not None and negation_re.search(after) is not None
+            )
+            # For BEFORE matches, negation is typically *also* before
+            # the label (e.g. "don't pick (B)"), so search the wider
+            # window. For AFTER matches, negation can appear in the
+            # after window itself ("(D) is not correct").
+            before_negated = (
+                before_pos is not None and (
+                    negation_re.search(wider_before) is not None
+                )
+            )
+
+            if (after_pos and not after_negated) or \
+               (before_pos and not before_negated):
+                counts[lbl] += 1
+    return counts
+
+
 def classify_verbal_answer_key(question, options):
     """
     Classify verbal question by answer-key integrity.
-    
+
     Returns: (category, details_str)
     Categories:
     - "Answer-key likely correct"
     - "Answer-key likely WRONG"
+    - "Answer-key drift (explanation defends other option)"
     - "Explanation-from-other"
     - "Explanation likely valid"
     - "Explanation likely wrong"
     - "No explanation"
     """
     explanation = unescape(question.explanation or "").strip()
-    
+
     if not explanation or len(explanation) < 10:
         return ("No explanation", "")
-    
+
     correct_labels = {opt.option_label for opt in options if opt.is_correct}
     if not correct_labels:
         return ("No correct marked", "")
-    
+
     option_texts = {}
     for opt in options:
         opt_text_clean = opt.option_text.lower().strip()
         option_texts[opt.option_label] = opt_text_clean
-    
+
     # Multi-blank TC items use option labels like ``blank1_A``, ``blank2_B``
     # rather than single letters A-F. Strategy 1's "correct answer is X"
     # regex matches a single A-F letter; on a multi-blank item, that single
@@ -88,6 +203,46 @@ def classify_verbal_answer_key(question, options):
                 "Answer-key likely WRONG",
                 f"Says {stated_answer}, marked {','.join(correct_labels)}"
             )
+
+    # Strategy 1.5: Option-label-defense drift heuristic. The bug
+    # this catches is: the explanation never says "correct answer is
+    # X" but reasons through to a different option than the one
+    # marked correct. We measure this by counting each option label's
+    # near-positive-verdict mentions; if some UN-correct option has
+    # strictly more defenses than the marked-correct option, AND the
+    # un-correct option has at least 2 defenses, the answer key is
+    # likely drifted.
+    #
+    # Multi-blank items are handled by also requiring that EACH
+    # marked blank label is dominated by a single un-correct
+    # alternative within the same blank group. We keep this section
+    # lighter by skipping multi-blank entirely -- the LLM judge in
+    # ``scripts/audit_answer_key_drift.py`` is what handles those
+    # cases. Single-letter A-F items only here.
+    if not is_multi_blank and len(correct_labels) == 1:
+        marked = next(iter(correct_labels))
+        defenses = _count_option_label_defenses(
+            explanation, option_texts.keys()
+        )
+        marked_count = defenses.get(marked, 0)
+        # Find the un-correct option with the most defenses.
+        rivals = {
+            lbl: c for lbl, c in defenses.items()
+            if lbl != marked and c > 0
+        }
+        if rivals:
+            top_rival, top_count = max(rivals.items(), key=lambda kv: kv[1])
+            # Require both: rival has >=2 defenses AND rival's count
+            # is at least 2x the marked option's. This is tight
+            # enough that explanations like "option D is wrong; the
+            # answer is E" don't trigger (D won't have a positive
+            # verdict near it).
+            if top_count >= 2 and top_count >= max(2, marked_count * 2):
+                return (
+                    "Answer-key drift (explanation defends other option)",
+                    f"Defends {top_rival} ({top_count}x) vs "
+                    f"marked {marked} ({marked_count}x)"
+                )
     
     # Strategy 2: Quoted words not in this question's options OR prompt.
     # Quoted words frequently appear in the explanation as clue words copied
@@ -292,7 +447,10 @@ def audit_database(verbose=False, export_json=False, ids_only=False,
     # warning.
     worst = (
         verbal_categories.get("Answer-key likely WRONG", []) +
-        verbal_categories.get("Option-text leakage", [])
+        verbal_categories.get("Option-text leakage", []) +
+        verbal_categories.get(
+            "Answer-key drift (explanation defends other option)", []
+        )
     )
     explanation_drift = verbal_categories.get("Explanation-from-other", [])
     

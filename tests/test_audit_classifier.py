@@ -109,3 +109,76 @@ def test_genuine_wrong_answer_still_flagged():
     ]
     cat, _ = classify_verbal_answer_key(q, options)
     assert cat == "Answer-key likely WRONG"
+
+
+def test_answer_key_drift_heuristic_flags_implicit_drift():
+    """The new ``Answer-key drift`` heuristic catches the case where
+    the explanation defends an UN-correct option more than the marked
+    one, WITHOUT using the literal ``correct answer is X`` phrase
+    that Strategy 1 looks for."""
+    q = FakeQuestion(
+        prompt="Pick the right one.",
+        explanation=(
+            "Looking carefully, option C fits perfectly here. "
+            "Option C is the right choice because of the contrast. "
+            "We pick C as the best answer to this question."
+        ),
+    )
+    options = [
+        FakeOption("A", "x", is_correct=True),
+        FakeOption("B", "y"),
+        FakeOption("C", "z"),
+        FakeOption("D", "w"),
+        FakeOption("E", "v"),
+    ]
+    cat, details = classify_verbal_answer_key(q, options)
+    assert cat == "Answer-key drift (explanation defends other option)"
+    assert "C" in details
+
+
+def test_answer_key_drift_heuristic_ignores_negative_mentions():
+    """Mentions that DEFEAT an option (e.g. "option B is wrong")
+    should not count as defenses. Only positive-verdict windows
+    contribute to the drift count."""
+    q = FakeQuestion(
+        prompt="Pick one.",
+        explanation=(
+            "Option B is wrong because it doesn't fit the contrast. "
+            "Option C is also wrong since it's a trap. "
+            "The correct choice fits the tone of the passage."
+        ),
+    )
+    options = [
+        FakeOption("A", "x", is_correct=True),
+        FakeOption("B", "y"),
+        FakeOption("C", "z"),
+        FakeOption("D", "w"),
+        FakeOption("E", "v"),
+    ]
+    cat, _ = classify_verbal_answer_key(q, options)
+    # Should not trip the drift heuristic — B and C have no positive
+    # verdicts within their windows.
+    assert cat != "Answer-key drift (explanation defends other option)"
+
+
+def test_answer_key_drift_heuristic_skips_when_marked_also_defended():
+    """When BOTH the marked option and a rival have similar defense
+    counts, the heuristic should NOT trigger — it requires the rival
+    to dominate."""
+    q = FakeQuestion(
+        prompt="Pick one.",
+        explanation=(
+            "Option A is the right answer because foo. "
+            "A fits the tone. "
+            "Option B is also a strong candidate; B is correct in "
+            "another reading."
+        ),
+    )
+    options = [
+        FakeOption("A", "x", is_correct=True),
+        FakeOption("B", "y"),
+        FakeOption("C", "z"),
+    ]
+    cat, _ = classify_verbal_answer_key(q, options)
+    # The marked option (A) is defended too, so we don't trip drift.
+    assert cat != "Answer-key drift (explanation defends other option)"

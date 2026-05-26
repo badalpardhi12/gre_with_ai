@@ -1813,6 +1813,296 @@ def _035_audit_quant_fixes_2026_05_24():
             seed.close()
 
 
+# ── 036: Answer-key drift repair (2026-05-25) ───────────────────────
+#
+# These two lists are populated from
+# ``scripts/audit_answer_key_drift.py``'s decisions JSON. Each entry
+# is the FINAL judgement for a single question after the LLM audit:
+#
+#   _ANSWER_KEY_FLIPS_2026_05_25
+#       The answer key was wrong but the explanation is correct.
+#       Move ``is_correct=True`` from the current label to the
+#       ``to_correct`` label. Single-answer items only — multi-blank
+#       cases are conservatively retired even when the audit was
+#       confident.
+#
+#   _ANSWER_KEY_RETIRES_2026_05_25
+#       The audit detected drift but the LLM judge wasn't
+#       unambiguous enough to flip safely (multi-blank, medium
+#       confidence, or ambiguous reasoning). Status → retired with
+#       ``provenance_json`` capturing the audit metadata so a future
+#       SME can revive the row after manual review.
+#
+# Both lists are static so the migration is replayable on a fresh
+# clone WITHOUT calling the LLM. The audit script writes the
+# decisions to ``data/audits/answer_key_drift_decisions_<date>.json``
+# at run time; the curator then transcribes the survivors here.
+#
+# Schema:
+#   _ANSWER_KEY_FLIPS_2026_05_25 = [
+#       (qid, from_label, to_label, confidence, reason),
+#       ...
+#   ]
+#   _ANSWER_KEY_RETIRES_2026_05_25 = [
+#       (qid, current_correct_list, intended_correct, confidence, reason),
+#       ...
+#   ]
+
+_ANSWER_KEY_FLIPS_2026_05_25: list = [
+    # (qid, from_label, to_label, confidence, reason)
+    # Populated from data/audits/answer_key_drift_decisions_2026_05_25.json
+    # on 2026-05-25. The full live-pool audit (2,326 questions
+    # reviewed via LLM judge + heuristic second-opinion) produced
+    # ZERO confirmed single-answer flips. Both safety nets agreed
+    # the live single-answer pool is clean. The retires below are
+    # the multi-answer / SE drift cases the LLM caught (which we
+    # never flip, only retire).
+]
+
+_ANSWER_KEY_RETIRES_2026_05_25: list = [
+    # (qid, current_correct_list, intended_correct, confidence, reason)
+    # 10 multi-answer items where the LLM judge concluded the
+    # explanation defends a different answer set than the marked
+    # one (conf >= 0.7). Sampled inspection (e.g. qid 5374) showed
+    # the questions are genuinely broken: the option text is given
+    # as ratios (1:2, 1:4) but the explanation discusses fractions
+    # (1/5, 1/4) -- a data-entry mismatch between options and
+    # explanation. We retire rather than flip because partial
+    # multi-answer corrections risk silently teaching learners the
+    # wrong set.
+    (2576, ["B", "D"], ["B"], 0.95,
+     "answer-key drift audit 2026-05-25: SE explanation defends "
+     "evolving (B) but key marks B+D; advancing (D) is not "
+     "explicitly defended in the explanation."),
+    (5374, ["A", "B", "C", "D"], ["A", "C", "D"], 0.95,
+     "answer-key drift audit 2026-05-25: mcq_multi options listed "
+     "as ratios (1:2, 1:4, ...) but explanation discusses "
+     "fractions (1/5, 1/4, ...). Option B (1:4) does not match "
+     "any value in the explanation."),
+    (5376, ["A", "B", "D", "E"], ["B", "D", "E"], 0.95,
+     "answer-key drift audit 2026-05-25: mcq_multi explanation "
+     "concludes total must be divisible by 12; only B (21x1), "
+     "D (35x1.2), E (42x1) are valid -- A is not defended."),
+    (5377, ["A", "C", "E"], ["B", "C", "E"], 0.95,
+     "answer-key drift audit 2026-05-25: mcq_multi explanation "
+     "calculates range for d as 14.14 to 20; explicitly states "
+     "B (15), C (20), E (19) fall in range -- A is not."),
+    (5381, ["B", "C", "D"], ["A", "B", "C", "D"], 0.70,
+     "answer-key drift audit 2026-05-25: mcq_multi explanation "
+     "is incomplete and the LLM judge was uncertain (0.70 conf); "
+     "retire pending re-derivation of the achievable mean range."),
+    (5382, ["A", "B", "D", "E"], ["B", "E"], 0.95,
+     "answer-key drift audit 2026-05-25: mcq_multi explanation "
+     "concludes total must be a multiple of 12; only B (21*) and "
+     "E (42) match -- A and D are not defended (and the "
+     "explanation notes 21 is not a multiple of 12)."),
+    (5383, ["A", "F"], ["A", "E", "F"], 0.95,
+     "answer-key drift audit 2026-05-25: mcq_multi explanation "
+     "lists divisors of 36; explicitly confirms 4 (F), 6 (E), and "
+     "12 (A) as valid -- E is missing from the marked set."),
+    (5385, ["C", "D", "E"], ["A", "B", "C", "D"], 0.95,
+     "answer-key drift audit 2026-05-25: mcq_multi explanation "
+     "concludes L<=5 with valid L values 0,1,2,3,4,5; options "
+     "A (0), B (2), C (4), D (5) match -- E does not."),
+    (5387, ["C", "E", "G"], ["B", "C", "E", "G"], 0.95,
+     "answer-key drift audit 2026-05-25: mcq_multi explanation "
+     "identifies B, C, E, G as satisfying the prime-product "
+     "criterion -- B is missing from the marked set."),
+    (5389, ["A", "C", "E", "F"], ["C", "E", "F"], 0.90,
+     "answer-key drift audit 2026-05-25: mcq_multi explanation "
+     "requires 0 < k < 25/8; checks k=1,2,3 valid; among options "
+     "C (0), E (20), F (48) fit a strict reading -- A does not."),
+]
+
+
+def _036_answer_key_drift_repair_2026_05_25():
+    """Apply the answer-key drift repair plan from the 2026-05-25 audit.
+
+    Source of truth: ``_ANSWER_KEY_FLIPS_2026_05_25`` +
+    ``_ANSWER_KEY_RETIRES_2026_05_25`` in this file.
+
+    For each FLIP entry we:
+      1. Confirm the question still exists and the option labels are
+         still present (``q_exists``-style guard so the migration
+         no-ops on test DBs that don't carry these qids).
+      2. UPDATE questionoption SET is_correct = (label == to_label)
+         WHERE question_id=qid AND option_label IN (from_label, to_label).
+      3. Record the change in the question's ``provenance_json``.
+
+    For each RETIRE entry we set ``status='retired'`` and stash the
+    audit reasoning in ``provenance_json``.
+
+    Both passes mirror to the seed DB so a fresh-install user gets
+    the corrected state and the seed_sync reconcile doesn't revert
+    it. Idempotent: re-running is a no-op (the option flip checks
+    current state, the retire checks status).
+    """
+    db = _get_db()
+    import json as _json
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+
+    def _apply_flip(conn, qid, from_label, to_label, confidence, reason,
+                    *, raw_sql=False):
+        """Move is_correct from from_label to to_label on this qid.
+
+        Returns True when at least one row was updated.
+        """
+        # Guard: the question and both option rows must exist.
+        exec_one = (conn.execute if raw_sql else conn.execute_sql)
+        q_row = exec_one(
+            "SELECT id, provenance_json, status FROM question WHERE id=?",
+            (qid,),
+        ).fetchone()
+        if q_row is None:
+            return False
+        # If already retired, don't bother flipping options on a dead row.
+        if q_row[2] == "retired":
+            return False
+        from_opt = exec_one(
+            "SELECT id, is_correct FROM questionoption "
+            "WHERE question_id=? AND option_label=?",
+            (qid, from_label),
+        ).fetchone()
+        to_opt = exec_one(
+            "SELECT id, is_correct FROM questionoption "
+            "WHERE question_id=? AND option_label=?",
+            (qid, to_label),
+        ).fetchone()
+        if from_opt is None or to_opt is None:
+            return False
+        # Idempotent guard: if to_label is already the only correct, skip.
+        if not from_opt[1] and to_opt[1]:
+            return False
+
+        # Apply the flip.
+        if raw_sql:
+            conn.execute(
+                "UPDATE questionoption SET is_correct=0 "
+                "WHERE question_id=? AND option_label=?",
+                (qid, from_label),
+            )
+            conn.execute(
+                "UPDATE questionoption SET is_correct=1 "
+                "WHERE question_id=? AND option_label=?",
+                (qid, to_label),
+            )
+        else:
+            conn.execute_sql(
+                "UPDATE questionoption SET is_correct=0 "
+                "WHERE question_id=? AND option_label=?",
+                (qid, from_label),
+            )
+            conn.execute_sql(
+                "UPDATE questionoption SET is_correct=1 "
+                "WHERE question_id=? AND option_label=?",
+                (qid, to_label),
+            )
+
+        # Record the change in provenance.
+        try:
+            prov = _json.loads(q_row[1]) if q_row[1] else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        prov["answer_key_flipped_by_migration"] = (
+            "036_answer_key_drift_repair_2026_05_25"
+        )
+        prov["answer_key_flipped"] = {
+            "from": from_label,
+            "to": to_label,
+            "confidence": confidence,
+            "reason": reason,
+        }
+        if raw_sql:
+            conn.execute(
+                "UPDATE question SET provenance_json=? WHERE id=?",
+                (_json.dumps(prov), qid),
+            )
+        else:
+            conn.execute_sql(
+                "UPDATE question SET provenance_json=? WHERE id=?",
+                (_json.dumps(prov), qid),
+            )
+        return True
+
+    def _apply_retire(conn, qid, current_correct, intended_correct,
+                      confidence, reason, *, raw_sql=False):
+        """Set status='retired' with audit metadata. Idempotent."""
+        exec_one = (conn.execute if raw_sql else conn.execute_sql)
+        row = exec_one(
+            "SELECT status, provenance_json FROM question WHERE id=?",
+            (qid,),
+        ).fetchone()
+        if row is None:
+            return False
+        status, prov_raw = row
+        if status == "retired":
+            return False
+        try:
+            prov = _json.loads(prov_raw) if prov_raw else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        prov["retired_reason"] = reason
+        prov["retired_by_migration"] = (
+            "036_answer_key_drift_repair_2026_05_25"
+        )
+        prov["answer_key_drift_audit"] = {
+            "current_correct": current_correct,
+            "intended_correct": intended_correct,
+            "confidence": confidence,
+        }
+        if raw_sql:
+            conn.execute(
+                "UPDATE question SET status='retired', provenance_json=? "
+                "WHERE id=? AND status != 'retired'",
+                (_json.dumps(prov), qid),
+            )
+        else:
+            conn.execute_sql(
+                "UPDATE question SET status='retired', provenance_json=? "
+                "WHERE id=? AND status != 'retired'",
+                (_json.dumps(prov), qid),
+            )
+        return True
+
+    # ── User DB pass (Peewee) ────────────────────────────────────────
+    for qid, from_label, to_label, confidence, reason in (
+        _ANSWER_KEY_FLIPS_2026_05_25
+    ):
+        _apply_flip(db, qid, from_label, to_label, confidence, reason)
+    for entry in _ANSWER_KEY_RETIRES_2026_05_25:
+        # entry = (qid, current_correct, intended_correct, confidence, reason)
+        qid, current_correct, intended_correct, confidence, reason = entry
+        _apply_retire(
+            db, qid, current_correct, intended_correct, confidence, reason,
+        )
+
+    # ── Seed DB pass (raw sqlite) ────────────────────────────────────
+    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            for qid, from_label, to_label, confidence, reason in (
+                _ANSWER_KEY_FLIPS_2026_05_25
+            ):
+                _apply_flip(
+                    seed, qid, from_label, to_label, confidence, reason,
+                    raw_sql=True,
+                )
+            for entry in _ANSWER_KEY_RETIRES_2026_05_25:
+                qid, current_correct, intended_correct, confidence, reason = entry
+                _apply_retire(
+                    seed, qid, current_correct, intended_correct,
+                    confidence, reason, raw_sql=True,
+                )
+            seed.commit()
+        finally:
+            seed.close()
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -1874,6 +2164,8 @@ MIGRATIONS = [
      _034_repair_or_retire_validator_findings_2026_05_18),
     ("035_audit_quant_fixes_2026_05_24",
      _035_audit_quant_fixes_2026_05_24),
+    ("036_answer_key_drift_repair_2026_05_25",
+     _036_answer_key_drift_repair_2026_05_25),
 ]
 
 

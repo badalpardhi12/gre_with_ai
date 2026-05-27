@@ -2,6 +2,7 @@
 Question bank service — loads, filters, and selects questions from the database.
 """
 import random
+from collections import Counter
 from datetime import datetime, timedelta
 
 from peewee import fn, OperationalError
@@ -841,8 +842,88 @@ class QuestionBankService:
             if di_cluster:
                 selected_ids.extend(di_cluster)
                 exclude.update(di_cluster)
-                targets["data_interp"] = max(
-                    0, targets.get("data_interp", 0) - len(di_cluster))
+                # The DI cluster joins items by stimulus_id, not subtype.
+                # In the live pool only ~7 rows are tagged
+                # ``subtype='data_interp'`` while a typical 3-item DI
+                # cluster carries ``mcq_single`` / ``numeric_entry``
+                # items. Two corrections are needed before the per-
+                # subtype loop runs:
+                #
+                # (1) Subtract each cluster item's actual subtype from
+                #     its target so the loop doesn't add ANOTHER round
+                #     of mcq_single on top of the cluster's mcq_single
+                #     items. Without this, sections ship 6 mcq_single
+                #     when the Magoosh share targets ~4.
+                # (2) Zero the ``data_interp`` slot AND redistribute it
+                #     to the largest remaining target. The DI cluster
+                #     "paid" for the 11% nominal share but only by
+                #     consuming ``len(di_cluster)`` slots overall — its
+                #     subtype-level contributions are accounted for in
+                #     (1). Without redistributing the slot, the per-
+                #     subtype loop targets sum to ``count - 1`` and the
+                #     section ships short. Redistributing one slot at a
+                #     time to the largest-quota target spreads the
+                #     extra fairly between qc and mcq_single rather
+                #     than dumping it all on the deficit-fill subtype
+                #     (mcq_single, the existing fill_subtype) which
+                #     would re-introduce the very overshoot we just
+                #     fixed in (1).
+                cluster_subtypes = Counter(
+                    Question.get_by_id(qid).subtype for qid in di_cluster
+                )
+                for st, cnt in cluster_subtypes.items():
+                    if st in targets:
+                        targets[st] = max(0, targets[st] - cnt)
+                targets["data_interp"] = 0
+                # Reconcile against the section's remaining budget so
+                # the running sum equals ``count - len(selected_ids)``
+                # going into the per-subtype loop. Add or trim one slot
+                # at a time from the subtype that's furthest from its
+                # proportional share — this keeps ``qc`` from absorbing
+                # the entire DI redistribution (it's the second-largest
+                # nominal ratio, so the naive "largest target" rule
+                # pushes it well past 33% of the section).
+                non_di = {
+                    k: composition[k] for k in composition
+                    if k != "data_interp"
+                }
+                total_ratio = sum(non_di.values()) or 1.0
+                expected_remaining = count - len(selected_ids)
+                ideal_share = {
+                    k: v / total_ratio * expected_remaining
+                    for k, v in non_di.items()
+                }
+                # Section-level count for each non-DI subtype after the
+                # current target. Cluster contributions count toward
+                # this since they ship with their actual subtype tag.
+                def _section_count(k):
+                    return targets[k] + cluster_subtypes.get(k, 0)
+
+                diff = expected_remaining - sum(targets.values())
+                while diff > 0:
+                    candidates = [k for k in targets if k != "data_interp"]
+                    if not candidates:
+                        break
+                    candidates.sort(
+                        key=lambda k: (
+                            _section_count(k) - ideal_share.get(k, 0), k
+                        )
+                    )
+                    targets[candidates[0]] += 1
+                    diff -= 1
+                while diff < 0:
+                    # Trim from the subtype most over its proportional
+                    # share. Same key, reversed order.
+                    candidates = [k for k in targets if targets[k] > 0]
+                    if not candidates:
+                        break
+                    candidates.sort(
+                        key=lambda k: (
+                            -(_section_count(k) - ideal_share.get(k, 0)), k
+                        )
+                    )
+                    targets[candidates[0]] -= 1
+                    diff += 1
             else:
                 logger.warning(
                     "DI-cluster gap: no DI items available (neither a "
@@ -882,9 +963,25 @@ class QuestionBankService:
                     exclude_stimulus_ids=cluster_cooldown_stims,
                 )
                 for qid, subtype in figs:
-                    targets[subtype] = max(0, targets.get(subtype, 0) - 1)
                     selected_ids.append(qid)
                     exclude.add(qid)
+                    # Subtract from the figure-pick's own subtype target
+                    # when it has budget; otherwise trim from the largest
+                    # remaining bucket so ``selected_ids`` doesn't grow
+                    # past ``count`` (same overshoot pattern that bit the
+                    # DI cluster — ``max(0, t-1)`` silently leaks when
+                    # the subtype's quota was already 0).
+                    cur = targets.get(subtype, 0)
+                    if cur > 0:
+                        targets[subtype] = cur - 1
+                    else:
+                        for other in sorted(
+                            (k for k in targets if k != subtype),
+                            key=lambda k: -targets[k],
+                        ):
+                            if targets[other] > 0:
+                                targets[other] -= 1
+                                break
 
         # Verbal blueprint step 1: every Verbal section anchors on at
         # least one multi-question RC passage (real-GRE shape is 2-4

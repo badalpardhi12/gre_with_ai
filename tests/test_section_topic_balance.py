@@ -207,6 +207,52 @@ def test_quant_subtype_mix_within_band(count):
         )
 
 
+# ── 2b. Per-section subtype cap ──────────────────────────────────────
+
+@pytest.mark.parametrize("count", [QUANT_S1_COUNT, QUANT_S2_COUNT])
+def test_quant_no_subtype_dominates_single_section(count):
+    """No single non-DI subtype may exceed its Magoosh target by more
+    than ~25% in any one section.
+
+    Pre-fix (2026-05-27): every section shipped 5-6 mcq_single (target
+    ~4 for 12-Q) because the DI cluster items — typically 2 mcq_single
+    + 1 numeric_entry — were tagged with their actual subtypes but the
+    per-subtype loop still asked for the FULL mcq_single quota on top.
+    Result: 6 mcq_single per 12-Q section vs the Magoosh-target 4.
+    The fix subtracts the DI cluster's actual subtype contributions
+    from each per-subtype target before the loop runs.
+    """
+    qb = QuestionBankService()
+    # Per-section caps: target + 2 (allow rounding wiggle plus the
+    # occasional extra slot when the DI cluster's actual subtypes
+    # overlap with the per-subtype loop's pick), with a floor of 3
+    # so very-small-share subtypes (mcq_multi, numeric_entry) don't
+    # trigger when the cluster ships 2 of them and the loop adds 1.
+    caps = {}
+    for st, ratio in QUANT_COMPOSITION.items():
+        if st == "data_interp":
+            continue
+        caps[st] = max(3, int(round(count * ratio)) + 2)
+    worst = {st: 0 for st in caps}
+    bad_sections = []
+    for seed in range(20):
+        random.seed(seed * 23 + 5)
+        qids = qb.select_questions_composed(
+            measure="quant", count=count, difficulty_band="medium",
+        )
+        sub, _ = _section_subtypes(qids)
+        for st in caps:
+            n = sub.get(st, 0)
+            if n > worst[st]:
+                worst[st] = n
+            if n > caps[st]:
+                bad_sections.append((seed, st, n, caps[st]))
+    assert not bad_sections, (
+        f"Quant {count}-Q sections over-stack a subtype: {bad_sections}. "
+        f"Per-subtype caps: {caps}. Worst observed: {worst}."
+    )
+
+
 # ── 3. Verbal: subtype mix lands within band ─────────────────────────
 
 @pytest.mark.parametrize("count", [VERBAL_S1_COUNT, VERBAL_S2_COUNT])

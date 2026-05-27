@@ -316,3 +316,182 @@ def test_037_static_lists_have_expected_shape():
         assert field == "explanation"  # only supported field today
         assert isinstance(new_value, str)
         assert isinstance(reason, str) and reason
+
+
+# ── Tests for _038_targeted_issue_fixes_2026_05_27 ─────────────────
+
+
+@pytest.fixture
+def targeted_issue_seed_db(temp_db, monkeypatch):
+    """Seed two questions for the 038 retire path:
+
+    qX (8101): live mcq_multi the audit decided to retire.
+    qY (8102): live mcq_single not in any list — must remain untouched.
+    """
+    from models.database import Question, QuestionOption
+
+    qX = Question.create(
+        id=8101, measure="quant", subtype="mcq_multi",
+        topic="geometry", subtopic="cones",
+        prompt="qX prompt — options incoherent with prompt units",
+        explanation="qX explanation",
+        source="test", status="live",
+    )
+    for lbl, ic in (("A", True), ("B", False), ("C", True),
+                    ("D", False), ("E", True), ("F", False),
+                    ("G", False)):
+        QuestionOption.create(
+            question=qX, option_label=lbl, option_text=lbl, is_correct=ic,
+        )
+
+    qY = Question.create(
+        id=8102, measure="quant", subtype="mcq_single",
+        topic="data_analysis", subtopic="probability",
+        prompt="qY prompt",
+        explanation="qY explanation",
+        source="test", status="live",
+    )
+    for lbl, ic in (("A", True), ("B", False), ("C", False),
+                    ("D", False), ("E", False)):
+        QuestionOption.create(
+            question=qY, option_label=lbl, option_text=lbl, is_correct=ic,
+        )
+
+    return qX, qY
+
+
+def test_038_runs_clean_on_empty_list(temp_db, monkeypatch):
+    import models.migrations as m
+    monkeypatch.setattr(m, "_TARGETED_ISSUE_RETIRES_2026_05_27", [])
+    m._038_targeted_issue_fixes_2026_05_27()
+
+
+def test_038_runs_clean_on_missing_qids(temp_db, monkeypatch):
+    """Entries pointing at qids absent from the DB must silently skip,
+    not raise — needed so the migration is safe on test fixtures."""
+    import models.migrations as m
+    monkeypatch.setattr(m, "_TARGETED_ISSUE_RETIRES_2026_05_27",
+                        [(99996, ["A"], 0.9, "test missing qid")])
+    m._038_targeted_issue_fixes_2026_05_27()
+
+
+def test_038_via_apply_pending_registers_in_ledger(temp_db):
+    """Smoke: the migration is registered in MIGRATIONS and applied
+    by init_db's apply_pending path."""
+    import models.migrations as m
+    applied = {row.name for row in
+               m.SchemaMigration.select(m.SchemaMigration.name)}
+    assert "038_targeted_issue_fixes_2026_05_27" in applied
+
+
+def test_038_retires_with_provenance(targeted_issue_seed_db, monkeypatch):
+    from models.database import Question
+    import models.migrations as m
+
+    qX, _ = targeted_issue_seed_db
+    monkeypatch.setattr(m, "_TARGETED_ISSUE_RETIRES_2026_05_27", [
+        (qX.id, ["A", "C", "E"], 0.9,
+         "audit 2026-05-27 (issue #99): mcq_multi options incoherent "
+         "with the prompt's units"),
+    ])
+    m._038_targeted_issue_fixes_2026_05_27()
+
+    q = Question.get_by_id(qX.id)
+    assert q.status == "retired"
+    prov = json.loads(q.provenance_json or "{}")
+    assert "retired_reason" in prov
+    assert prov.get("retired_by_migration", "").endswith(
+        "038_targeted_issue_fixes_2026_05_27"
+    )
+    assert "targeted_issue_audit" in prov
+    assert prov["targeted_issue_audit"]["current_correct"] == ["A", "C", "E"]
+
+
+def test_038_idempotent_double_run(targeted_issue_seed_db, monkeypatch):
+    """Re-running the migration is a no-op once a question is retired."""
+    from models.database import Question
+    import models.migrations as m
+
+    qX, _ = targeted_issue_seed_db
+    monkeypatch.setattr(m, "_TARGETED_ISSUE_RETIRES_2026_05_27", [
+        (qX.id, ["A", "C", "E"], 0.9,
+         "audit 2026-05-27: idempotent fixture"),
+    ])
+    m._038_targeted_issue_fixes_2026_05_27()
+    q1 = Question.get_by_id(qX.id)
+    prov1 = json.loads(q1.provenance_json or "{}")
+
+    m._038_targeted_issue_fixes_2026_05_27()  # second run
+    q2 = Question.get_by_id(qX.id)
+    prov2 = json.loads(q2.provenance_json or "{}")
+
+    assert q2.status == "retired"
+    # The second call short-circuits on status='retired' so provenance
+    # is unchanged.
+    assert prov1 == prov2
+
+
+def test_038_leaves_untouched_rows_alone(targeted_issue_seed_db,
+                                         monkeypatch):
+    from models.database import Question, QuestionOption
+    import models.migrations as m
+
+    qX, qY = targeted_issue_seed_db
+    monkeypatch.setattr(m, "_TARGETED_ISSUE_RETIRES_2026_05_27", [
+        (qX.id, ["A", "C", "E"], 0.9, "audit 2026-05-27: untouched"),
+    ])
+    m._038_targeted_issue_fixes_2026_05_27()
+
+    qY_after = Question.get_by_id(qY.id)
+    assert qY_after.status == "live"
+    correct_qY = list(
+        QuestionOption.select()
+        .where(QuestionOption.question == qY)
+        .where(QuestionOption.is_correct == True)  # noqa: E712
+    )
+    assert len(correct_qY) == 1
+    assert correct_qY[0].option_label == "A"
+
+
+def test_038_skips_already_retired_question(targeted_issue_seed_db,
+                                            monkeypatch):
+    """A question retired by an earlier migration must not be
+    re-touched (no provenance overwrite)."""
+    from models.database import Question
+    import models.migrations as m
+
+    qX, _ = targeted_issue_seed_db
+    qX.status = "retired"
+    qX.provenance_json = json.dumps(
+        {"retired_by_migration": "previous_migration"}
+    )
+    qX.save()
+
+    monkeypatch.setattr(m, "_TARGETED_ISSUE_RETIRES_2026_05_27", [
+        (qX.id, ["A", "C", "E"], 0.9,
+         "audit 2026-05-27: should be skipped"),
+    ])
+    m._038_targeted_issue_fixes_2026_05_27()
+
+    q = Question.get_by_id(qX.id)
+    prov = json.loads(q.provenance_json or "{}")
+    # Must not have been overwritten — the prior migration's marker
+    # is still intact and our marker is absent.
+    assert prov.get("retired_by_migration") == "previous_migration"
+    assert "targeted_issue_audit" not in prov
+
+
+def test_038_static_list_has_expected_shape():
+    """Schema check on the production retire list."""
+    import models.migrations as m
+
+    for entry in m._TARGETED_ISSUE_RETIRES_2026_05_27:
+        assert len(entry) == 4, f"retire entry shape: {entry!r}"
+        qid, current, conf, reason = entry
+        assert isinstance(qid, int)
+        assert isinstance(current, list)
+        assert isinstance(conf, (int, float)) and 0.0 <= conf <= 1.0
+        assert isinstance(reason, str) and reason
+        # Reasons should cite a github issue number for traceability.
+        assert "issue #" in reason
+

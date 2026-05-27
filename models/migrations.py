@@ -2382,6 +2382,132 @@ def _037_quant_curated_audit_2026_05_26():
             seed.close()
 
 
+# ── 038: Targeted user-reported issue fixes (2026-05-27) ────────────
+#
+# Six GitHub issues filed against specific qids over 2026-05-13 →
+# 2026-05-27 (#27, #28, #29, #30, #34, #35). For each report we
+# inspected the DB row, ran the dual-signal judge on the candidates
+# the user flagged as "wrong answer", and triaged: confirmed-broken
+# items get retired; false-alarm items (where the math is sound and
+# the marked key verifies) are NOT touched here and are closed
+# directly on GitHub with a "no fix needed" comment.
+#
+# Schema mirrors _037's retire list:
+#
+#   _TARGETED_ISSUE_RETIRES_2026_05_27 = [
+#       (qid, current_correct_list, confidence, reason),
+#   ]
+#
+# We do not flip any keys in this batch — the two mcq_multi drift
+# candidates (#34, #35) both fall into "explanation references option
+# values that are not in the list" territory, so retiring is the
+# safe action. A future audit can re-author and re-promote them.
+_TARGETED_ISSUE_RETIRES_2026_05_27: list = [
+    # (qid, current_correct_list, confidence, reason)
+    (5386, ["A", "C", "E"], 0.90,
+     "audit 2026-05-27 (issue #35): mcq_multi cone problem — "
+     "lateral surface area is 15πr but options are bare integers "
+     "(13, 15, 20, 35, 37, 40, 53) with no π factor; the "
+     "explanation discusses entirely different option values "
+     "(45π, 60π, 150π, 180π). Option set and "
+     "explanation are incompatible with the prompt; retire pending "
+     "manual re-author."),
+    (5380, ["A", "B"], 0.90,
+     "audit 2026-05-27 (issue #34): mcq_multi die problem — sample "
+     "space is 36 so valid probabilities must reduce to k/36, but the "
+     "option list mixes denominators (11, 66, 22, 132) that do not "
+     "divide 36, and the marked key (A=5/11, B=35/66) cannot be "
+     "expressed as k/36. The published explanation defends a "
+     "different option set (1/36, 1/12, 5/18, 7/12, 11/36) that is "
+     "not present in the options. Retire pending manual re-author."),
+    (4212, ["C"], 0.95,
+     "audit 2026-05-27 (issue #30): princeton_2012 prompt references "
+     "'the rectangle above' with vertices A, B, C, D, E, F but no "
+     "stimulus is attached (stimulus_id IS NULL); the figure is "
+     "essential and the labels are not introduced in text. Retire "
+     "until the source figure can be located and re-imported."),
+    (5397, [], 0.85,
+     "audit 2026-05-27 (issue #29): mcq_multi divisor problem — the "
+     "explanation enumerates {3, 4, 6, 9, 12, 18} as valid bag "
+     "sizes strictly between 2 and 20, but the option list omits "
+     "18, so the published correct set is incomplete relative to "
+     "the prompt. User also reported the options did not render in "
+     "the app. Retire pending option-set repair."),
+]
+
+
+def _038_targeted_issue_fixes_2026_05_27():
+    """Apply retire decisions for the 2026-05-27 user-reported audit.
+
+    Source of truth: ``_TARGETED_ISSUE_RETIRES_2026_05_27`` above.
+    Each entry corresponds to a GitHub issue against a specific qid;
+    the reasons cite the issue number and a generic technical
+    explanation of why the row is being retired.
+
+    Both DB passes mirror to the seed so a fresh-install user gets
+    the corrected state and seed_sync doesn't revert it. Idempotent.
+    """
+    db = _get_db()
+    import json as _json
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+
+    MIG_NAME = "038_targeted_issue_fixes_2026_05_27"
+
+    def _exec(conn, raw_sql):
+        return conn.execute if raw_sql else conn.execute_sql
+
+    def _apply_retire(conn, qid, current_correct, confidence, reason,
+                      *, raw_sql=False):
+        ex = _exec(conn, raw_sql)
+        row = ex(
+            "SELECT status, provenance_json FROM question WHERE id=?",
+            (qid,),
+        ).fetchone()
+        if row is None:
+            return False
+        status, prov_raw = row
+        if status == "retired":
+            return False
+        try:
+            prov = _json.loads(prov_raw) if prov_raw else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        prov["retired_reason"] = reason
+        prov["retired_by_migration"] = MIG_NAME
+        prov["targeted_issue_audit"] = {
+            "current_correct": current_correct,
+            "confidence": confidence,
+        }
+        ex(
+            "UPDATE question SET status='retired', provenance_json=? "
+            "WHERE id=? AND status != 'retired'",
+            (_json.dumps(prov), qid),
+        )
+        return True
+
+    # ── User DB pass (Peewee) ────────────────────────────────────────
+    for entry in _TARGETED_ISSUE_RETIRES_2026_05_27:
+        qid, current_correct, confidence, reason = entry
+        _apply_retire(db, qid, current_correct, confidence, reason)
+
+    # ── Seed DB pass (raw sqlite) ────────────────────────────────────
+    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            for entry in _TARGETED_ISSUE_RETIRES_2026_05_27:
+                qid, current_correct, confidence, reason = entry
+                _apply_retire(
+                    seed, qid, current_correct, confidence, reason,
+                    raw_sql=True,
+                )
+            seed.commit()
+        finally:
+            seed.close()
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -2447,6 +2573,8 @@ MIGRATIONS = [
      _036_answer_key_drift_repair_2026_05_25),
     ("037_quant_curated_audit_2026_05_26",
      _037_quant_curated_audit_2026_05_26),
+    ("038_targeted_issue_fixes_2026_05_27",
+     _038_targeted_issue_fixes_2026_05_27),
 ]
 
 

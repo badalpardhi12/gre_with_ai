@@ -2103,6 +2103,285 @@ def _036_answer_key_drift_repair_2026_05_25():
             seed.close()
 
 
+# ── 037: Curated quant audit (2026-05-26) ───────────────────────────
+#
+# Second-pass review of every still-live quant question after the
+# 036 answer-key drift sweep. The judge solves each prompt twice —
+# once independently from the options and once by re-reading the
+# published explanation — and a separate triage layer only acts when
+# the two passes triangulate. The static lists below are the
+# triage layer's surviving decisions; everything else stayed live.
+#
+# Schema:
+#
+#   _QUANT_AUDIT_FLIPS_2026_05_26 = [
+#       (qid, from_label, to_label, confidence, reason),
+#   ]
+#       Single-answer items where the independent solve and the
+#       explanation BOTH conclude the same option, that option is on
+#       the question, and the marked key is something different. We
+#       move ``is_correct=True`` from ``from_label`` to ``to_label``
+#       and stamp provenance.
+#
+#   _QUANT_AUDIT_RETIRES_2026_05_26 = [
+#       (qid, current_correct_list, confidence, reason),
+#   ]
+#       Items the audit flagged as internally inconsistent (option
+#       text doesn't match the prompt's units, prompt is ambiguous,
+#       missing figure, etc.) or where the judge wasn't confident
+#       enough to keep live. Status -> retired with audit metadata
+#       in provenance_json.
+#
+#   _QUANT_AUDIT_REPAIRS_2026_05_26 = [
+#       (qid, field, new_value, reason),
+#   ]
+#       Items where the marked key is correct but the explanation is
+#       wrong / off-topic. We blank the explanation rather than try
+#       to author a new one — the renderer falls back to the prompt
+#       and learners stop being misled. Field is currently always
+#       'explanation' (set to "") but the schema leaves room for
+#       structured repairs in the future.
+_QUANT_AUDIT_FLIPS_2026_05_26: list = [
+    # (qid, from_label, to_label, confidence, reason)
+    # Filled in below after the audit cache is materialized.
+    # No option-label flips this round; the one numeric_entry
+    # candidate (qid 4784) is retired below since the schema for
+    # storing fraction-mode numeric answers needs a different repair
+    # shape than this list supports.
+]
+
+_QUANT_AUDIT_RETIRES_2026_05_26: list = [
+    # (qid, current_correct_list, confidence, reason)
+    (4784, [], 0.95,
+     "audit 2026-05-26: numeric_entry stored as decimal 3.0 but the "
+     "explanation correctly derives 3/10. Numeric-key repair needs a "
+     "different schema than this migration supports; retire pending "
+     "manual fix."),
+    (4221, ["C"], 0.85,
+     "audit 2026-05-26: prompt 'each cost 1/3 of the remainder' is "
+     "ambiguous (same vs sequential remainder). Both interpretations "
+     "yield listed options, making the item under-specified."),
+    (5393, ["B", "D", "F"], 0.85,
+     "audit 2026-05-26: prices need not be integers; under positive "
+     "reals the constraint accepts all options. Item is broken unless "
+     "an integer-only assumption is added (which the prompt omits)."),
+    (2926, [], 0.90,
+     "audit 2026-05-26: prompt does not specify whether the 9 are a "
+     "subset of the 15 employees; the two interpretations give "
+     "different answers."),
+    (5388, ["A", "B", "D", "F", "G"], 0.90,
+     "audit 2026-05-26: marked answer key does not correspond to any "
+     "valid total under the prompt's constraints; the item is broken."),
+]
+
+_QUANT_AUDIT_REPAIRS_2026_05_26: list = [
+    # (qid, field, new_value, reason)
+    (3055, "explanation",
+     r"Use \(S_2 = S_1 + S_0 - 1\) to find \(S_1\): "
+     r"\(0 = S_1 + (-10) - 1\), so \(S_1 = 11\). "
+     r"Then \(S_3 = S_2 + S_1 - 1 = 0 + 11 - 1 = 10\). "
+     r"Finally \(S_4 = S_3 + S_2 - 1 = 10 + 0 - 1 = 9\). "
+     r"The answer is C.",
+     "audit 2026-05-26: prior explanation was truncated mid-sentence; "
+     "answer key (C, 9) is correct."),
+    (3265, "explanation",
+     r"Factor the numerator: "
+     r"\(40^{50} - 40^{48} = 40^{48}(40^{2} - 1) = 40^{48} \cdot 1599\). "
+     r"Since \(40 = 4 \cdot 10\), "
+     r"\(40^{48} = 4^{48} \cdot 10^{48} = 2^{96} \cdot 10^{48}\). "
+     r"Dividing by \(2^{96}\) leaves \(10^{48} \cdot 1599\). "
+     r"Multiplying by \(10^{-45}\) gives "
+     r"\(10^{3} \cdot 1599 = 1599 \cdot 10^{3}\). The answer is B.",
+     "audit 2026-05-26: prior explanation hinted at factoring without "
+     "completing the calculation; answer key B is correct."),
+]
+
+
+def _037_quant_curated_audit_2026_05_26():
+    """Apply the 2026-05-26 curated quant audit decisions.
+
+    Source of truth: the three static lists above. The audit pipeline
+    that produced them runs offline and is not tracked in this repo;
+    the migration is replayable from the lists alone (no LLM call
+    required at apply time).
+
+    For each FLIP we move ``is_correct=True`` from from_label to
+    to_label, stamping provenance. For each RETIRE we set
+    ``status='retired'`` with audit metadata. For each REPAIR (only
+    'explanation' currently supported) we blank the offending field
+    and stamp provenance so the published explanation no longer
+    misleads.
+
+    Both passes mirror to the seed DB so a fresh-install user gets
+    the corrected state and seed_sync doesn't revert it. Idempotent:
+    re-running is a no-op.
+    """
+    db = _get_db()
+    import json as _json
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+
+    MIG_NAME = "037_quant_curated_audit_2026_05_26"
+
+    def _exec(conn, raw_sql):
+        return conn.execute if raw_sql else conn.execute_sql
+
+    def _apply_flip(conn, qid, from_label, to_label, confidence, reason,
+                    *, raw_sql=False):
+        ex = _exec(conn, raw_sql)
+        q_row = ex(
+            "SELECT id, provenance_json, status FROM question WHERE id=?",
+            (qid,),
+        ).fetchone()
+        if q_row is None:
+            return False
+        if q_row[2] == "retired":
+            return False
+        from_opt = ex(
+            "SELECT id, is_correct FROM questionoption "
+            "WHERE question_id=? AND option_label=?",
+            (qid, from_label),
+        ).fetchone()
+        to_opt = ex(
+            "SELECT id, is_correct FROM questionoption "
+            "WHERE question_id=? AND option_label=?",
+            (qid, to_label),
+        ).fetchone()
+        if from_opt is None or to_opt is None:
+            return False
+        # Idempotent guard: if the flip is already applied, no-op.
+        if not from_opt[1] and to_opt[1]:
+            return False
+        ex(
+            "UPDATE questionoption SET is_correct=0 "
+            "WHERE question_id=? AND option_label=?",
+            (qid, from_label),
+        )
+        ex(
+            "UPDATE questionoption SET is_correct=1 "
+            "WHERE question_id=? AND option_label=?",
+            (qid, to_label),
+        )
+        try:
+            prov = _json.loads(q_row[1]) if q_row[1] else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        prov["answer_key_flipped_by_migration"] = MIG_NAME
+        prov["answer_key_flipped"] = {
+            "from": from_label,
+            "to": to_label,
+            "confidence": confidence,
+            "reason": reason,
+        }
+        ex(
+            "UPDATE question SET provenance_json=? WHERE id=?",
+            (_json.dumps(prov), qid),
+        )
+        return True
+
+    def _apply_retire(conn, qid, current_correct, confidence, reason,
+                      *, raw_sql=False):
+        ex = _exec(conn, raw_sql)
+        row = ex(
+            "SELECT status, provenance_json FROM question WHERE id=?",
+            (qid,),
+        ).fetchone()
+        if row is None:
+            return False
+        status, prov_raw = row
+        if status == "retired":
+            return False
+        try:
+            prov = _json.loads(prov_raw) if prov_raw else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        prov["retired_reason"] = reason
+        prov["retired_by_migration"] = MIG_NAME
+        prov["quant_curated_audit"] = {
+            "current_correct": current_correct,
+            "confidence": confidence,
+        }
+        ex(
+            "UPDATE question SET status='retired', provenance_json=? "
+            "WHERE id=? AND status != 'retired'",
+            (_json.dumps(prov), qid),
+        )
+        return True
+
+    def _apply_repair(conn, qid, field, new_value, reason,
+                      *, raw_sql=False):
+        ex = _exec(conn, raw_sql)
+        if field != "explanation":
+            # Currently only 'explanation' repairs are supported.
+            return False
+        row = ex(
+            "SELECT explanation, provenance_json FROM question WHERE id=?",
+            (qid,),
+        ).fetchone()
+        if row is None:
+            return False
+        old_expl, prov_raw = row
+        if (old_expl or "") == (new_value or ""):
+            return False  # already applied
+        try:
+            prov = _json.loads(prov_raw) if prov_raw else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        prov.setdefault("explanation_repairs", []).append({
+            "by_migration": MIG_NAME,
+            "previous_len": len(old_expl or ""),
+            "reason": reason,
+        })
+        ex(
+            "UPDATE question SET explanation=?, provenance_json=? "
+            "WHERE id=?",
+            (new_value, _json.dumps(prov), qid),
+        )
+        return True
+
+    # ── User DB pass (Peewee) ────────────────────────────────────────
+    for entry in _QUANT_AUDIT_FLIPS_2026_05_26:
+        qid, from_label, to_label, confidence, reason = entry
+        _apply_flip(db, qid, from_label, to_label, confidence, reason)
+    for entry in _QUANT_AUDIT_RETIRES_2026_05_26:
+        qid, current_correct, confidence, reason = entry
+        _apply_retire(db, qid, current_correct, confidence, reason)
+    for entry in _QUANT_AUDIT_REPAIRS_2026_05_26:
+        qid, field, new_value, reason = entry
+        _apply_repair(db, qid, field, new_value, reason)
+
+    # ── Seed DB pass (raw sqlite) ────────────────────────────────────
+    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            for entry in _QUANT_AUDIT_FLIPS_2026_05_26:
+                qid, from_label, to_label, confidence, reason = entry
+                _apply_flip(
+                    seed, qid, from_label, to_label, confidence, reason,
+                    raw_sql=True,
+                )
+            for entry in _QUANT_AUDIT_RETIRES_2026_05_26:
+                qid, current_correct, confidence, reason = entry
+                _apply_retire(
+                    seed, qid, current_correct, confidence, reason,
+                    raw_sql=True,
+                )
+            for entry in _QUANT_AUDIT_REPAIRS_2026_05_26:
+                qid, field, new_value, reason = entry
+                _apply_repair(
+                    seed, qid, field, new_value, reason, raw_sql=True,
+                )
+            seed.commit()
+        finally:
+            seed.close()
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -2166,6 +2445,8 @@ MIGRATIONS = [
      _035_audit_quant_fixes_2026_05_24),
     ("036_answer_key_drift_repair_2026_05_25",
      _036_answer_key_drift_repair_2026_05_25),
+    ("037_quant_curated_audit_2026_05_26",
+     _037_quant_curated_audit_2026_05_26),
 ]
 
 

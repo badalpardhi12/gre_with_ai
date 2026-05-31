@@ -154,13 +154,24 @@ def test_prompt_rewrite_in_seed_propagates_to_user(paths):
 
 
 def test_retire_in_seed_without_migration_reaches_user(paths):
+    """As of 2026-05-31 (the curated quant audit aftermath), ``status``
+    and ``provenance_json`` are USER-owned columns: seed_sync no
+    longer reconciles them from seed → user. Direct seed edits to
+    status are intentional dead-ends now — retirements MUST land
+    via a migration in models/migrations.py so the user DB ledger
+    records them and the migration's idempotent guards prevent the
+    bug where ``git pull`` overwrites the local seed (back to the
+    stale tracked version) and seed_sync silently flips retired rows
+    back to live.
+
+    This test pins the new contract: a status edit in the seed alone
+    does NOT cross over to the user DB.
+    """
     seed, user, s, u = paths
     _seed_question_row(s, 200, "p", "e", status="live")
     _seed_question_row(u, 200, "p", "e", status="live")
     s.commit(); u.commit()
 
-    # Author retires in seed without writing a migration — this is the
-    # exact case migration 020's Q3720 edit ran into.
     s.execute("UPDATE question SET status='retired' WHERE id=200")
     s.commit()
 
@@ -171,7 +182,9 @@ def test_retire_in_seed_without_migration_reaches_user(paths):
     check = sqlite3.connect(str(user))
     assert check.execute(
         "SELECT status FROM question WHERE id=200"
-    ).fetchone()[0] == "retired"
+    ).fetchone()[0] == "live", (
+        "status is USER-owned; seed-only status edits must NOT propagate"
+    )
 
 
 def test_new_question_in_seed_is_inserted_to_user(paths):

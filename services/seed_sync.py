@@ -60,6 +60,17 @@ _QUESTION_USER_OWNED_COLS = frozenset({
     "pretest_disc_proxy",
     "irt_b_estimate",
     "irt_a_estimate",
+    # Status + provenance are migration-managed (the answer-key drift,
+    # quant audit, and targeted-issue migrations 036/037/038 retire
+    # rows + stamp provenance via models/migrations.py). They MUST NOT
+    # be reconciled from the seed: when a user pulls a new commit, the
+    # tracked seed lags behind the migration's effects and a naive
+    # reconciliation flips ``status='retired'`` rows back to ``live``,
+    # silently undoing every retirement we shipped. The migrations
+    # themselves are the source of truth — seed_sync just protects
+    # the columns they own.
+    "status",
+    "provenance_json",
 })
 
 

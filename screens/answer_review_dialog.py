@@ -175,31 +175,17 @@ class AnswerReviewDialog(wx.Dialog):
         num_label.SetFont(f)
         meta_row.Add(num_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
 
-        pill = wx.StaticText(card, label=f"  {pill_text}  ")
-        pill.SetBackgroundColour(pill_bg)
-        pill.SetForegroundColour(Color.TEXT_INVERSE if is_correct is not None else Color.TEXT_PRIMARY)
-        meta_row.Add(pill, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
-
-        meta = wx.StaticText(
-            card,
-            label=(
-                f"{detail.get('measure', '').title()} • "
-                f"{detail.get('subtype', '')} • "
-                f"qid={detail.get('question_id', '?')}"
-            ),
-        )
-        meta.SetForegroundColour(Color.TEXT_SECONDARY)
-        meta_row.Add(meta, 0, wx.ALIGN_CENTER_VERTICAL)
-
-        # "Report issue" affordance on the far right. Lets the user
-        # flag a problem they only noticed during post-test review
-        # (mis-keyed answer, broken figure, typo…). Reuses the same
-        # FlagQuestionDialog the live question screen uses, so the
-        # reason list / GitHub URL format / QuestionFlag row stay
-        # consistent across entry points.
+        # Report button placed RIGHT after the Q-number so it's always
+        # visible. Previously it sat at the far right after a stretch
+        # spacer; under high font zoom the meta text overflowed and
+        # pushed the button off the visible region of the card —
+        # users reported "the report button is not available" on
+        # several cards. Anchoring it next to the (always-short)
+        # question number guarantees it stays on screen.
         qid = detail.get("question_id")
-        meta_row.AddStretchSpacer(1)
-        report_btn = wx.Button(card, label="🚩 Report issue", style=wx.BU_EXACTFIT)
+        report_btn = wx.Button(
+            card, label="🚩 Report issue", style=wx.BU_EXACTFIT,
+        )
         report_btn.SetToolTip(
             "Flag a wrong answer, mismatched explanation, or "
             "unanswerable question on this card."
@@ -223,8 +209,25 @@ class AnswerReviewDialog(wx.Dialog):
                 "label": reported_label,
                 "card": card,
             }
-        meta_row.Add(report_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
-        meta_row.Add(reported_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
+        meta_row.Add(report_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
+        meta_row.Add(reported_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
+
+        pill = wx.StaticText(card, label=f"  {pill_text}  ")
+        pill.SetBackgroundColour(pill_bg)
+        pill.SetForegroundColour(Color.TEXT_INVERSE if is_correct is not None else Color.TEXT_PRIMARY)
+        meta_row.Add(pill, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
+
+        meta = wx.StaticText(
+            card,
+            label=(
+                f"{detail.get('measure', '').title()} • "
+                f"{detail.get('subtype', '')} • "
+                f"qid={detail.get('question_id', '?')}"
+            ),
+        )
+        meta.SetForegroundColour(Color.TEXT_SECONDARY)
+        meta_row.Add(meta, 0, wx.ALIGN_CENTER_VERTICAL)
+        meta_row.AddStretchSpacer(1)
         sizer.Add(meta_row, 0, wx.ALL | wx.EXPAND, 10)
 
         # Stimulus (if present, truncated)

@@ -42,6 +42,7 @@ from screens.learn_screen import LearnScreen
 from screens.practice_screen import PracticeScreen
 from screens.insights_screen import InsightsScreen
 from screens.error_log_screen import ErrorLogScreen
+from screens.past_tests_screen import PastTestsScreen
 
 from widgets.sidebar import Sidebar
 from widgets.theme import Color
@@ -57,6 +58,7 @@ TAB_HOME_SCREEN = {
     "practice": "practice",
     "vocab":    "vocab",
     "insights": "insights",
+    "past_tests": "past_tests",
     "error_log": "error_log",
 }
 
@@ -68,6 +70,7 @@ SCREEN_TO_TAB = {
     "practice":  "practice",
     "vocab":     "vocab",
     "insights":  "insights",
+    "past_tests": "past_tests",
     "error_log": "error_log",
     "diagnostic_results": "insights",
 }
@@ -189,6 +192,8 @@ class MainFrame(wx.Frame):
         view_menu.Append(2014, "&Insights\tCtrl+5", "Forecast, history, study plan")
         view_menu.Append(2015, "&Error Log\tCtrl+6",
                          "Review every wrong answer with auto-classified errors")
+        view_menu.Append(2016, "Past &Tests\tCtrl+7",
+                         "Browse and review every completed mock and section test")
         view_menu.AppendSeparator()
         view_menu.Append(2020, "Zoom &In\tCtrl++",
                          "Increase question/explanation text size")
@@ -213,6 +218,7 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, lambda _: self._on_sidebar_select("vocab"), id=2013)
         self.Bind(wx.EVT_MENU, lambda _: self._on_sidebar_select("insights"), id=2014)
         self.Bind(wx.EVT_MENU, lambda _: self._on_sidebar_select("error_log"), id=2015)
+        self.Bind(wx.EVT_MENU, lambda _: self._on_sidebar_select("past_tests"), id=2016)
         self.Bind(wx.EVT_MENU, lambda _: self._adjust_zoom(+1), id=2020)
         self.Bind(wx.EVT_MENU, lambda _: self._adjust_zoom(-1), id=2021)
         self.Bind(wx.EVT_MENU, lambda _: self._adjust_zoom(0), id=2022)
@@ -252,7 +258,7 @@ class MainFrame(wx.Frame):
                     break
             # From these screens, ESC goes back to Today
             if current in ("vocab", "learn", "practice", "insights",
-                           "error_log", "diagnostic_results"):
+                           "error_log", "past_tests", "diagnostic_results"):
                 self._go_home()
                 return
             # From instructions, abort the test
@@ -275,6 +281,7 @@ class MainFrame(wx.Frame):
             "practice": PracticeScreen,
             "vocab": VocabScreen,
             "insights": InsightsScreen,
+            "past_tests": PastTestsScreen,
             "error_log": ErrorLogScreen,
             "instructions": InstructionsScreen,
             "awa": AWAScreen,

@@ -432,6 +432,66 @@ def _cluster_group(q):
     return ("q", q.id)
 
 
+def _cluster_aware_shuffle(qids):
+    """Shuffle qids while keeping cluster siblings adjacent.
+
+    Real GRE interleaves item subtypes within a section; only multi-question
+    clusters (RC passages, DI charts) stay grouped because the stimulus is
+    rendered once at the top of the cluster. ``select_questions_composed``
+    builds ``selected_ids`` cluster-at-a-time in a deterministic per-subtype
+    order, which leaves all qc items in one batch, all mcq_single in
+    another, etc. — visibly subtype-batched and unlike a real test.
+
+    The fix groups consecutive qids by ``_cluster_group`` so any run of
+    sibling questions sharing a stimulus stays together (RC passage, DI
+    chart), then ``random.shuffle`` reorders the BLOCKS — not the items
+    inside them. Singletons each form their own one-item block, so they
+    interleave freely. The order within a block is preserved exactly.
+
+    Relies on ``random.shuffle`` for determinism — callers seeding
+    ``random`` get reproducible orderings, which the test framework needs.
+
+    Edge cases:
+        * Empty list → empty list (no DB hit).
+        * Two clusters with the same group key cannot occur in the input
+          because callers feed cluster-at-a-time picks; even if they did,
+          they'd collapse into one block (acceptable since they share a
+          stimulus and would render together anyway).
+    """
+    if not qids:
+        return []
+    rows = list(
+        Question.select(Question.id, Question.subtype, Question.stimulus_id)
+        .where(Question.id.in_(list(qids)))
+    )
+    by_id = {r.id: r for r in rows}
+
+    # Build adjacent-run blocks. A block is a maximal run of qids whose
+    # ``_cluster_group`` key matches its predecessor.
+    blocks = []
+    current_block = []
+    current_key = None
+    for qid in qids:
+        q = by_id.get(qid)
+        key = _cluster_group(q) if q is not None else ("q", qid)
+        if current_block and key == current_key:
+            current_block.append(qid)
+        else:
+            if current_block:
+                blocks.append(current_block)
+            current_block = [qid]
+            current_key = key
+    if current_block:
+        blocks.append(current_block)
+
+    random.shuffle(blocks)
+
+    flat = []
+    for block in blocks:
+        flat.extend(block)
+    return flat
+
+
 def _user_recent_seen(user_id: str = "local",
                       days: int = DEFAULT_RECENT_SEEN_DAYS):
     """Question IDs the user has touched within the last ``days`` days.
@@ -1195,10 +1255,15 @@ class QuestionBankService:
                 measure, deficit,
             )
 
-        # Do NOT fully shuffle — cluster siblings must stay adjacent so the
-        # UI can render the passage once at the top of its cluster. We
-        # already assembled them cluster-at-a-time in pick order.
-        final_picks = selected_ids[:count]
+        # Real GRE interleaves item subtypes within a section; only multi-
+        # question clusters (RC passages, DI charts) stay grouped because
+        # the stimulus is rendered once at the top. Pre-fix the per-subtype
+        # loop appended a full mcq_single batch, then a full qc batch, etc.
+        # — visibly subtype-batched and unlike a real test. ``_cluster_
+        # aware_shuffle`` reorders BLOCKS (cluster-runs and singletons) but
+        # preserves within-block order, so passage/chart siblings stay
+        # adjacent for one-time stimulus rendering.
+        final_picks = _cluster_aware_shuffle(selected_ids[:count])
 
         # R3 — ServedLog write-through. Record every qid we're about to
         # hand to the caller so future selections (even from fresh-launch

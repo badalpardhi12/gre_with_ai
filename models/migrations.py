@@ -2693,6 +2693,83 @@ def _040_retire_unrenderable_figure_2026_06_01():
             seed.close()
 
 
+def _041_duplicate_group_id_2026_06_01():
+    """Add ``question.duplicate_group_id`` and populate it for confirmed
+    near-duplicate quant groups, and retire exact-duplicate extras.
+
+    Source: WS-C dedup analysis over the LLM-adjudicated labeled pairs
+    (data/dedup_eval/labeled_pairs_2026_05_18.csv). Near-dup groups share a
+    template (same setup, different numbers); the assembler must never place
+    two members of one group in a single mock. Exact dupes (identical prompt,
+    differ only in LaTeX/answer-mode) are retired, keeping the lowest qid.
+    RC stem-collision components were excluded as false positives (distinct
+    passages sharing a generic question stem).
+
+    Dual-writes seed + user DB. Idempotent: the ALTER is guarded by a
+    column-existence check; group/retire writes are natural upserts/guards.
+    """
+    db = _get_db()
+    import json as _json
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+
+    MIG_NAME = "041_duplicate_group_id_2026_06_01"
+
+    # group_id -> member qids (all kept live; never co-occur in one mock)
+    GROUPS = {
+        "dg_q_g3": [1657, 2224, 2228],   # isosceles right triangle hyp -> area
+        "dg_q_g5": [1619, 1625, 2200],   # age word problem (3x now, 2x in 12y)
+        "dg_q_g8": [1565, 2171],         # |2x-k|=m, sum of x
+        "dg_q_g10": [1551, 1558],        # |x+k|>=m, values of x
+        "dg_q_g11": [1656, 1661],        # similar triangles area ratio
+        "dg_q_g12": [2229, 2233],        # triangle side ordering from angles
+        "dg_q_g14": [2187, 2196],        # midpoint of AB given, find sum
+    }
+    # exact-content dupes: (keep, retire)
+    RETIRE_DUPES = [
+        (1554, 2166), (2122, 2128), (1612, 1622), (1657, 2232),
+    ]
+
+    def _column_exists(ex, table, col):
+        return any(r[1] == col for r in ex(f"PRAGMA table_info({table})").fetchall())
+
+    def _apply(conn, raw_sql=False):
+        ex = conn.execute if raw_sql else conn.execute_sql
+        if not _column_exists(ex, "question", "duplicate_group_id"):
+            ex("ALTER TABLE question ADD COLUMN duplicate_group_id TEXT DEFAULT ''")
+        # populate groups (only for rows that exist)
+        for gid, qids in GROUPS.items():
+            for qid in qids:
+                ex("UPDATE question SET duplicate_group_id=? WHERE id=?", (gid, qid))
+        # retire exact-dupe extras (keep the lower qid), with provenance
+        for keep, drop in RETIRE_DUPES:
+            row = ex("SELECT status, provenance_json FROM question WHERE id=?",
+                     (drop,)).fetchone()
+            if row is None or row[0] == "retired":
+                continue
+            try:
+                prov = _json.loads(row[1]) if row[1] else {}
+                if not isinstance(prov, dict):
+                    prov = {}
+            except (ValueError, TypeError):
+                prov = {}
+            prov["retired_reason"] = (
+                f"dedup audit: exact-content duplicate of q{keep} (identical "
+                f"prompt; differs only in LaTeX/answer format).")
+            prov["retired_by_migration"] = MIG_NAME
+            ex("UPDATE question SET status='retired', provenance_json=? "
+               "WHERE id=? AND status != 'retired'", (_json.dumps(prov), drop))
+
+    _apply(db)
+    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            _apply(seed, raw_sql=True)
+            seed.commit()
+        finally:
+            seed.close()
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -2764,6 +2841,8 @@ MIGRATIONS = [
      _039_repair_option_graft_2026_06_01),
     ("040_retire_unrenderable_figure_2026_06_01",
      _040_retire_unrenderable_figure_2026_06_01),
+    ("041_duplicate_group_id_2026_06_01",
+     _041_duplicate_group_id_2026_06_01),
 ]
 
 

@@ -1335,6 +1335,22 @@ class QuestionBankService:
                 running_sum += t
         return targets
 
+    def _groups_for(self, qids):
+        """Return the set of non-empty ``duplicate_group_id`` values held by
+        the given qids. Used to seed within-call group dedup so a group member
+        already excluded (other section / previous mock) blocks its siblings.
+        Fails open (empty set) so assembly never crashes on schema drift."""
+        if not qids:
+            return set()
+        try:
+            rows = (Question
+                    .select(Question.duplicate_group_id)
+                    .where(Question.id.in_(list(qids)) &
+                           (Question.duplicate_group_id != "")))
+            return {r.duplicate_group_id for r in rows}
+        except Exception:
+            return set()
+
     def _take_cluster_aware(self, measure, subtype, target, difficulty_band,
                              exclude, target_theta=None, routing_tier=None):
         """Pick up to ``target`` question IDs, pulling full clusters atomically.
@@ -1398,7 +1414,7 @@ class QuestionBankService:
 
         query = (Question
                  .select(Question.id, Question.subtype, Question.stimulus,
-                         Question.difficulty_target)
+                         Question.difficulty_target, Question.duplicate_group_id)
                  .where((Question.measure == measure) &
                         (Question.status == "live")))
         if subtype is not None:
@@ -1418,6 +1434,23 @@ class QuestionBankService:
         candidates = list(query)
         if not candidates:
             return []
+
+        # Duplicate-group dedup: never let two items sharing a non-empty
+        # duplicate_group_id co-occur — neither within this call nor with items
+        # already excluded (other sections / previous mocks). seen_groups is
+        # seeded from the groups the ``exclude`` set already represents, so a
+        # group member picked earlier blocks its siblings here too. Items with
+        # an empty group_id (the vast majority, incl. all verbal) are untouched.
+        seen_groups = self._groups_for(exclude)
+        deduped = []
+        for q in candidates:
+            g = getattr(q, "duplicate_group_id", "") or ""
+            if g:
+                if g in seen_groups:
+                    continue
+                seen_groups.add(g)
+            deduped.append(q)
+        candidates = deduped
 
         # Group by cluster key
         clusters = {}

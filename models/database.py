@@ -92,6 +92,12 @@ class Question(BaseModel):
                            ("retired", "Retired"),
                        ])
     explanation = TextField(default="")  # Explanation / solution text (HTML OK)
+    # Stable id grouping near/exact-duplicate items (same template, different
+    # numbers). Empty string = not a duplicate-group member. Assembly never
+    # places two members of the same non-empty group in one mock (services/
+    # question_bank.py:_take_cluster_aware). Seed-authored content column,
+    # reconciled from the seed by services/seed_sync.py.
+    duplicate_group_id = CharField(default="", index=True)
     created_at = DateTimeField(default=datetime.now)
     updated_at = DateTimeField(default=datetime.now)
 

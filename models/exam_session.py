@@ -58,42 +58,48 @@ def _resolve_tier(measure: str, correct_count: int):
 
 
 def get_previous_mock_qids(user_id="local"):
-    """Return the set of question IDs assigned to the user's most-recent
-    COMPLETED full mock session.
+    """Return the set of question IDs from the user's single most-recent
+    COMPLETED full mock. Thin wrapper over :func:`get_recent_mock_qids` kept
+    for callers/tests that mean "exactly the last mock"."""
+    return get_recent_mock_qids(user_id, n=1)
 
-    This is used by mock N+1 to avoid any overlap with mock N (Phase 1 R5:
-    consecutive-mock qid exclude). Sessions that were abandoned or are still
-    in progress are NOT counted — the user hasn't really "seen" the whole
-    batch yet and excluding them would be over-aggressive.
 
-    The single-user desktop app keeps everything under ``user_id="local"``;
-    the argument exists so a future multi-user flip is a one-line change
-    (Session has no user_id column today, so the arg is currently unused
-    beyond documenting intent).
+# How many recent completed mocks a new test avoids overlapping with. One mock
+# (the old behaviour) let items from two-mocks-ago resurface immediately, which
+# a user doing several mocks reads as repetition; a small window fixes that
+# without starving the ~2.5k-item live pool.
+RECENT_MOCK_DEDUP_N = 3
 
-    Returns an empty set when there is no prior completed mock, or when
-    the DB / models are unavailable (defensive: never crash mock start).
+
+def get_recent_mock_qids(user_id="local", n=RECENT_MOCK_DEDUP_N):
+    """Return the union of question IDs assigned across the user's ``n`` most-
+    recent COMPLETED full mock sessions.
+
+    Used so a new mock / section test avoids overlap with the recent past, not
+    just the immediately-previous mock. Abandoned / in-progress sessions are
+    not counted. Returns an empty set on any DB/model error (never crash mock
+    start). ``user_id`` documents intent for a future multi-user flip (Session
+    has no user_id column today).
     """
     try:
-        from models.database import Session, SectionResult
+        from models.database import Session, SectionResult  # noqa: F401
     except Exception:
         return set()
 
     try:
-        prev = (Session
-                .select()
-                .where((Session.test_type == "full_mock")
-                       & (Session.state == "completed"))
-                .order_by(Session.ended_at.desc(), Session.id.desc())
-                .first())
-        if prev is None:
-            return set()
+        recent = list(Session
+                      .select()
+                      .where((Session.test_type == "full_mock")
+                             & (Session.state == "completed"))
+                      .order_by(Session.ended_at.desc(), Session.id.desc())
+                      .limit(max(1, n)))
         qids = set()
-        for sec in prev.sections:  # backref="sections"
-            try:
-                qids.update(sec.get_question_ids())
-            except (ValueError, TypeError):
-                continue
+        for sess in recent:
+            for sec in sess.sections:  # backref="sections"
+                try:
+                    qids.update(sec.get_question_ids())
+                except (ValueError, TypeError):
+                    continue
         return qids
     except Exception:
         # DB unavailable / migration pending / schema drift — fail open.
@@ -272,9 +278,10 @@ class ExamSession:
         # Store question bank for deferred S2 loading
         self._question_bank = question_bank
 
-        # Phase 1 R5: mock N+1 must not repeat any qid from the user's
-        # most-recent COMPLETED mock. Compute once here, reuse for S2.
-        self._prev_mock_qids = get_previous_mock_qids(user_id)
+        # Phase 1 R5 (extended): a new mock must not repeat any qid from the
+        # user's recent COMPLETED mocks (last RECENT_MOCK_DEDUP_N). Compute
+        # once here, reuse for S2.
+        self._prev_mock_qids = get_recent_mock_qids(user_id)
 
         # Track IDs already picked across sections so S1-Verbal doesn't
         # collide with S1-Quant and vice versa. Seeded with the previous
@@ -310,6 +317,11 @@ class ExamSession:
         """Build a section-only test (Verbal or Quant)."""
         self._question_bank = question_bank
         self._user_id = user_id
+        # A section test must also avoid the recent completed mocks (the full-
+        # mock path does this via build_mock; this path previously did not, so
+        # section tests could replay recent items). Seed _prev_mock_qids so the
+        # deferred S2 in _adapt_next_section excludes them too.
+        self._prev_mock_qids = get_recent_mock_qids(user_id)
         if measure == "verbal":
             self.section_order = [SectionType.VERBAL_S1, SectionType.VERBAL_S2]
         else:
@@ -320,6 +332,7 @@ class ExamSession:
             if sec_idx == 1:
                 q_ids = question_bank.select_questions_composed(
                     measure=m, count=q_count, difficulty_band="medium",
+                    exclude_ids=list(self._prev_mock_qids),
                     exclude_user_seen=user_id,
                 )
             else:

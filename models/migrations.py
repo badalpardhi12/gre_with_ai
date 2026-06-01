@@ -2508,6 +2508,440 @@ def _038_targeted_issue_fixes_2026_05_27():
             seed.close()
 
 
+# ── Option-graft repair (WS-A, 2026-06-01) ──────────────────────────────
+# ai_synthetic_v2 mcq_multi items whose questionoption rows were grafted from
+# a neighboring question during a two-pass seed mirror (commit 0628858). The
+# stems/explanations/provenance are internally consistent, so the ORIGINAL
+# option set + correctness is recoverable. Each correct set below is the set the
+# item's OWN explanation declares correct (ground truth); reconstruction was
+# proposed by the project LLM (scripts/reconstruct_grafted_options.py) and then
+# verified by hand against each explanation. GitHub issues #36 (5382), #37
+# (5374), #38 (5384), #41 (5378); the rest surfaced by scripts/audit_option_graft.py.
+# Options are (text, is_correct) in display order; labels A.. are assigned in order.
+_OPTION_GRAFT_REPAIRS_2026_06_01 = [
+    (5374, [("1/5", 1), ("1/4", 0), ("3/8", 0), ("2/5", 1), ("7/10", 1), ("5/6", 1)]),
+    (5375, [("S is divisible by 3", 1), ("S is divisible by 4", 0),
+            ("S is divisible by 6", 1), ("S is divisible by 12", 0),
+            ("S/3 is even", 1), ("S + 6 is divisible by 6", 1)]),
+    (5376, [("12", 1), ("18", 0), ("24", 1), ("30", 0), ("36", 1), ("48", 1)]),
+    (5377, [("10", 0), ("14", 0), ("15", 1), ("17", 1), ("19", 1), ("20", 0), ("21", 0)]),
+    (5378, [("1", 1), ("2", 1), ("5", 1), ("8", 1), ("9", 0), ("11", 0), ("14", 0)]),
+    (5380, [("1/36", 1), ("1/12", 1), ("1/5", 0), ("5/18", 1), ("7/24", 0),
+            ("11/36", 1), ("7/12", 1)]),
+    (5381, [("4", 0), ("7", 1), ("9", 1), ("10", 1), ("13", 1), ("17", 0), ("20", 0)]),
+    (5382, [("12", 1), ("18", 0), ("24", 1), ("30", 0), ("36", 1), ("48", 1), ("50", 0)]),
+    (5384, [("12", 1), ("18", 0), ("24", 1), ("30", 0), ("36", 1), ("42", 0), ("48", 1)]),
+    (5386, [("36π", 0), ("45π", 1), ("60π", 1), ("100π", 0),
+            ("150π", 1), ("175π", 0), ("180π", 1)]),
+    # 5388 (retired): correct totals {13,14,15} are ground-truth from the
+    # explanation; the original distractors were grafted away, so the wrong
+    # options here are reconstructed as verifiably-invalid totals (no valid
+    # (n,p) with 4n+3p=48, n,p>=2 yields them).
+    (5388, [("11", 0), ("12", 0), ("13", 1), ("14", 1), ("15", 1), ("16", 0), ("17", 0)]),
+    (5389, [("-3", 0), ("0", 0), ("1", 1), ("2", 1), ("3", 1), ("6", 0), ("7", 0)]),
+]
+
+# Items whose grafted options cannot be reconstructed -> retire.
+_OPTION_GRAFT_RETIRES_2026_06_01 = [
+    (3863, "option-graft audit: princeton mcq_multi references a coordinate-system "
+           "diagram (triangle DEF) that is not attached as a stimulus; the original "
+           "options were grafted away and are unrecoverable without the figure."),
+]
+
+
+def _039_repair_option_graft_2026_06_01():
+    """Repair option-grafted ai_synthetic_v2 mcq_multi items by rewriting their
+    questionoption rows to the reconstructed-and-verified original sets, and
+    retire the one item whose options are unrecoverable.
+
+    Both DB passes mirror to the seed so a fresh-install user gets the corrected
+    state and seed_sync doesn't revert it. Idempotent: an item already carrying
+    the ``option_graft_repair`` provenance marker is skipped; retires skip rows
+    already retired.
+    """
+    db = _get_db()
+    import json as _json
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+
+    MIG_NAME = "039_repair_option_graft_2026_06_01"
+
+    def _exec(conn, raw_sql):
+        return conn.execute if raw_sql else conn.execute_sql
+
+    def _load_prov(ex, qid):
+        row = ex("SELECT status, provenance_json FROM question WHERE id=?",
+                 (qid,)).fetchone()
+        if row is None:
+            return None, None
+        status, prov_raw = row
+        try:
+            prov = _json.loads(prov_raw) if prov_raw else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        return status, prov
+
+    def _apply_repair(conn, qid, options, *, raw_sql=False):
+        ex = _exec(conn, raw_sql)
+        status, prov = _load_prov(ex, qid)
+        if prov is None:
+            return False  # row absent (e.g. fresh test DB)
+        if "option_graft_repair" in prov:
+            return False  # already repaired -> idempotent skip
+        # snapshot the (grafted) options we are about to replace
+        old = ex("SELECT option_label, option_text, is_correct FROM questionoption "
+                 "WHERE question_id=? ORDER BY option_label", (qid,)).fetchall()
+        ex("DELETE FROM questionoption WHERE question_id=?", (qid,))
+        for i, (text, is_correct) in enumerate(options):
+            ex("INSERT INTO questionoption (question_id, option_label, option_text, "
+               "is_correct) VALUES (?, ?, ?, ?)",
+               (qid, chr(ord("A") + i), text, int(is_correct)))
+        prov["option_graft_repair"] = {
+            "by_migration": MIG_NAME,
+            "grafted_options": [{"label": l, "text": t, "is_correct": c} for l, t, c in old],
+            "reconstructed_from": "provenance_json.judge_result + explanation",
+            "validated_by": "llm_proposal + hand_verification_against_explanation",
+        }
+        ex("UPDATE question SET provenance_json=? WHERE id=?",
+           (_json.dumps(prov), qid))
+        return True
+
+    def _apply_retire(conn, qid, reason, *, raw_sql=False):
+        ex = _exec(conn, raw_sql)
+        status, prov = _load_prov(ex, qid)
+        if prov is None or status == "retired":
+            return False
+        prov["retired_reason"] = reason
+        prov["retired_by_migration"] = MIG_NAME
+        ex("UPDATE question SET status='retired', provenance_json=? "
+           "WHERE id=? AND status != 'retired'", (_json.dumps(prov), qid))
+        return True
+
+    # ── User DB pass (Peewee) ────────────────────────────────────────
+    for qid, options in _OPTION_GRAFT_REPAIRS_2026_06_01:
+        _apply_repair(db, qid, options)
+    for qid, reason in _OPTION_GRAFT_RETIRES_2026_06_01:
+        _apply_retire(db, qid, reason)
+
+    # ── Seed DB pass (raw sqlite) ────────────────────────────────────
+    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            for qid, options in _OPTION_GRAFT_REPAIRS_2026_06_01:
+                _apply_repair(seed, qid, options, raw_sql=True)
+            for qid, reason in _OPTION_GRAFT_RETIRES_2026_06_01:
+                _apply_retire(seed, qid, reason, raw_sql=True)
+            seed.commit()
+        finally:
+            seed.close()
+
+
+def _040_retire_unrenderable_figure_2026_06_01():
+    """Retire the one LIVE item that genuinely requires a figure which cannot
+    be reconstructed. The 22 ai_synthetic svg_geometry items that previously
+    rendered as phantom captions are NOT retired — they now render from their
+    ``render_spec`` via ``services.figures.geometry`` (wired into the canonical
+    question-dict path in services/question_bank.py), so no data change is
+    needed for them.
+
+    q4252 (princeton mcq_multi) has no stimulus row at all and its prompt
+    depends on points A/B/C defined only by an absent figure; the original
+    options are also grafted/unrecoverable. Dual-writes seed + user DB,
+    idempotent.
+    """
+    db = _get_db()
+    import json as _json
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+
+    MIG_NAME = "040_retire_unrenderable_figure_2026_06_01"
+    RETIRES = [
+        (4252, "figure-render audit: prompt depends on a figure (points on "
+               "Circle Q) that was never attached as a stimulus and cannot be "
+               "reconstructed; item is unanswerable as stored."),
+    ]
+
+    def _retire(conn, qid, reason, raw_sql=False):
+        ex = conn.execute if raw_sql else conn.execute_sql
+        row = ex("SELECT status, provenance_json FROM question WHERE id=?",
+                 (qid,)).fetchone()
+        if row is None or row[0] == "retired":
+            return False
+        try:
+            prov = _json.loads(row[1]) if row[1] else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        prov["retired_reason"] = reason
+        prov["retired_by_migration"] = MIG_NAME
+        ex("UPDATE question SET status='retired', provenance_json=? "
+           "WHERE id=? AND status != 'retired'", (_json.dumps(prov), qid))
+        return True
+
+    for qid, reason in RETIRES:
+        _retire(db, qid, reason)
+    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            for qid, reason in RETIRES:
+                _retire(seed, qid, reason, raw_sql=True)
+            seed.commit()
+        finally:
+            seed.close()
+
+
+def _041_duplicate_group_id_2026_06_01():
+    """Add ``question.duplicate_group_id`` and populate it for confirmed
+    near-duplicate quant groups, and retire exact-duplicate extras.
+
+    Source: WS-C dedup analysis over the LLM-adjudicated labeled pairs
+    (data/dedup_eval/labeled_pairs_2026_05_18.csv). Near-dup groups share a
+    template (same setup, different numbers); the assembler must never place
+    two members of one group in a single mock. Exact dupes (identical prompt,
+    differ only in LaTeX/answer-mode) are retired, keeping the lowest qid.
+    RC stem-collision components were excluded as false positives (distinct
+    passages sharing a generic question stem).
+
+    Dual-writes seed + user DB. Idempotent: the ALTER is guarded by a
+    column-existence check; group/retire writes are natural upserts/guards.
+    """
+    db = _get_db()
+    import json as _json
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+
+    MIG_NAME = "041_duplicate_group_id_2026_06_01"
+
+    # group_id -> member qids (all kept live; never co-occur in one mock)
+    GROUPS = {
+        "dg_q_g3": [1657, 2224, 2228],   # isosceles right triangle hyp -> area
+        "dg_q_g5": [1619, 1625, 2200],   # age word problem (3x now, 2x in 12y)
+        "dg_q_g8": [1565, 2171],         # |2x-k|=m, sum of x
+        "dg_q_g10": [1551, 1558],        # |x+k|>=m, values of x
+        "dg_q_g11": [1656, 1661],        # similar triangles area ratio
+        "dg_q_g12": [2229, 2233],        # triangle side ordering from angles
+        "dg_q_g14": [2187, 2196],        # midpoint of AB given, find sum
+    }
+    # exact-content dupes: (keep, retire)
+    RETIRE_DUPES = [
+        (1554, 2166), (2122, 2128), (1612, 1622), (1657, 2232),
+    ]
+
+    def _column_exists(ex, table, col):
+        return any(r[1] == col for r in ex(f"PRAGMA table_info({table})").fetchall())
+
+    def _apply(conn, raw_sql=False):
+        ex = conn.execute if raw_sql else conn.execute_sql
+        if not _column_exists(ex, "question", "duplicate_group_id"):
+            ex("ALTER TABLE question ADD COLUMN duplicate_group_id TEXT DEFAULT ''")
+        # populate groups (only for rows that exist)
+        for gid, qids in GROUPS.items():
+            for qid in qids:
+                ex("UPDATE question SET duplicate_group_id=? WHERE id=?", (gid, qid))
+        # retire exact-dupe extras (keep the lower qid), with provenance
+        for keep, drop in RETIRE_DUPES:
+            row = ex("SELECT status, provenance_json FROM question WHERE id=?",
+                     (drop,)).fetchone()
+            if row is None or row[0] == "retired":
+                continue
+            try:
+                prov = _json.loads(row[1]) if row[1] else {}
+                if not isinstance(prov, dict):
+                    prov = {}
+            except (ValueError, TypeError):
+                prov = {}
+            prov["retired_reason"] = (
+                f"dedup audit: exact-content duplicate of q{keep} (identical "
+                f"prompt; differs only in LaTeX/answer format).")
+            prov["retired_by_migration"] = MIG_NAME
+            ex("UPDATE question SET status='retired', provenance_json=? "
+               "WHERE id=? AND status != 'retired'", (_json.dumps(prov), drop))
+
+    _apply(db)
+    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            _apply(seed, raw_sql=True)
+            seed.commit()
+        finally:
+            seed.close()
+
+
+def _042_canonical_qc_options_2026_06_01():
+    """Normalize Quantitative Comparison answer choices to the exact canonical
+    ETS text + order.
+
+    84 live QC items shipped the 4 choices in canonical ORDER but missing the
+    trailing period ("Quantity A is greater" vs "Quantity A is greater."). Since
+    order and the single correct flag are already canonical, this rewrites only
+    the option_text by position — no correctness change. Any QC item whose 4
+    options match the canonical set modulo whitespace/period/case is normalized
+    (self-heals future imports too). Dual-writes seed + user DB, idempotent.
+    """
+    db = _get_db()
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+
+    CANON = [
+        "Quantity A is greater.",
+        "Quantity B is greater.",
+        "The two quantities are equal.",
+        "The relationship cannot be determined from the information given.",
+    ]
+    canon_norm = [t.strip().rstrip(".").lower() for t in CANON]
+
+    def _apply(conn, raw_sql=False):
+        ex = conn.execute if raw_sql else conn.execute_sql
+        qc_ids = [r[0] for r in ex(
+            "SELECT id FROM question WHERE subtype='qc'").fetchall()]
+        for qid in qc_ids:
+            rows = ex("SELECT id, option_label, option_text FROM questionoption "
+                      "WHERE question_id=? ORDER BY option_label", (qid,)).fetchall()
+            if len(rows) != 4:
+                continue
+            norm = [r[2].strip().rstrip(".").lower() for r in rows]
+            if norm != canon_norm:
+                continue  # not a canonical-order QC set; leave for manual review
+            for (opt_id, _label, text), canon in zip(rows, CANON):
+                if text != canon:
+                    ex("UPDATE questionoption SET option_text=? WHERE id=?",
+                       (canon, opt_id))
+
+    _apply(db)
+    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            _apply(seed, raw_sql=True)
+            seed.commit()
+        finally:
+            seed.close()
+
+
+# ── 043: Remaining data-quality cleanup (WS-E, 2026-06-01) ──────────────
+#
+# Three independent fixes bundled into one migration:
+#
+#   1. Encoding — convert single-``$`` inline math to ``\(…\)``.
+#      The KaTeX renderer (widgets/math_view.py) only recognizes
+#      ``$$…$$`` / ``\(…\)`` / ``\[…\]`` — NOT bare ``$…$``. Explanations
+#      authored with single-dollar math render with literal ``$`` and raw
+#      LaTeX source. ``scripts/audit_encoding_issues.py`` flags these as
+#      ``unmatched_dollar``. We run ``services.sanitize.convert_single_dollar_math``
+#      — which converts ONLY balanced spans carrying a strong LaTeX
+#      signature and leaves all currency dollars ("$48", "$5 and $3")
+#      untouched — over the flagged field of each ``unmatched_dollar`` qid.
+#      The flagged (qid, field) pairs are re-detected at apply time from
+#      the live pool (the audit CSV is just the offline snapshot), so the
+#      migration self-targets even if the seed shifts.
+#
+#      The ``unescaped_html`` items (DI markdown tables, e.g. q2918) are
+#      deliberately NOT touched here — they need markdown→HTML table
+#      handling that is out of scope and riskier. Documented follow-up.
+#
+#   2. Kaplan stimulus reclassify — qids 4906/4907 (kaplan_2024 rc_single)
+#      carry ``stimulus.stimulus_type='graph'`` but the stimulus is the RC
+#      passage text (no figure). Reclassify the shared stimulus to
+#      'passage'. Cosmetic/taxonomy only.
+#
+#   3. Taxonomy backfill — DEFERRED. The audit's 137 items are not
+#      deterministically mappable (the 121 kaplan rows carry chapter /
+#      practice-set labels like 'algebra_practice_set' that span multiple
+#      canonical subtopics; the 16 missing-topic and 7 mismatch rows need
+#      per-item judgement). Run ``scripts/llm_judge_taxonomy.py`` as the
+#      follow-up — it is NOT replayed here to avoid shipping unreviewed
+#      LLM guesses.
+#
+# Dual-writes seed + user DB. Idempotent: ``convert_single_dollar_math``
+# is a no-op on already-converted text, and the stimulus reclassify guards
+# on the current type.
+
+# Kaplan RC stimuli mis-typed as 'graph' that are actually passage text.
+_KAPLAN_PASSAGE_STIMULI_2026_06_01 = (4906, 4907)
+
+
+def _043_data_quality_cleanup_2026_06_01():
+    """WS-E remaining data-quality cleanup: single-``$`` math conversion +
+    Kaplan stimulus reclassify. See the module-level comment block above.
+
+    Dual-writes the seed DB so a fresh-install user gets the corrected
+    content and ``seed_sync.reconcile`` (which treats prompt/explanation
+    and stimulus_type as seed-authored columns) doesn't revert it.
+    Idempotent.
+    """
+    db = _get_db()
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+    from services.sanitize import (
+        convert_single_dollar_math,
+        find_latex_encoding_issues,
+        ISSUE_UNMATCHED_DOLLAR,
+    )
+
+    def _exec(conn, raw_sql):
+        return conn.execute if raw_sql else conn.execute_sql
+
+    def _convert_unmatched_dollar(conn, *, raw_sql=False):
+        """Re-detect every live question whose prompt or explanation trips
+        the ``unmatched_dollar`` detector and rewrite that field through
+        ``convert_single_dollar_math``. Returns the count of rows changed."""
+        ex = _exec(conn, raw_sql)
+        rows = ex(
+            "SELECT id, prompt, explanation FROM question "
+            "WHERE status='live'"
+        ).fetchall()
+        n_changed = 0
+        for qid, prompt, explanation in rows:
+            for field, value in (("prompt", prompt),
+                                 ("explanation", explanation)):
+                if not value:
+                    continue
+                issues = {i for i, _ in find_latex_encoding_issues(value)}
+                if ISSUE_UNMATCHED_DOLLAR not in issues:
+                    continue
+                new_value = convert_single_dollar_math(value)
+                if new_value == value:
+                    continue  # nothing convertible (currency-only / pure text)
+                ex(
+                    f"UPDATE question SET {field}=? WHERE id=?",
+                    (new_value, qid),
+                )
+                n_changed += 1
+        return n_changed
+
+    def _reclassify_kaplan_stimuli(conn, *, raw_sql=False):
+        """Flip the shared stimulus of the mis-typed Kaplan RC items from
+        'graph' to 'passage'. Guards on the current type for idempotency."""
+        ex = _exec(conn, raw_sql)
+        for qid in _KAPLAN_PASSAGE_STIMULI_2026_06_01:
+            row = ex(
+                "SELECT stimulus_id FROM question WHERE id=?", (qid,)
+            ).fetchone()
+            if row is None or row[0] is None:
+                continue
+            ex(
+                "UPDATE stimulus SET stimulus_type='passage' "
+                "WHERE id=? AND stimulus_type='graph'",
+                (row[0],),
+            )
+
+    # ── User DB pass (Peewee) ────────────────────────────────────────
+    _convert_unmatched_dollar(db)
+    _reclassify_kaplan_stimuli(db)
+
+    # ── Seed DB pass (raw sqlite) ────────────────────────────────────
+    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            _convert_unmatched_dollar(seed, raw_sql=True)
+            _reclassify_kaplan_stimuli(seed, raw_sql=True)
+            seed.commit()
+        finally:
+            seed.close()
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -2575,6 +3009,16 @@ MIGRATIONS = [
      _037_quant_curated_audit_2026_05_26),
     ("038_targeted_issue_fixes_2026_05_27",
      _038_targeted_issue_fixes_2026_05_27),
+    ("039_repair_option_graft_2026_06_01",
+     _039_repair_option_graft_2026_06_01),
+    ("040_retire_unrenderable_figure_2026_06_01",
+     _040_retire_unrenderable_figure_2026_06_01),
+    ("041_duplicate_group_id_2026_06_01",
+     _041_duplicate_group_id_2026_06_01),
+    ("042_canonical_qc_options_2026_06_01",
+     _042_canonical_qc_options_2026_06_01),
+    ("043_data_quality_cleanup_2026_06_01",
+     _043_data_quality_cleanup_2026_06_01),
 ]
 
 

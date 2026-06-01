@@ -16,6 +16,48 @@ from services.log import get_logger
 logger = get_logger("question_bank")
 
 
+# Cache of rendered geometry figures, keyed by the render_spec JSON string, so
+# re-fetching a question (review, report, re-render) doesn't re-run matplotlib.
+_FIGURE_HTML_CACHE = {}
+
+
+def _resolve_stimulus_content(content, render_spec):
+    """Return the stimulus HTML the user should see.
+
+    Historically the renderer showed ``stimulus.content`` only and ignored
+    ``render_spec``, so geometry items whose figure lived in ``render_spec``
+    (and whose ``content`` was a bare "Figure not drawn to scale." caption)
+    rendered as a phantom — a caption with no figure. This resolver closes that
+    gap at the single canonical question-dict choke point: when ``content``
+    carries no inline figure (<img>/<table>/<svg>) but ``render_spec`` describes
+    a supported geometry, the figure is rendered from the spec and returned.
+    Any failure falls back to the original content (never raises into the UI).
+    """
+    text = content or ""
+    low = text.lower()
+    if "<img" in low or "<table" in low or "<svg" in low:
+        return text  # already carries a figure/table
+    if not render_spec:
+        return text
+    cached = _FIGURE_HTML_CACHE.get(render_spec)
+    if cached is not None:
+        return cached or text
+    html = ""
+    try:
+        import json as _json
+        from services.figures.geometry import render_geometry_html, SUPPORTED_KINDS
+        spec = _json.loads(render_spec)
+        inner = spec.get("spec") if isinstance(spec, dict) else None
+        kind = inner.get("kind") if isinstance(inner, dict) else None
+        if kind in SUPPORTED_KINDS:
+            html = render_geometry_html(inner)
+    except Exception:
+        logger.exception("geometry render from render_spec failed")
+        html = ""
+    _FIGURE_HTML_CACHE[render_spec] = html
+    return html or text
+
+
 # Subtypes whose questions are grouped into atomic clusters sharing a
 # Stimulus. When the assembler picks any one of these, it must also pull
 # every sibling under the same stimulus_id so the user always sees the
@@ -412,23 +454,20 @@ def get_recently_seen_ids(days_back: int = 14, user_id: str = "local"):
 def _cluster_group(q):
     """Return the cluster key for a question.
 
-    Cluster subtypes (RC / DI) group under their ``stimulus_id``; everything
-    else is its own singleton cluster keyed by question id so the assembler
-    can treat every selection uniformly.
+    ANY question that has a ``stimulus_id`` clusters under that stimulus: a
+    shared stimulus (RC passage or DI chart) is rendered once and all its
+    questions must stay together and consecutive, REGARDLESS of their
+    individual subtypes. This matters for Data Interpretation sets, whose
+    questions carry their real subtypes (``mcq_single`` / ``numeric_entry`` /
+    ``mcq_multi``) while sharing one chart/table stimulus — keying by subtype
+    (the old behaviour) scattered them across the section. A stimulus unique to
+    one question (e.g. a geometry figure) simply forms a one-item cluster.
 
-    Verbal RC subtypes (rc_single, rc_multi, rc_select_passage) that share
-    a stimulus are collapsed into a single cluster so the full passage
-    moves as one atomic unit; DI and other cluster subtypes remain
-    subtype-scoped.
+    Questions with no stimulus are singletons keyed by id.
     """
-    subtype = getattr(q, "subtype", None)
     stim_id = getattr(q, "stimulus_id", None)
-    if subtype in CLUSTER_SUBTYPES and stim_id:
-        if subtype in CLUSTERED_VERBAL_SUBTYPES:
-            # Collapse rc_single / rc_multi / rc_select_passage under one
-            # cluster key so the whole passage comes together.
-            return ("stim", stim_id, "rc")
-        return ("stim", stim_id, subtype)
+    if stim_id:
+        return ("stim", stim_id)
     return ("q", q.id)
 
 
@@ -466,23 +505,21 @@ def _cluster_aware_shuffle(qids):
     )
     by_id = {r.id: r for r in rows}
 
-    # Build adjacent-run blocks. A block is a maximal run of qids whose
-    # ``_cluster_group`` key matches its predecessor.
-    blocks = []
-    current_block = []
-    current_key = None
+    # Group qids into blocks by cluster key. Grouping is GLOBAL (not just
+    # adjacent runs) so all siblings of a stimulus join one block even if the
+    # selection order left them non-adjacent — a DI chart's questions can never
+    # be split. Block order follows first appearance; within-block order is the
+    # selected order; ``random.shuffle`` then reorders the BLOCKS only.
+    blocks_by_key = {}
+    order = []
     for qid in qids:
         q = by_id.get(qid)
         key = _cluster_group(q) if q is not None else ("q", qid)
-        if current_block and key == current_key:
-            current_block.append(qid)
-        else:
-            if current_block:
-                blocks.append(current_block)
-            current_block = [qid]
-            current_key = key
-    if current_block:
-        blocks.append(current_block)
+        if key not in blocks_by_key:
+            blocks_by_key[key] = []
+            order.append(key)
+        blocks_by_key[key].append(qid)
+    blocks = [blocks_by_key[k] for k in order]
 
     random.shuffle(blocks)
 
@@ -902,6 +939,13 @@ class QuestionBankService:
             if di_cluster:
                 selected_ids.extend(di_cluster)
                 exclude.update(di_cluster)
+            # A DI set enters a Quant section ONLY through the controlled
+            # selection above. Now that _cluster_group keys DI charts by
+            # stimulus, the generic subtype fill would otherwise pull a whole
+            # SECOND chart atomically and over-stack the section, so exclude
+            # every (other) DI-cluster member from the fill.
+            exclude.update(self._di_member_ids())
+            if di_cluster:
                 # The DI cluster joins items by stimulus_id, not subtype.
                 # In the live pool only ~7 rows are tagged
                 # ``subtype='data_interp'`` while a typical 3-item DI
@@ -1293,6 +1337,22 @@ class QuestionBankService:
                 running_sum += t
         return targets
 
+    def _groups_for(self, qids):
+        """Return the set of non-empty ``duplicate_group_id`` values held by
+        the given qids. Used to seed within-call group dedup so a group member
+        already excluded (other section / previous mock) blocks its siblings.
+        Fails open (empty set) so assembly never crashes on schema drift."""
+        if not qids:
+            return set()
+        try:
+            rows = (Question
+                    .select(Question.duplicate_group_id)
+                    .where(Question.id.in_(list(qids)) &
+                           (Question.duplicate_group_id != "")))
+            return {r.duplicate_group_id for r in rows}
+        except Exception:
+            return set()
+
     def _take_cluster_aware(self, measure, subtype, target, difficulty_band,
                              exclude, target_theta=None, routing_tier=None):
         """Pick up to ``target`` question IDs, pulling full clusters atomically.
@@ -1356,7 +1416,7 @@ class QuestionBankService:
 
         query = (Question
                  .select(Question.id, Question.subtype, Question.stimulus,
-                         Question.difficulty_target)
+                         Question.difficulty_target, Question.duplicate_group_id)
                  .where((Question.measure == measure) &
                         (Question.status == "live")))
         if subtype is not None:
@@ -1376,6 +1436,23 @@ class QuestionBankService:
         candidates = list(query)
         if not candidates:
             return []
+
+        # Duplicate-group dedup: never let two items sharing a non-empty
+        # duplicate_group_id co-occur — neither within this call nor with items
+        # already excluded (other sections / previous mocks). seen_groups is
+        # seeded from the groups the ``exclude`` set already represents, so a
+        # group member picked earlier blocks its siblings here too. Items with
+        # an empty group_id (the vast majority, incl. all verbal) are untouched.
+        seen_groups = self._groups_for(exclude)
+        deduped = []
+        for q in candidates:
+            g = getattr(q, "duplicate_group_id", "") or ""
+            if g:
+                if g in seen_groups:
+                    continue
+                seen_groups.add(g)
+            deduped.append(q)
+        candidates = deduped
 
         # Group by cluster key
         clusters = {}
@@ -1437,22 +1514,15 @@ class QuestionBankService:
             # FULL sibling set so we never ship a partial cluster.
             if key[0] == "stim":
                 stim_id = key[1]
-                subtype_key = key[2]
+                # Full cluster = every live question sharing this stimulus,
+                # regardless of subtype (RC passage children mix rc_single/
+                # rc_multi; DI charts mix mcq_single/numeric_entry/mcq_multi).
+                # The shared stimulus renders once, so the whole set must move
+                # together or it's a split cluster.
                 sibling_query = Question.select(Question.id).where(
                     (Question.stimulus == stim_id) &
                     (Question.status == "live")
                 )
-                if subtype_key == "rc":
-                    # RC passages mix rc_single + rc_multi children; the
-                    # whole passage-cluster must move together or the reader
-                    # loses context.
-                    sibling_query = sibling_query.where(
-                        Question.subtype.in_(list(CLUSTERED_VERBAL_SUBTYPES))
-                    )
-                else:
-                    sibling_query = sibling_query.where(
-                        Question.subtype == subtype_key
-                    )
                 full_siblings = [q.id for q in sibling_query]
                 # Skip cluster entirely if any sibling is excluded — we
                 # refuse to split it.
@@ -1676,21 +1746,13 @@ class QuestionBankService:
                 continue
             seen_clusters.add(key)
 
-            # Pull the full live sibling set for this cluster.
+            # Pull the full live sibling set for this cluster (every question
+            # sharing the stimulus, any subtype).
             stim_id = key[1]
-            subtype_key = key[2]
             sibling_query = Question.select(Question.id).where(
                 (Question.stimulus == stim_id) &
                 (Question.status == "live")
             )
-            if subtype_key == "rc":
-                sibling_query = sibling_query.where(
-                    Question.subtype.in_(list(CLUSTERED_VERBAL_SUBTYPES))
-                )
-            else:
-                sibling_query = sibling_query.where(
-                    Question.subtype == subtype_key
-                )
             clause = _exclude_synthetic_clause()
             if clause is not None:
                 sibling_query = sibling_query.where(clause)
@@ -1739,6 +1801,36 @@ class QuestionBankService:
         if clause is not None:
             query = query.where(clause)
         return [q.id for q in query]
+
+    def _di_member_ids(self):
+        """All live quant qids belonging to a multi-question DI stimulus
+        (graph/table/chart shared by >=2 live questions).
+
+        Such questions are pulled as a complete cluster only through
+        ``_select_di_cluster``; the generic subtype fill must exclude them so
+        it can't drag in a second chart and over-stack the section. Single-
+        question figure stimuli (geometry) have only one child and are NOT
+        returned. Fails open (empty set) so assembly never crashes."""
+        try:
+            stim_rows = (Question
+                         .select(Question.stimulus_id)
+                         .join(Stimulus, on=(Stimulus.id == Question.stimulus_id))
+                         .where((Question.measure == "quant") &
+                                (Question.status == "live") &
+                                (Stimulus.stimulus_type.in_(list(DI_STIMULUS_TYPES))))
+                         .group_by(Question.stimulus_id)
+                         .having(fn.COUNT(Question.id) >= 2))
+            stim_ids = [r.stimulus_id for r in stim_rows]
+            if not stim_ids:
+                return set()
+            rows = (Question
+                    .select(Question.id)
+                    .where((Question.stimulus_id.in_(stim_ids)) &
+                           (Question.status == "live")))
+            return {r.id for r in rows}
+        except Exception:
+            logger.debug("_di_member_ids failed; returning empty set", exc_info=True)
+            return set()
 
     def _select_di_cluster(self, difficulty_band, exclude_ids,
                             exclude_stimulus_ids=None):
@@ -2186,7 +2278,9 @@ class QuestionBankService:
             "stimulus": {
                 "type": stimulus.stimulus_type,
                 "title": stimulus.title,
-                "content": stimulus.content,
+                "content": _resolve_stimulus_content(
+                    stimulus.content, stimulus.render_spec),
+                "render_spec": stimulus.render_spec,
             } if stimulus else None,
             "options": [
                 {

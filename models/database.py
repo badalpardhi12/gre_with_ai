@@ -97,7 +97,11 @@ class Question(BaseModel):
     # places two members of the same non-empty group in one mock (services/
     # question_bank.py:_take_cluster_aware). Seed-authored content column,
     # reconciled from the seed by services/seed_sync.py.
-    duplicate_group_id = CharField(default="", index=True)
+    # NB: NOT index=True — the index is created by migration 041 AFTER the
+    # column exists. Declaring index=True here would make create_tables() (which
+    # runs before migrations on launch) build the index on a not-yet-existing
+    # column on upgraded DBs, which corrupts the file.
+    duplicate_group_id = CharField(default="")
     created_at = DateTimeField(default=datetime.now)
     updated_at = DateTimeField(default=datetime.now)
 

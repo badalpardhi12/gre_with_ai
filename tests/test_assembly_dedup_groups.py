@@ -37,6 +37,30 @@ def test_041_idempotent_column_add(temp_db):
     m._041_duplicate_group_id_2026_06_01()
 
 
+def test_duplicate_group_id_not_model_indexed():
+    """Regression guard for the 'database disk image is malformed' bug.
+
+    duplicate_group_id is added to an existing table by migration 041, so its
+    index MUST be created by the migration (after the column exists). If the
+    model declared index=True, create_tables() — which runs BEFORE migrations
+    on launch — would build the index on a not-yet-existing column on upgraded
+    user DBs and corrupt the file on first restart after pull.
+    """
+    from models.database import Question
+    field = Question._meta.fields["duplicate_group_id"]
+    assert not getattr(field, "index", False), (
+        "duplicate_group_id must NOT be index=True; migration 041 owns the index")
+
+
+def test_041_creates_index_after_column(temp_db):
+    """Migration 041 must leave the duplicate_group_id index in place."""
+    from models.database import db
+    idx = [r[0] for r in db.execute_sql(
+        "SELECT name FROM sqlite_master WHERE type='index' "
+        "AND name='question_duplicate_group_id'").fetchall()]
+    assert idx == ["question_duplicate_group_id"]
+
+
 def test_041_populates_groups_and_retires_dupes(temp_db, monkeypatch):
     from models.database import Question
     import models.migrations as m

@@ -2735,6 +2735,12 @@ def _041_duplicate_group_id_2026_06_01():
 
     def _apply(conn, raw_sql=False):
         ex = conn.execute if raw_sql else conn.execute_sql
+        # Heal any phantom index left by an earlier build where the model
+        # declared index=True: create_tables() (runs before migrations on
+        # launch) may have indexed the column before it existed, which corrupts
+        # the subsequent ALTER+UPDATE. Drop it first, add the column, then
+        # (re)create the index cleanly once the column is guaranteed present.
+        ex("DROP INDEX IF EXISTS question_duplicate_group_id")
         if not _column_exists(ex, "question", "duplicate_group_id"):
             ex("ALTER TABLE question ADD COLUMN duplicate_group_id TEXT DEFAULT ''")
         # populate groups (only for rows that exist)
@@ -2759,6 +2765,9 @@ def _041_duplicate_group_id_2026_06_01():
             prov["retired_by_migration"] = MIG_NAME
             ex("UPDATE question SET status='retired', provenance_json=? "
                "WHERE id=? AND status != 'retired'", (_json.dumps(prov), drop))
+        # Create the index now that the column is guaranteed to exist.
+        ex("CREATE INDEX IF NOT EXISTS question_duplicate_group_id "
+           "ON question (duplicate_group_id)")
 
     _apply(db)
     if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:

@@ -78,6 +78,13 @@ VERBAL_SUBTYPES = {"rc_single", "rc_multi", "se", "tc", "rc_select_passage"}
 # confirmed during review (kept explicit so nothing is silently excused).
 SHARED_OPTION_SET_ALLOWLIST = set()
 
+# Items the provenance-divergence signal flags but which are VERIFIED correct
+# (the options match the prompt + explanation). q5394's ratio options ("1:2"…)
+# parse into small integers that don't appear in its count-based judge prose,
+# so the numeric-overlap heuristic mis-fires; it is the native owner of those
+# ratio options (q5374 was the graft victim, repaired by migration 039).
+VERIFIED_NATIVE_QIDS = {5394}
+
 _NUM_RE = re.compile(r"-?\d+(?:\.\d+)?(?:/\d+)?|−?\d+")
 
 
@@ -159,6 +166,8 @@ def detect_distinctive_shared_sets(questions):
             continue
         if q["subtype"] in VERBAL_SUBTYPES:
             continue  # verbal text-option dupes are a WS-C dedup concern
+        if q["id"] in VERIFIED_NATIVE_QIDS:
+            continue
         texts = [t for _, t, _ in q["options"]]
         sig = _option_signature(texts)
         if sig in SHARED_OPTION_SET_ALLOWLIST:
@@ -190,6 +199,8 @@ def detect_provenance_divergence(questions, min_overlap=0.30):
     findings = {}
     for q in questions.values():
         if q["subtype"] != "mcq_multi":
+            continue
+        if q["id"] in VERIFIED_NATIVE_QIDS:
             continue
         opts = q["options"]
         if not opts or len(opts) < 2:

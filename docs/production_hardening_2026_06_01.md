@@ -75,3 +75,45 @@ live=2,586; retired=1,929; draft=761. Sources (live): manhattan 1,156 / ai_gener
 princeton 362 / ai_synthetic 180 / kaplan 121 / ai_synthetic_v2 46. Known debt: taxonomy
 137 (121 Kaplan), encoding 37 (34 Manhattan), structural-validator 74, answer_key_drift
 10 retires.
+
+---
+
+## Outcome (shipped — migrations 039–043)
+
+- **WS-A** (039): repaired 12 option-grafted `mcq_multi` items from provenance, retired 1
+  unrecoverable. Live grafts: 0.
+- **WS-B** (040 + renderer): `render_spec` geometry now renders via
+  `services/figures/geometry.py`, wired into `question_bank.get_question`. Live phantom
+  figures: 0.
+- **WS-C** (041): `duplicate_group_id` + assembly group-dedup + cross-mock window N=3;
+  retired 4 exact dupes. In-mock duplicate co-occurrence: 0 over 40 trials.
+- **WS-D** (042): 84 QC items normalized to canonical ETS text. Shape violations: 0.
+- **WS-E** (043): 10 explanations' inline-`$` math converted to `\(…\)`; Kaplan stimulus
+  reclassified. Taxonomy backfill DEFERRED (run `scripts/llm_judge_taxonomy.py`).
+- **WS-F**: `scripts/run_all_audits.py` aggregate gate + `tests/test_production_gate.py`.
+
+## Pipeline hazard — DO NOT reintroduce (root cause of the WS-A graft)
+
+The option-graft corruption came from mirroring synthetic content into the seed in **two
+passes** (commit `0628858`): `questionoption`/`numericanswer`/`stimulus` rows were copied in
+one pass and the `question` rows re-keyed in another, so `questionoption.question_id`
+pointed at the wrong (neighboring) stem. **Any future seed mirroring MUST copy
+`question` + `questionoption` + `numericanswer` + `stimulus` atomically under a single id
+map (one transaction), never option-rows-first / questions-later.** The aggregate gate
+(`scripts/run_all_audits.py`) and `services/seed_sync.py` invariants are the backstop, but
+the atomic-mirror discipline is the real prevention.
+
+## Documented follow-ups (not shipped)
+
+- Taxonomy backfill: 137 live items (121 Kaplan carry chapter/practice-set labels spanning
+  multiple canonical subtopics). Run `venv/bin/python scripts/llm_judge_taxonomy.py`
+  (derives `question_type` deterministically, LLM only for topic/subtopic against the
+  taxonomy allowlist, dual-writes both DBs). Internal routing metadata only — no
+  per-item correctness impact.
+- Encoding: 16 `unescaped_html` items are markdown tables in DI prompts; need a
+  markdown→HTML table pass (left as-is to avoid risky transforms). Remaining
+  `unmatched_dollar` are inert literal currency `$`, not a render bug.
+- Pre-existing, unrelated test failure: `tests/test_minhash_dedup.py::
+  test_held_out_detection_f1_at_persisted_threshold` (ML LSH F1 threshold over dedup eval
+  data) — fails identically on `main`; not touched by this work.
+

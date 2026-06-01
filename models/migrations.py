@@ -2508,6 +2508,136 @@ def _038_targeted_issue_fixes_2026_05_27():
             seed.close()
 
 
+# ── Option-graft repair (WS-A, 2026-06-01) ──────────────────────────────
+# ai_synthetic_v2 mcq_multi items whose questionoption rows were grafted from
+# a neighboring question during a two-pass seed mirror (commit 0628858). The
+# stems/explanations/provenance are internally consistent, so the ORIGINAL
+# option set + correctness is recoverable. Each correct set below is the set the
+# item's OWN explanation declares correct (ground truth); reconstruction was
+# proposed by the project LLM (scripts/reconstruct_grafted_options.py) and then
+# verified by hand against each explanation. GitHub issues #36 (5382), #37
+# (5374), #38 (5384), #41 (5378); the rest surfaced by scripts/audit_option_graft.py.
+# Options are (text, is_correct) in display order; labels A.. are assigned in order.
+_OPTION_GRAFT_REPAIRS_2026_06_01 = [
+    (5374, [("1/5", 1), ("1/4", 0), ("3/8", 0), ("2/5", 1), ("7/10", 1), ("5/6", 1)]),
+    (5375, [("S is divisible by 3", 1), ("S is divisible by 4", 0),
+            ("S is divisible by 6", 1), ("S is divisible by 12", 0),
+            ("S/3 is even", 1), ("S + 6 is divisible by 6", 1)]),
+    (5376, [("12", 1), ("18", 0), ("24", 1), ("30", 0), ("36", 1), ("48", 1)]),
+    (5377, [("10", 0), ("14", 0), ("15", 1), ("17", 1), ("19", 1), ("20", 0), ("21", 0)]),
+    (5378, [("1", 1), ("2", 1), ("5", 1), ("8", 1), ("9", 0), ("11", 0), ("14", 0)]),
+    (5380, [("1/36", 1), ("1/12", 1), ("1/5", 0), ("5/18", 1), ("7/24", 0),
+            ("11/36", 1), ("7/12", 1)]),
+    (5381, [("4", 0), ("7", 1), ("9", 1), ("10", 1), ("13", 1), ("17", 0), ("20", 0)]),
+    (5382, [("12", 1), ("18", 0), ("24", 1), ("30", 0), ("36", 1), ("48", 1), ("50", 0)]),
+    (5384, [("12", 1), ("18", 0), ("24", 1), ("30", 0), ("36", 1), ("42", 0), ("48", 1)]),
+    (5386, [("36π", 0), ("45π", 1), ("60π", 1), ("100π", 0),
+            ("150π", 1), ("175π", 0), ("180π", 1)]),
+    # 5388 (retired): correct totals {13,14,15} are ground-truth from the
+    # explanation; the original distractors were grafted away, so the wrong
+    # options here are reconstructed as verifiably-invalid totals (no valid
+    # (n,p) with 4n+3p=48, n,p>=2 yields them).
+    (5388, [("11", 0), ("12", 0), ("13", 1), ("14", 1), ("15", 1), ("16", 0), ("17", 0)]),
+    (5389, [("-3", 0), ("0", 0), ("1", 1), ("2", 1), ("3", 1), ("6", 0), ("7", 0)]),
+]
+
+# Items whose grafted options cannot be reconstructed -> retire.
+_OPTION_GRAFT_RETIRES_2026_06_01 = [
+    (3863, "option-graft audit: princeton mcq_multi references a coordinate-system "
+           "diagram (triangle DEF) that is not attached as a stimulus; the original "
+           "options were grafted away and are unrecoverable without the figure."),
+]
+
+
+def _039_repair_option_graft_2026_06_01():
+    """Repair option-grafted ai_synthetic_v2 mcq_multi items by rewriting their
+    questionoption rows to the reconstructed-and-verified original sets, and
+    retire the one item whose options are unrecoverable.
+
+    Both DB passes mirror to the seed so a fresh-install user gets the corrected
+    state and seed_sync doesn't revert it. Idempotent: an item already carrying
+    the ``option_graft_repair`` provenance marker is skipped; retires skip rows
+    already retired.
+    """
+    db = _get_db()
+    import json as _json
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+
+    MIG_NAME = "039_repair_option_graft_2026_06_01"
+
+    def _exec(conn, raw_sql):
+        return conn.execute if raw_sql else conn.execute_sql
+
+    def _load_prov(ex, qid):
+        row = ex("SELECT status, provenance_json FROM question WHERE id=?",
+                 (qid,)).fetchone()
+        if row is None:
+            return None, None
+        status, prov_raw = row
+        try:
+            prov = _json.loads(prov_raw) if prov_raw else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        return status, prov
+
+    def _apply_repair(conn, qid, options, *, raw_sql=False):
+        ex = _exec(conn, raw_sql)
+        status, prov = _load_prov(ex, qid)
+        if prov is None:
+            return False  # row absent (e.g. fresh test DB)
+        if "option_graft_repair" in prov:
+            return False  # already repaired -> idempotent skip
+        # snapshot the (grafted) options we are about to replace
+        old = ex("SELECT option_label, option_text, is_correct FROM questionoption "
+                 "WHERE question_id=? ORDER BY option_label", (qid,)).fetchall()
+        ex("DELETE FROM questionoption WHERE question_id=?", (qid,))
+        for i, (text, is_correct) in enumerate(options):
+            ex("INSERT INTO questionoption (question_id, option_label, option_text, "
+               "is_correct) VALUES (?, ?, ?, ?)",
+               (qid, chr(ord("A") + i), text, int(is_correct)))
+        prov["option_graft_repair"] = {
+            "by_migration": MIG_NAME,
+            "grafted_options": [{"label": l, "text": t, "is_correct": c} for l, t, c in old],
+            "reconstructed_from": "provenance_json.judge_result + explanation",
+            "validated_by": "llm_proposal + hand_verification_against_explanation",
+        }
+        ex("UPDATE question SET provenance_json=? WHERE id=?",
+           (_json.dumps(prov), qid))
+        return True
+
+    def _apply_retire(conn, qid, reason, *, raw_sql=False):
+        ex = _exec(conn, raw_sql)
+        status, prov = _load_prov(ex, qid)
+        if prov is None or status == "retired":
+            return False
+        prov["retired_reason"] = reason
+        prov["retired_by_migration"] = MIG_NAME
+        ex("UPDATE question SET status='retired', provenance_json=? "
+           "WHERE id=? AND status != 'retired'", (_json.dumps(prov), qid))
+        return True
+
+    # ── User DB pass (Peewee) ────────────────────────────────────────
+    for qid, options in _OPTION_GRAFT_REPAIRS_2026_06_01:
+        _apply_repair(db, qid, options)
+    for qid, reason in _OPTION_GRAFT_RETIRES_2026_06_01:
+        _apply_retire(db, qid, reason)
+
+    # ── Seed DB pass (raw sqlite) ────────────────────────────────────
+    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            for qid, options in _OPTION_GRAFT_REPAIRS_2026_06_01:
+                _apply_repair(seed, qid, options, raw_sql=True)
+            for qid, reason in _OPTION_GRAFT_RETIRES_2026_06_01:
+                _apply_retire(seed, qid, reason, raw_sql=True)
+            seed.commit()
+        finally:
+            seed.close()
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -2575,6 +2705,8 @@ MIGRATIONS = [
      _037_quant_curated_audit_2026_05_26),
     ("038_targeted_issue_fixes_2026_05_27",
      _038_targeted_issue_fixes_2026_05_27),
+    ("039_repair_option_graft_2026_06_01",
+     _039_repair_option_graft_2026_06_01),
 ]
 
 

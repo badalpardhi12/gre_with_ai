@@ -2770,6 +2770,56 @@ def _041_duplicate_group_id_2026_06_01():
             seed.close()
 
 
+def _042_canonical_qc_options_2026_06_01():
+    """Normalize Quantitative Comparison answer choices to the exact canonical
+    ETS text + order.
+
+    84 live QC items shipped the 4 choices in canonical ORDER but missing the
+    trailing period ("Quantity A is greater" vs "Quantity A is greater."). Since
+    order and the single correct flag are already canonical, this rewrites only
+    the option_text by position — no correctness change. Any QC item whose 4
+    options match the canonical set modulo whitespace/period/case is normalized
+    (self-heals future imports too). Dual-writes seed + user DB, idempotent.
+    """
+    db = _get_db()
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+
+    CANON = [
+        "Quantity A is greater.",
+        "Quantity B is greater.",
+        "The two quantities are equal.",
+        "The relationship cannot be determined from the information given.",
+    ]
+    canon_norm = [t.strip().rstrip(".").lower() for t in CANON]
+
+    def _apply(conn, raw_sql=False):
+        ex = conn.execute if raw_sql else conn.execute_sql
+        qc_ids = [r[0] for r in ex(
+            "SELECT id FROM question WHERE subtype='qc'").fetchall()]
+        for qid in qc_ids:
+            rows = ex("SELECT id, option_label, option_text FROM questionoption "
+                      "WHERE question_id=? ORDER BY option_label", (qid,)).fetchall()
+            if len(rows) != 4:
+                continue
+            norm = [r[2].strip().rstrip(".").lower() for r in rows]
+            if norm != canon_norm:
+                continue  # not a canonical-order QC set; leave for manual review
+            for (opt_id, _label, text), canon in zip(rows, CANON):
+                if text != canon:
+                    ex("UPDATE questionoption SET option_text=? WHERE id=?",
+                       (canon, opt_id))
+
+    _apply(db)
+    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            _apply(seed, raw_sql=True)
+            seed.commit()
+        finally:
+            seed.close()
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -2843,6 +2893,8 @@ MIGRATIONS = [
      _040_retire_unrenderable_figure_2026_06_01),
     ("041_duplicate_group_id_2026_06_01",
      _041_duplicate_group_id_2026_06_01),
+    ("042_canonical_qc_options_2026_06_01",
+     _042_canonical_qc_options_2026_06_01),
 ]
 
 

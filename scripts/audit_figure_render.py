@@ -113,11 +113,22 @@ def classify(row):
 
     if spec:
         asset = spec.get("asset_path")
-        has_geometry = bool(spec.get("spec")) or spec.get("kind") == "svg_geometry"
+        inner = spec.get("spec") if isinstance(spec, dict) else None
+        kind = inner.get("kind") if isinstance(inner, dict) else None
+        # As of WS-B the renderer reconstructs supported geometry kinds from
+        # render_spec via services.figures.geometry (wired into get_question),
+        # so these now render even without an inline <img> or a resolvable asset.
+        try:
+            from services.figures.geometry import SUPPORTED_KINDS
+        except Exception:
+            SUPPORTED_KINDS = {"triangle", "circle", "coordinate", "polygon"}
+        if kind in SUPPORTED_KINDS:
+            return ("RENDERS", dict(via="render_spec_geometry", kind=kind))
+        has_geometry = bool(inner) or spec.get("kind") == "svg_geometry"
         if _resolve_asset(asset):
             return ("PHANTOM_SPEC_WIRED", dict(asset=asset, resolvable=True))
         if has_geometry:
-            # reconstructable from spec even though asset is missing
+            # structured but not a currently-supported kind
             return ("PHANTOM_SPEC_WIRED", dict(asset=asset, resolvable=False,
                                                reconstructable=True,
                                                geometry_kind=spec.get("geometry_kind")))

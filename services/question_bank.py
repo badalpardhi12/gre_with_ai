@@ -16,6 +16,48 @@ from services.log import get_logger
 logger = get_logger("question_bank")
 
 
+# Cache of rendered geometry figures, keyed by the render_spec JSON string, so
+# re-fetching a question (review, report, re-render) doesn't re-run matplotlib.
+_FIGURE_HTML_CACHE = {}
+
+
+def _resolve_stimulus_content(content, render_spec):
+    """Return the stimulus HTML the user should see.
+
+    Historically the renderer showed ``stimulus.content`` only and ignored
+    ``render_spec``, so geometry items whose figure lived in ``render_spec``
+    (and whose ``content`` was a bare "Figure not drawn to scale." caption)
+    rendered as a phantom — a caption with no figure. This resolver closes that
+    gap at the single canonical question-dict choke point: when ``content``
+    carries no inline figure (<img>/<table>/<svg>) but ``render_spec`` describes
+    a supported geometry, the figure is rendered from the spec and returned.
+    Any failure falls back to the original content (never raises into the UI).
+    """
+    text = content or ""
+    low = text.lower()
+    if "<img" in low or "<table" in low or "<svg" in low:
+        return text  # already carries a figure/table
+    if not render_spec:
+        return text
+    cached = _FIGURE_HTML_CACHE.get(render_spec)
+    if cached is not None:
+        return cached or text
+    html = ""
+    try:
+        import json as _json
+        from services.figures.geometry import render_geometry_html, SUPPORTED_KINDS
+        spec = _json.loads(render_spec)
+        inner = spec.get("spec") if isinstance(spec, dict) else None
+        kind = inner.get("kind") if isinstance(inner, dict) else None
+        if kind in SUPPORTED_KINDS:
+            html = render_geometry_html(inner)
+    except Exception:
+        logger.exception("geometry render from render_spec failed")
+        html = ""
+    _FIGURE_HTML_CACHE[render_spec] = html
+    return html or text
+
+
 # Subtypes whose questions are grouped into atomic clusters sharing a
 # Stimulus. When the assembler picks any one of these, it must also pull
 # every sibling under the same stimulus_id so the user always sees the
@@ -2186,7 +2228,9 @@ class QuestionBankService:
             "stimulus": {
                 "type": stimulus.stimulus_type,
                 "title": stimulus.title,
-                "content": stimulus.content,
+                "content": _resolve_stimulus_content(
+                    stimulus.content, stimulus.render_spec),
+                "render_spec": stimulus.render_spec,
             } if stimulus else None,
             "options": [
                 {

@@ -2638,6 +2638,61 @@ def _039_repair_option_graft_2026_06_01():
             seed.close()
 
 
+def _040_retire_unrenderable_figure_2026_06_01():
+    """Retire the one LIVE item that genuinely requires a figure which cannot
+    be reconstructed. The 22 ai_synthetic svg_geometry items that previously
+    rendered as phantom captions are NOT retired — they now render from their
+    ``render_spec`` via ``services.figures.geometry`` (wired into the canonical
+    question-dict path in services/question_bank.py), so no data change is
+    needed for them.
+
+    q4252 (princeton mcq_multi) has no stimulus row at all and its prompt
+    depends on points A/B/C defined only by an absent figure; the original
+    options are also grafted/unrecoverable. Dual-writes seed + user DB,
+    idempotent.
+    """
+    db = _get_db()
+    import json as _json
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+
+    MIG_NAME = "040_retire_unrenderable_figure_2026_06_01"
+    RETIRES = [
+        (4252, "figure-render audit: prompt depends on a figure (points on "
+               "Circle Q) that was never attached as a stimulus and cannot be "
+               "reconstructed; item is unanswerable as stored."),
+    ]
+
+    def _retire(conn, qid, reason, raw_sql=False):
+        ex = conn.execute if raw_sql else conn.execute_sql
+        row = ex("SELECT status, provenance_json FROM question WHERE id=?",
+                 (qid,)).fetchone()
+        if row is None or row[0] == "retired":
+            return False
+        try:
+            prov = _json.loads(row[1]) if row[1] else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        prov["retired_reason"] = reason
+        prov["retired_by_migration"] = MIG_NAME
+        ex("UPDATE question SET status='retired', provenance_json=? "
+           "WHERE id=? AND status != 'retired'", (_json.dumps(prov), qid))
+        return True
+
+    for qid, reason in RETIRES:
+        _retire(db, qid, reason)
+    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            for qid, reason in RETIRES:
+                _retire(seed, qid, reason, raw_sql=True)
+            seed.commit()
+        finally:
+            seed.close()
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -2707,6 +2762,8 @@ MIGRATIONS = [
      _038_targeted_issue_fixes_2026_05_27),
     ("039_repair_option_graft_2026_06_01",
      _039_repair_option_graft_2026_06_01),
+    ("040_retire_unrenderable_figure_2026_06_01",
+     _040_retire_unrenderable_figure_2026_06_01),
 ]
 
 

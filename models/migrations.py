@@ -2820,6 +2820,128 @@ def _042_canonical_qc_options_2026_06_01():
             seed.close()
 
 
+# ── 043: Remaining data-quality cleanup (WS-E, 2026-06-01) ──────────────
+#
+# Three independent fixes bundled into one migration:
+#
+#   1. Encoding — convert single-``$`` inline math to ``\(…\)``.
+#      The KaTeX renderer (widgets/math_view.py) only recognizes
+#      ``$$…$$`` / ``\(…\)`` / ``\[…\]`` — NOT bare ``$…$``. Explanations
+#      authored with single-dollar math render with literal ``$`` and raw
+#      LaTeX source. ``scripts/audit_encoding_issues.py`` flags these as
+#      ``unmatched_dollar``. We run ``services.sanitize.convert_single_dollar_math``
+#      — which converts ONLY balanced spans carrying a strong LaTeX
+#      signature and leaves all currency dollars ("$48", "$5 and $3")
+#      untouched — over the flagged field of each ``unmatched_dollar`` qid.
+#      The flagged (qid, field) pairs are re-detected at apply time from
+#      the live pool (the audit CSV is just the offline snapshot), so the
+#      migration self-targets even if the seed shifts.
+#
+#      The ``unescaped_html`` items (DI markdown tables, e.g. q2918) are
+#      deliberately NOT touched here — they need markdown→HTML table
+#      handling that is out of scope and riskier. Documented follow-up.
+#
+#   2. Kaplan stimulus reclassify — qids 4906/4907 (kaplan_2024 rc_single)
+#      carry ``stimulus.stimulus_type='graph'`` but the stimulus is the RC
+#      passage text (no figure). Reclassify the shared stimulus to
+#      'passage'. Cosmetic/taxonomy only.
+#
+#   3. Taxonomy backfill — DEFERRED. The audit's 137 items are not
+#      deterministically mappable (the 121 kaplan rows carry chapter /
+#      practice-set labels like 'algebra_practice_set' that span multiple
+#      canonical subtopics; the 16 missing-topic and 7 mismatch rows need
+#      per-item judgement). Run ``scripts/llm_judge_taxonomy.py`` as the
+#      follow-up — it is NOT replayed here to avoid shipping unreviewed
+#      LLM guesses.
+#
+# Dual-writes seed + user DB. Idempotent: ``convert_single_dollar_math``
+# is a no-op on already-converted text, and the stimulus reclassify guards
+# on the current type.
+
+# Kaplan RC stimuli mis-typed as 'graph' that are actually passage text.
+_KAPLAN_PASSAGE_STIMULI_2026_06_01 = (4906, 4907)
+
+
+def _043_data_quality_cleanup_2026_06_01():
+    """WS-E remaining data-quality cleanup: single-``$`` math conversion +
+    Kaplan stimulus reclassify. See the module-level comment block above.
+
+    Dual-writes the seed DB so a fresh-install user gets the corrected
+    content and ``seed_sync.reconcile`` (which treats prompt/explanation
+    and stimulus_type as seed-authored columns) doesn't revert it.
+    Idempotent.
+    """
+    db = _get_db()
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+    from services.sanitize import (
+        convert_single_dollar_math,
+        find_latex_encoding_issues,
+        ISSUE_UNMATCHED_DOLLAR,
+    )
+
+    def _exec(conn, raw_sql):
+        return conn.execute if raw_sql else conn.execute_sql
+
+    def _convert_unmatched_dollar(conn, *, raw_sql=False):
+        """Re-detect every live question whose prompt or explanation trips
+        the ``unmatched_dollar`` detector and rewrite that field through
+        ``convert_single_dollar_math``. Returns the count of rows changed."""
+        ex = _exec(conn, raw_sql)
+        rows = ex(
+            "SELECT id, prompt, explanation FROM question "
+            "WHERE status='live'"
+        ).fetchall()
+        n_changed = 0
+        for qid, prompt, explanation in rows:
+            for field, value in (("prompt", prompt),
+                                 ("explanation", explanation)):
+                if not value:
+                    continue
+                issues = {i for i, _ in find_latex_encoding_issues(value)}
+                if ISSUE_UNMATCHED_DOLLAR not in issues:
+                    continue
+                new_value = convert_single_dollar_math(value)
+                if new_value == value:
+                    continue  # nothing convertible (currency-only / pure text)
+                ex(
+                    f"UPDATE question SET {field}=? WHERE id=?",
+                    (new_value, qid),
+                )
+                n_changed += 1
+        return n_changed
+
+    def _reclassify_kaplan_stimuli(conn, *, raw_sql=False):
+        """Flip the shared stimulus of the mis-typed Kaplan RC items from
+        'graph' to 'passage'. Guards on the current type for idempotency."""
+        ex = _exec(conn, raw_sql)
+        for qid in _KAPLAN_PASSAGE_STIMULI_2026_06_01:
+            row = ex(
+                "SELECT stimulus_id FROM question WHERE id=?", (qid,)
+            ).fetchone()
+            if row is None or row[0] is None:
+                continue
+            ex(
+                "UPDATE stimulus SET stimulus_type='passage' "
+                "WHERE id=? AND stimulus_type='graph'",
+                (row[0],),
+            )
+
+    # ── User DB pass (Peewee) ────────────────────────────────────────
+    _convert_unmatched_dollar(db)
+    _reclassify_kaplan_stimuli(db)
+
+    # ── Seed DB pass (raw sqlite) ────────────────────────────────────
+    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            _convert_unmatched_dollar(seed, raw_sql=True)
+            _reclassify_kaplan_stimuli(seed, raw_sql=True)
+            seed.commit()
+        finally:
+            seed.close()
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -2895,6 +3017,8 @@ MIGRATIONS = [
      _041_duplicate_group_id_2026_06_01),
     ("042_canonical_qc_options_2026_06_01",
      _042_canonical_qc_options_2026_06_01),
+    ("043_data_quality_cleanup_2026_06_01",
+     _043_data_quality_cleanup_2026_06_01),
 ]
 
 

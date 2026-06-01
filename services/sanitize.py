@@ -462,6 +462,104 @@ def auto_fix_text(text: Optional[str]) -> Tuple[str, List[str]]:
     return out, applied
 
 
+# ── Single-dollar inline-math conversion ─────────────────────────────
+#
+# The KaTeX auto-render config in ``widgets/math_view.py`` only registers
+# the ``$$…$$``, ``\(…\)`` and ``\[…\]`` delimiter pairs — NOT bare
+# ``$…$``. Explanations authored with single-dollar inline math therefore
+# render with literal ``$`` signs and raw LaTeX source. ``audit_encoding_issues.py``
+# flags these as ``unmatched_dollar``.
+#
+# ``convert_single_dollar_math`` rewrites balanced single-``$`` math spans
+# to ``\(…\)`` while leaving currency dollars ("$48", "$5 and $3") strictly
+# alone. The discriminator is a *strong LaTeX-structural* signature: a span
+# is only converted when its body contains a backslash command or one of
+# ``^ _ { }``. Bare ``=``/``<``/``>``/arithmetic are deliberately NOT
+# treated as a sufficient signal — currency-heavy word problems routinely
+# put ``=`` between dollar amounts ("Cumulative = $63 + $64 = $127"), and
+# pairing across those would corrupt the text. Erring toward false
+# negatives (leaving a pure-arithmetic ``$…$`` span untouched, where it at
+# worst renders as plain text) is far safer than a false positive that
+# mangles a currency amount.
+
+# Placeholder sentinels used while masking spans that must NOT be touched.
+# Chosen from the Unicode Private Use Area so they cannot collide with any
+# real content.
+_DD_MASK = "\uE000"   # $$ display span
+_BS_MASK = "\uE001"   # backslash-delimited span
+_ESC_MASK = "\uE002"  # escaped dollar (currency inside text or math)
+
+# Strong LaTeX-structural signature: a backslash command or sub/superscript
+# or a brace group. Currency runs (digits, commas, periods, $) never carry
+# these, so this is the safe discriminator.
+_MATH_SIGNATURE_RE = re.compile(r"[\\^_{}]")
+
+# A balanced single-``$`` span whose body has no interior ``$`` and is not
+# adjacent to another ``$`` (so ``$$`` display delimiters are excluded —
+# though we mask those first anyway).
+_SINGLE_DOLLAR_SPAN_RE = re.compile(r"(?<!\$)\$([^$\n]+?)\$(?!\$)")
+
+
+def convert_single_dollar_math(text: Optional[str]) -> str:
+    """Convert balanced single-``$`` inline-math spans to ``\\(…\\)``.
+
+    Safe-by-design:
+
+    * ``$$…$$`` display spans, existing ``\\(…\\)`` / ``\\[…\\]`` spans, and
+      escaped ``\\$`` are masked out first, so they are never re-processed
+      (idempotent — running twice is a no-op).
+    * A ``$…$`` span is converted **only** when its body carries a strong
+      LaTeX signature (a backslash command, ``^``, ``_``, ``{`` or ``}``).
+      Pure currency (``$48``, ``$5``) and currency arithmetic
+      (``$63 + $64 = $127``) carry no such signature and are left exactly
+      as written.
+    * The span body must not span a newline (``$`` parity across paragraph
+      breaks is almost always two unrelated currency amounts, not a math
+      span).
+
+    Returns ``text`` unchanged when it is ``None``/empty or contains no
+    convertible span.
+    """
+    if not text:
+        return text or ""
+
+    # 1) Mask spans that must be preserved verbatim. We stash the originals
+    #    in order and restore them positionally at the end.
+    stash: List[str] = []
+
+    def _mask(pattern: "re.Pattern[str]", sentinel: str, s: str) -> str:
+        def _repl(m: "re.Match[str]") -> str:
+            stash.append(m.group(0))
+            return f"{sentinel}{len(stash) - 1}{sentinel}"
+        return pattern.sub(_repl, s)
+
+    out = text
+    out = _mask(_DD_BLOCK_RE, _DD_MASK, out)          # $$…$$
+    out = _mask(_BACKSLASH_DELIM_RE, _BS_MASK, out)   # \(…\) / \[…\]
+    out = _mask(_ESCAPED_DOLLAR_RE, _ESC_MASK, out)   # \$
+
+    # 2) Convert qualifying single-$ spans.
+    def _convert(m: "re.Match[str]") -> str:
+        body = m.group(1)
+        if _MATH_SIGNATURE_RE.search(body):
+            return f"\\({body}\\)"
+        return m.group(0)
+
+    out = _SINGLE_DOLLAR_SPAN_RE.sub(_convert, out)
+
+    # 3) Restore masked spans (innermost sentinels resolve correctly because
+    #    each sentinel wraps its own stash index).
+    def _unmask(sentinel: str, s: str) -> str:
+        def _repl(m: "re.Match[str]") -> str:
+            return stash[int(m.group(1))]
+        return re.sub(f"{sentinel}(\\d+){sentinel}", _repl, s)
+
+    out = _unmask(_ESC_MASK, out)
+    out = _unmask(_BS_MASK, out)
+    out = _unmask(_DD_MASK, out)
+    return out
+
+
 def sanitize_html(
     raw: Optional[str],
     *,
@@ -533,6 +631,7 @@ __all__ = [
     "ISSUE_UNMATCHED_DOLLAR_DD",
     "LatexEncodingError",
     "auto_fix_text",
+    "convert_single_dollar_math",
     "find_latex_encoding_issues",
     "find_mcq_option_issues",
     "sanitize_html",

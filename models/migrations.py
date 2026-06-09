@@ -18,6 +18,7 @@ To add a migration:
 The applied-migration ledger lives in `SchemaMigration` (created by `init_db`).
 """
 from datetime import datetime
+import os
 
 from peewee import (
     Model, AutoField, CharField, DateTimeField, OperationalError,
@@ -26,6 +27,23 @@ from peewee import (
 from services.log import get_logger
 
 logger = get_logger("migrations")
+
+
+# Data-repair migrations dual-write their fix to the shipped seed
+# (``data/gre_mock.db``) as well as the runtime user DB. That seed is a
+# git-tracked binary, so writing it AT RUNTIME on a user's machine leaves the
+# file locally modified — and a subsequent ``git pull`` then refuses to update
+# the binary ("local changes would be overwritten"), so the user never receives
+# newer seed content. The seed must therefore be treated as READ-ONLY at
+# runtime and only rebuilt at dev/build time. Seed writes are gated behind this
+# flag, which is set ONLY when intentionally rebuilding the shipped seed:
+#     GRE_BUILD_SEED=1 venv/bin/python -c "from models.migrations import \
+#         apply_pending_migrations; apply_pending_migrations()"
+# At normal app launch the flag is unset, so migrations touch only the user DB
+# and the tracked seed stays pristine (pulls apply cleanly). The shipped seed
+# already carries every repair, and seed_sync reconciles its content onto the
+# user DB, so skipping the runtime seed write loses nothing.
+SEED_WRITES_ENABLED = os.environ.get("GRE_BUILD_SEED") == "1"
 
 
 def _get_db():
@@ -1341,7 +1359,7 @@ def _032_retire_dedup_high_confidence_2026_05_18():
     # via raw sqlite3 since Peewee is bound to the user DB.
     import sqlite3 as _sqlite3
     from config import SEED_DB_PATH
-    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+    if SEED_WRITES_ENABLED and SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
         seed = _sqlite3.connect(str(SEED_DB_PATH))
         try:
             for kept, retire, jac, cos, ce, note in _DEDUP_PAIRS_TO_RETIRE_2026_05_18:
@@ -1410,7 +1428,7 @@ def _033_promote_synth_candidates_2026_05_18():
 
     import sqlite3 as _sqlite3
     from config import SEED_DB_PATH
-    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+    if SEED_WRITES_ENABLED and SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
         seed = _sqlite3.connect(str(SEED_DB_PATH))
         try:
             for src in sources:
@@ -1652,7 +1670,7 @@ def _034_repair_or_retire_validator_findings_2026_05_18():
     # ── Mirror to seed DB ───────────────────────────────────────────────
     import sqlite3 as _sqlite3
     from config import SEED_DB_PATH
-    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+    if SEED_WRITES_ENABLED and SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
         seed = _sqlite3.connect(str(SEED_DB_PATH))
         try:
             # Mirror retirements (RC + numeric_entry + TC + un-repairable QC)
@@ -1784,7 +1802,7 @@ def _035_audit_quant_fixes_2026_05_24():
                 )
 
     # ── Seed DB pass (raw sqlite) ────────────────────────────────────
-    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+    if SEED_WRITES_ENABLED and SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
         seed = _sqlite3.connect(str(SEED_DB_PATH))
         try:
             for qid, action, payload in _AUDIT_QUANT_FIXES_2026_05_24:
@@ -2082,7 +2100,7 @@ def _036_answer_key_drift_repair_2026_05_25():
         )
 
     # ── Seed DB pass (raw sqlite) ────────────────────────────────────
-    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+    if SEED_WRITES_ENABLED and SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
         seed = _sqlite3.connect(str(SEED_DB_PATH))
         try:
             for qid, from_label, to_label, confidence, reason in (
@@ -2357,7 +2375,7 @@ def _037_quant_curated_audit_2026_05_26():
         _apply_repair(db, qid, field, new_value, reason)
 
     # ── Seed DB pass (raw sqlite) ────────────────────────────────────
-    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+    if SEED_WRITES_ENABLED and SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
         seed = _sqlite3.connect(str(SEED_DB_PATH))
         try:
             for entry in _QUANT_AUDIT_FLIPS_2026_05_26:
@@ -2494,7 +2512,7 @@ def _038_targeted_issue_fixes_2026_05_27():
         _apply_retire(db, qid, current_correct, confidence, reason)
 
     # ── Seed DB pass (raw sqlite) ────────────────────────────────────
-    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+    if SEED_WRITES_ENABLED and SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
         seed = _sqlite3.connect(str(SEED_DB_PATH))
         try:
             for entry in _TARGETED_ISSUE_RETIRES_2026_05_27:
@@ -2626,7 +2644,7 @@ def _039_repair_option_graft_2026_06_01():
         _apply_retire(db, qid, reason)
 
     # ── Seed DB pass (raw sqlite) ────────────────────────────────────
-    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+    if SEED_WRITES_ENABLED and SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
         seed = _sqlite3.connect(str(SEED_DB_PATH))
         try:
             for qid, options in _OPTION_GRAFT_REPAIRS_2026_06_01:
@@ -2683,7 +2701,7 @@ def _040_retire_unrenderable_figure_2026_06_01():
 
     for qid, reason in RETIRES:
         _retire(db, qid, reason)
-    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+    if SEED_WRITES_ENABLED and SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
         seed = _sqlite3.connect(str(SEED_DB_PATH))
         try:
             for qid, reason in RETIRES:
@@ -2770,7 +2788,7 @@ def _041_duplicate_group_id_2026_06_01():
            "ON question (duplicate_group_id)")
 
     _apply(db)
-    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+    if SEED_WRITES_ENABLED and SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
         seed = _sqlite3.connect(str(SEED_DB_PATH))
         try:
             _apply(seed, raw_sql=True)
@@ -2820,7 +2838,7 @@ def _042_canonical_qc_options_2026_06_01():
                        (canon, opt_id))
 
     _apply(db)
-    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+    if SEED_WRITES_ENABLED and SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
         seed = _sqlite3.connect(str(SEED_DB_PATH))
         try:
             _apply(seed, raw_sql=True)
@@ -2941,11 +2959,120 @@ def _043_data_quality_cleanup_2026_06_01():
     _reclassify_kaplan_stimuli(db)
 
     # ── Seed DB pass (raw sqlite) ────────────────────────────────────
-    if SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+    if SEED_WRITES_ENABLED and SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
         seed = _sqlite3.connect(str(SEED_DB_PATH))
         try:
             _convert_unmatched_dollar(seed, raw_sql=True)
             _reclassify_kaplan_stimuli(seed, raw_sql=True)
+            seed.commit()
+        finally:
+            seed.close()
+
+
+def _044_user_reported_fixes_2026_06_09():
+    """Resolve three post-test-review reports (GitHub #42/#43/#44).
+
+    - q5379 (ai_synthetic_v2 mcq_multi, #43): OPTION GRAFT. The prompt asks for
+      the NUMBER OF NOTEBOOKS but the stored options are dollar amounts
+      ($12/$4 marked correct). The explanation's true answer set is n in {2,4,6}
+      (n even, 0<n<8, p>=1). Rewrite the options to the integer notebook counts
+      the stem actually asks for. (The earlier graft audit missed this because
+      the grafted dollar tokens 24/6/4 coincidentally overlapped the
+      explanation enough to pass the numeric-overlap threshold.)
+    - q3196 (manhattan mcq_single, #42): the stem did not constrain x to an
+      integer, so an AI-rewritten explanation answered "More than 10" (E). The
+      finite options {4,6,8,10} make the intended answer the count of positive
+      divisors of 20 = {1,2,4,5,10,20} = 6. Constrain x to a positive integer,
+      fix the explanation, and flip the key E -> B.
+    - q5400 (ai_synthetic_v2 mcq_single DI, #44): broken/unrecoverable. The
+      explanation computes the ratio ~2.51, which is NOT among the options
+      (2.36/2.63/2.82/3.14/3.40), then hand-waves to mark 2.82. The options do
+      not match the chart-derived answer and cannot be reliably repaired ->
+      retire.
+
+    Dual-writes seed + user DB (seed only when GRE_BUILD_SEED=1). Idempotent.
+    """
+    db = _get_db()
+    import json as _json
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+
+    MIG_NAME = "044_user_reported_fixes_2026_06_09"
+
+    Q5379_OPTIONS = [("2", 1), ("3", 0), ("4", 1), ("5", 0), ("6", 1),
+                     ("7", 0), ("8", 0)]
+    Q3196_PROMPT = (r"If \(x\) is a positive integer such that \(0 < x \leq 20\), "
+                    r"for how many values of \(x\) is \(\frac{20}{x}\) an integer?")
+    Q3196_EXPLANATION = (
+        r"Since \(x\) must be a positive integer with \(0 < x \leq 20\) and "
+        r"\(\frac{20}{x}\) must be an integer, \(x\) has to be a positive "
+        r"divisor of 20. The positive divisors of 20 are 1, 2, 4, 5, 10, and "
+        r"20 — six values. Therefore the answer is (B) 6.")
+
+    def _exec(conn, raw_sql):
+        return conn.execute if raw_sql else conn.execute_sql
+
+    def _rewrite_options(ex, qid, options):
+        """Replace a question's option rows with ``options`` (text, is_correct)
+        in order, labels A.. — idempotent (deletes then inserts the same set)."""
+        if ex("SELECT 1 FROM question WHERE id=?", (qid,)).fetchone() is None:
+            return
+        ex("DELETE FROM questionoption WHERE question_id=?", (qid,))
+        for i, (text, ic) in enumerate(options):
+            ex("INSERT INTO questionoption (question_id, option_label, "
+               "option_text, is_correct) VALUES (?, ?, ?, ?)",
+               (qid, chr(ord("A") + i), text, int(ic)))
+
+    def _repair_q3196(ex):
+        row = ex("SELECT provenance_json FROM question WHERE id=3196").fetchone()
+        if row is None:
+            return
+        try:
+            prov = _json.loads(row[0]) if row[0] else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        prov["user_reported_fix"] = {
+            "by_migration": MIG_NAME, "issue": "#42",
+            "change": "constrained x to positive integer; key E->B (=6 divisors)"}
+        ex("UPDATE question SET prompt=?, explanation=?, provenance_json=? "
+           "WHERE id=3196", (Q3196_PROMPT, Q3196_EXPLANATION, _json.dumps(prov)))
+        # flip the correct option to B (6); clear any other correct flags
+        ex("UPDATE questionoption SET is_correct=0 WHERE question_id=3196")
+        ex("UPDATE questionoption SET is_correct=1 "
+           "WHERE question_id=3196 AND option_label='B'")
+
+    def _retire(ex, qid, reason):
+        row = ex("SELECT status, provenance_json FROM question WHERE id=?",
+                 (qid,)).fetchone()
+        if row is None or row[0] == "retired":
+            return
+        try:
+            prov = _json.loads(row[1]) if row[1] else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        prov["retired_reason"] = reason
+        prov["retired_by_migration"] = MIG_NAME
+        ex("UPDATE question SET status='retired', provenance_json=? "
+           "WHERE id=? AND status != 'retired'", (_json.dumps(prov), qid))
+
+    def _apply(conn, raw_sql=False):
+        ex = _exec(conn, raw_sql)
+        _rewrite_options(ex, 5379, Q5379_OPTIONS)
+        _repair_q3196(ex)
+        _retire(ex, 5400,
+                "user report #44: explanation computes a ratio (~2.51) that is "
+                "not among the answer options and the marked key (2.82) is not "
+                "chart-derivable; options cannot be reliably repaired.")
+
+    _apply(db)
+    if SEED_WRITES_ENABLED and SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            _apply(seed, raw_sql=True)
             seed.commit()
         finally:
             seed.close()
@@ -3028,6 +3155,8 @@ MIGRATIONS = [
      _042_canonical_qc_options_2026_06_01),
     ("043_data_quality_cleanup_2026_06_01",
      _043_data_quality_cleanup_2026_06_01),
+    ("044_user_reported_fixes_2026_06_09",
+     _044_user_reported_fixes_2026_06_09),
 ]
 
 

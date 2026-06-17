@@ -1,22 +1,31 @@
 """
-Instructions screen — the ETS GRE section-intro page shown before each
-section begins.
+Instructions screen — the ETS "Test Preview Tool" section-intro page shown
+before each section begins.
 
-Re-skinned to "exam mode" (docs/gre_ui_spec_2026_06.md §7): a navy header
-strip carrying the "ETS  GRE" lockup over a white, serif content area, with a
-prominent blue "Continue" button and a grey "Back to Dashboard"/"Cancel"
-button bottom-aligned. Distinct from the dark study-app chrome.
+Mounts the shared ExamChrome (charcoal header + maroon rule + tool ribbon +
+pink section bar carrying the timer) over a black-bordered white content box.
+The content box shows a bold serif heading (e.g. "Quantitative Reasoning") with
+a count/time subheading (e.g. "11 Questions   21 Minutes") and the standard
+section directions in serif body text (ovals = one answer, squares = one or
+more, figures-not-to-scale, etc.).
+
+Ribbon: ``[help, continue]`` — the simplest faithful version of the ETS
+section-intro page where the whole tool ribbon is shown but only Continue is
+active. ``Continue`` fires ``set_on_begin``; the chrome has no Cancel, so a
+``cancel_btn`` is provided in the content area for "Back to Dashboard".
 
 Public API consumed by main_frame.py is preserved verbatim:
 ``set_section(section_type, section_state=None)``, ``set_on_begin(callback)``,
 ``set_on_cancel(callback)`` and the ``display_label`` override path for mixed
-Quick Drills.
+Quick Drills. ``title_label`` / ``body_text`` / ``begin_btn`` / ``cancel_btn``
+attributes are preserved for tests/callers.
 """
 import wx
 
 from models.exam_session import SectionType, SECTION_META
 from widgets import ui_scale
 from widgets.exam_button import ExamButton
+from widgets.exam_chrome import ExamChrome
 from widgets.theme import ExamColor
 
 
@@ -97,7 +106,7 @@ def _is_quant_section(section_type):
 
 
 class InstructionsScreen(wx.Panel):
-    """ETS-skinned section-intro page with a Continue affordance."""
+    """ETS Test-Preview section-intro page mounted on ExamChrome."""
 
     # Wrap width for the serif body — scales with DPI so the prose doesn't
     # sit in a narrow column on a 4K display.
@@ -105,7 +114,7 @@ class InstructionsScreen(wx.Panel):
 
     def __init__(self, parent):
         super().__init__(parent)
-        self.SetBackgroundColour(ExamColor.CONTENT_BG)
+        self.SetBackgroundColour(ExamColor.PAGE_GRAY)
         self._on_begin = None
         self._on_cancel = None
         self._build_ui()
@@ -113,84 +122,91 @@ class InstructionsScreen(wx.Panel):
     # ── construction ──────────────────────────────────────────────────
 
     def _build_ui(self):
-        main_sizer = wx.BoxSizer(wx.VERTICAL)
+        outer = wx.BoxSizer(wx.VERTICAL)
 
-        main_sizer.Add(self._build_header(), 0, wx.EXPAND)
+        # ── Shared chrome: ribbon = [Help, Continue] ────────────────────
+        self.chrome = ExamChrome(self, with_timer=True)
+        self.chrome.set_buttons(["help", "continue"])
+        self.chrome.set_section_label("Section")
+        self.chrome.set_on("continue", self._on_begin_click)
+        self.chrome.set_on("help", self._on_help)
+        # Continue is the live action on the section-intro page.
+        self.begin_btn = self.chrome._btns.get("continue")
+        outer.Add(self.chrome, 0, wx.EXPAND)
 
-        # ── White content area (serif title + body) ───────────────────
-        content = wx.BoxSizer(wx.VERTICAL)
-        content.AddSpacer(ui_scale.space(8))
+        # ── Black-bordered white content box on the gray page ───────────
+        self.content_border = wx.Panel(self)
+        self.content_border.SetBackgroundColour(ExamColor.CONTENT_BORDER)
+        border_sizer = wx.BoxSizer(wx.VERTICAL)
 
-        self.title_label = wx.StaticText(self, label="Section Instructions")
+        self.content_box = wx.Panel(self.content_border)
+        self.content_box.SetBackgroundColour(ExamColor.CONTENT_BG)
+        box_sizer = wx.BoxSizer(wx.VERTICAL)
+        box_sizer.AddSpacer(ui_scale.space(6))
+
+        # Bold serif title.
+        self.title_label = wx.StaticText(self.content_box, label="Section Instructions")
         self.title_label.SetForegroundColour(ExamColor.TEXT)
-        self.title_label.SetFont(
-            ui_scale.exam_serif(ui_scale.BASE_TITLE, wx.FONTWEIGHT_BOLD)
-        )
-        content.Add(self.title_label, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM,
-                    ui_scale.space(5))
+        self.title_label.SetFont(ui_scale.exam_serif(ui_scale.BASE_TITLE,
+                                                     wx.FONTWEIGHT_BOLD))
+        box_sizer.Add(self.title_label, 0,
+                      wx.LEFT | wx.RIGHT | wx.BOTTOM, ui_scale.space(5))
 
-        self.body_text = wx.StaticText(self, label="")
+        # Count / time subheading (serif, slightly smaller, semibold).
+        self.subtitle_label = wx.StaticText(self.content_box, label="")
+        self.subtitle_label.SetForegroundColour(ExamColor.TEXT_MUTED)
+        self.subtitle_label.SetFont(ui_scale.exam_serif(ui_scale.EXAM_STEM_PT,
+                                                        wx.FONTWEIGHT_BOLD))
+        box_sizer.Add(self.subtitle_label, 0,
+                      wx.LEFT | wx.RIGHT | wx.BOTTOM, ui_scale.space(5))
+
+        # Standard directions body (serif).
+        self.body_text = wx.StaticText(self.content_box, label="")
         self.body_text.SetForegroundColour(ExamColor.TEXT)
         self.body_text.SetFont(ui_scale.exam_serif(ui_scale.EXAM_CHOICE_PT))
         self.body_text.Wrap(ui_scale.font_size(self._WRAP_BASE))
-        content.Add(self.body_text, 0, wx.LEFT | wx.RIGHT, ui_scale.space(5))
+        box_sizer.Add(self.body_text, 0,
+                      wx.LEFT | wx.RIGHT, ui_scale.space(5))
 
-        main_sizer.Add(content, 1, wx.EXPAND | wx.ALL, ui_scale.space(6))
+        box_sizer.AddStretchSpacer()
 
-        # ── Bottom-aligned button row (Cancel · Continue) ─────────────
+        # ── Bottom button row: Back to Dashboard (left) ────────────────
+        # The chrome ribbon carries Continue; the content area carries the
+        # "Back to Dashboard" affordance (no Cancel exists in the ETS ribbon).
         btn_row = wx.BoxSizer(wx.HORIZONTAL)
-        self.cancel_btn = ExamButton(self, "Back to Dashboard", kind="grey",
-                                     icon="◀", min_width=ui_scale.font_size(190))
+        self.cancel_btn = ExamButton(self.content_box, "Back to Dashboard",
+                                     kind="grey", icon="◀",
+                                     min_width=ui_scale.font_size(190))
         self.cancel_btn.Bind(wx.EVT_BUTTON, self._on_cancel_click)
-        btn_row.Add(self.cancel_btn, 0, wx.RIGHT, ui_scale.space(4))
-
+        btn_row.Add(self.cancel_btn, 0)
         btn_row.AddStretchSpacer()
+        box_sizer.Add(btn_row, 0, wx.EXPAND | wx.ALL, ui_scale.space(5))
 
-        self.begin_btn = ExamButton(self, "Continue", kind="next", icon="▶",
-                                    icon_after=True)
-        self.begin_btn.Bind(wx.EVT_BUTTON, self._on_begin_click)
-        btn_row.Add(self.begin_btn, 0)
+        self.content_box.SetSizer(box_sizer)
+        border_sizer.Add(self.content_box, 1, wx.EXPAND | wx.ALL,
+                         max(1, ui_scale.font_size(2)))
+        self.content_border.SetSizer(border_sizer)
+        outer.Add(self.content_border, 1, wx.EXPAND | wx.ALL, ui_scale.space(4))
 
-        main_sizer.Add(btn_row, 0, wx.EXPAND | wx.ALL, ui_scale.space(6))
+        self.SetSizer(outer)
 
-        self.SetSizer(main_sizer)
-
-    def _build_header(self):
-        """Navy strip with the inline 'ETS  GRE' lockup (matches the
-        question screen header: white 'ETS' on navy + italic white 'GRE')."""
-        self.header = wx.Panel(self)
-        self.header.SetBackgroundColour(ExamColor.HEADER_NAVY)
-        header_sizer = wx.BoxSizer(wx.HORIZONTAL)
-
-        logo = wx.StaticText(self.header, label="ETS")
-        logo.SetForegroundColour(ExamColor.HEADER_NAVY)
-        logo.SetBackgroundColour(ExamColor.TEXT_ON_NAVY)
-        logo.SetFont(ui_scale.exam_sans(ui_scale.EXAM_COUNTER_PT, wx.FONTWEIGHT_BOLD))
-        header_sizer.Add(logo, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, ui_scale.space(3))
-
-        gre = wx.StaticText(self.header, label="GRE")
-        gre.SetForegroundColour(ExamColor.TEXT_ON_NAVY)
-        gre.SetFont(ui_scale.exam_sans(ui_scale.EXAM_STEM_PT, wx.FONTWEIGHT_BOLD,
-                                       wx.FONTSTYLE_ITALIC))
-        header_sizer.Add(gre, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, ui_scale.space(3))
-
-        header_sizer.AddStretchSpacer()
-        self.header.SetSizer(header_sizer)
-        return self.header
+    def _on_help(self):
+        wx.MessageBox(
+            "Read the directions, then select Continue to begin the section.",
+            "Help", wx.OK | wx.ICON_INFORMATION)
 
     # ── public API (preserved for main_frame.py) ──────────────────────
 
     def set_section(self, section_type, section_state=None):
         """Configure for a specific section.
 
-        When `section_state` carries a `display_label` (mixed Quick
-        Drill), the screen overrides the canonical title and body so
-        the user doesn't see "Verbal Reasoning — Section 1" before a
-        drill that actually mixes both measures.
+        When ``section_state`` carries a ``display_label`` (mixed Quick Drill),
+        the screen overrides the canonical title and body so the user doesn't
+        see "Verbal Reasoning — Section 1" before a drill that mixes both
+        measures.
 
-        For Quant sections the "Figures are not necessarily drawn to
-        scale." caveat is appended to the body (it isn't in the
-        SECTION_INSTRUCTIONS text but belongs on the real ETS page).
+        For Quant sections the "Figures are not necessarily drawn to scale."
+        caveat is appended to the body.
         """
         info = SECTION_INSTRUCTIONS.get(section_type, {})
         title = info.get("title", "Section")
@@ -201,22 +217,59 @@ class InstructionsScreen(wx.Panel):
             n = len(getattr(section_state, "question_ids", []) or []) or 10
             mins = max(1, getattr(section_state, "time_limit", 0) // 60)
             body = (
-                f"This drill contains {n} questions targeting your weak areas. "
-                f"You have ~{mins} minutes.\n\n"
+                "This drill contains {n} questions targeting your weak areas. "
+                "You have ~{mins} minutes.\n\n"
                 "Questions are mixed across Verbal Reasoning and Quantitative "
                 "Reasoning. Each question's measure (Verbal / Quant) is shown "
                 "above it; the on-screen calculator appears only on quant "
                 "questions.\n\n"
                 "You may navigate freely within this drill, mark questions for "
                 "review, and end the drill at any time."
-            )
+            ).format(n=n, mins=mins)
         elif _is_quant_section(section_type) and FIGURES_CAVEAT not in body:
             body = body + "\n\n" + FIGURES_CAVEAT
 
         self.title_label.SetLabel(title)
+        self.subtitle_label.SetLabel(self._subtitle_for(section_type, section_state))
         self.body_text.SetLabel(body)
         self.body_text.Wrap(ui_scale.font_size(self._WRAP_BASE))
+
+        # Pink section bar reflects which measure is about to start.
+        self.chrome.set_section_label(self._section_bar_for(section_type))
+        self.content_box.Layout()
         self.Layout()
+
+    def _subtitle_for(self, section_type, section_state):
+        """A "N Questions    M Minutes" subheading derived from SECTION_META
+        (or the drill state for the mixed-drill override)."""
+        override = section_state and getattr(section_state, "display_label", None)
+        if override:
+            n = len(getattr(section_state, "question_ids", []) or []) or 10
+            mins = max(1, getattr(section_state, "time_limit", 0) // 60)
+            return "{n} Questions    ~{mins} Minutes".format(n=n, mins=mins)
+        meta = SECTION_META.get(section_type)
+        if not meta:
+            return ""
+        _measure, _idx, time_limit, q_count = meta
+        mins = max(1, time_limit // 60)
+        if section_type == SectionType.AWA:
+            return "1 Task    {mins} Minutes".format(mins=mins)
+        return "{n} Questions    {mins} Minutes".format(n=q_count, mins=mins)
+
+    @staticmethod
+    def _section_bar_for(section_type):
+        """Pink-bar measure label for the section-intro page."""
+        meta = SECTION_META.get(section_type)
+        if not meta:
+            return "Section"
+        measure = meta[0]
+        if measure == "awa":
+            return "Analytical Writing"
+        if measure == "verbal":
+            return "Verbal Reasoning"
+        if measure == "quant":
+            return "Quantitative Reasoning"
+        return "Section"
 
     def set_on_begin(self, callback):
         """callback()"""
@@ -228,10 +281,10 @@ class InstructionsScreen(wx.Panel):
 
     # ── event plumbing ────────────────────────────────────────────────
 
-    def _on_cancel_click(self, event):
+    def _on_cancel_click(self, event=None):
         if self._on_cancel:
             self._on_cancel()
 
-    def _on_begin_click(self, event):
+    def _on_begin_click(self, event=None):
         if self._on_begin:
             self._on_begin()

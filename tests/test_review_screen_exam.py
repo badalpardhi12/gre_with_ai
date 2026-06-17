@@ -171,3 +171,40 @@ def test_return_callback_fires(screen):
     screen.set_on_return(lambda: fired.append(True))
     screen._on_return_click(None)
     assert fired == [True]
+
+
+# ── ExamChrome re-skin ────────────────────────────────────────────────
+
+
+def test_mounts_examchrome_with_minimal_ribbon(screen):
+    """Review re-skins onto ExamChrome with a minimal [exit, return, continue]
+    ribbon (Exit/Continue both end the section, Return goes back)."""
+    assert screen.chrome is not None
+    assert list(screen.chrome._btns.keys()) == ["exit", "return", "continue"]
+
+
+def test_ribbon_exit_ends_section(screen, monkeypatch):
+    screen.load_review(_sample_data())
+    fired = []
+    screen.set_on_end_section(lambda: fired.append(True))
+
+    class _FakeDlg:
+        def __init__(self, *a, **k):
+            pass
+
+        def ShowModal(self):
+            return wx.ID_YES
+
+        def Destroy(self):
+            pass
+
+    monkeypatch.setattr(wx, "MessageDialog", _FakeDlg)
+    screen.chrome._fire("exit")
+    assert fired == [True]
+
+
+def test_ribbon_return_returns(screen):
+    fired = []
+    screen.set_on_return(lambda: fired.append(True))
+    screen.chrome._fire("return")
+    assert fired == [True]

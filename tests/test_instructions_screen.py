@@ -161,3 +161,31 @@ def test_no_callback_no_crash(screen):
     """Clicking with no callbacks registered is a harmless no-op."""
     _click(screen.begin_btn)
     _click(screen.cancel_btn)
+
+
+# ── ExamChrome re-skin ────────────────────────────────────────────────
+
+
+def test_mounts_examchrome_with_help_continue_ribbon(screen):
+    """The section-intro page mounts ExamChrome with the [help, continue]
+    ribbon (Continue is the live action)."""
+    assert screen.chrome is not None
+    assert set(screen.chrome._btns.keys()) == {"help", "continue"}
+    # begin_btn IS the ribbon Continue button (so callers/tests can click it).
+    assert screen.begin_btn is screen.chrome._btns["continue"]
+
+
+def test_section_bar_reflects_measure(screen):
+    """The pink section bar names the measure about to start."""
+    screen.set_section(SectionType.QUANT_S1)
+    assert "Quantitative Reasoning" == screen.chrome.section_label.GetLabel()
+    screen.set_section(SectionType.VERBAL_S1)
+    assert "Verbal Reasoning" == screen.chrome.section_label.GetLabel()
+
+
+def test_subtitle_shows_count_and_time(screen):
+    """The serif subheading shows the section's question count and minutes."""
+    screen.set_section(SectionType.QUANT_S1)
+    sub = screen.subtitle_label.GetLabel()
+    assert "Questions" in sub
+    assert "Minutes" in sub

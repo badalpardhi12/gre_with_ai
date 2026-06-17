@@ -48,6 +48,46 @@ def _enter(calc, *keys):
         calc.press(k)
 
 
+def _click(calc, label):
+    """Drive a key through the REAL UI path: synthesize a left-down then
+    left-up inside the owner-drawn ``_CalcKey`` so it emits ``wx.EVT_BUTTON``,
+    which the keypad routes to ``_press`` → engine → display.
+
+    This exercises the mouse-event → ``_emit_clicked`` → ``EVT_BUTTON`` →
+    ``_press`` wiring that ``calc.press()`` bypasses, so it actually proves the
+    buttons are functional (the user's reported MR/MC/M+ concern).
+    """
+    btn = calc._keypad._buttons[label]
+    w, h = btn.GetClientSize()
+    pos = wx.Point(max(1, w // 2), max(1, h // 2))
+    down = wx.MouseEvent(wx.wxEVT_LEFT_DOWN)
+    down.SetPosition(pos)
+    up = wx.MouseEvent(wx.wxEVT_LEFT_UP)
+    up.SetPosition(pos)
+    btn.ProcessEvent(down)
+    btn.ProcessEvent(up)
+    wx.Yield()  # let the posted EVT_BUTTON dispatch
+
+
+def _click_all(calc, *labels):
+    for label in labels:
+        _click(calc, label)
+
+
+def _type(calc, *codes):
+    """Drive the keyboard path on the focused display the way macOS does:
+    each printable key emits BOTH ``EVT_KEY_DOWN`` and ``EVT_CHAR``. A correct
+    implementation must act once (no double-fire). ``codes`` are key codes
+    (use ``ord(ch)`` for chars, ``wx.WXK_RETURN`` for Enter)."""
+    disp = calc._keypad.display
+    for code in codes:
+        for et in (wx.wxEVT_KEY_DOWN, wx.wxEVT_CHAR):
+            ev = wx.KeyEvent(et)
+            ev.SetKeyCode(code)
+            ev.SetUnicodeKey(code)
+            disp.ProcessEvent(ev)
+
+
 # ── PEMDAS ──────────────────────────────────────────────────────────────
 
 def test_pemdas_precedence(calc):
@@ -234,3 +274,173 @@ def test_public_api_preserved(frame):
     # set_on_transfer / get_value still exist and behave.
     assert hasattr(c, "set_on_transfer")
     assert c.get_value() == "0"
+
+
+# ════════════════════════════════════════════════════════════════════════
+# REAL UI PRESS PATH — owner-drawn key click → EVT_BUTTON → engine → display
+#
+# The tests above drive ``calc.press()``, which calls ``_keypad._press``
+# directly and so does NOT prove the owner-drawn ``_CalcKey`` keys are wired.
+# The tests below synthesize actual mouse events on the keys, exercising the
+# ``_emit_clicked`` → ``wx.EVT_BUTTON`` → ``_press`` chain — i.e. they verify
+# the keys are genuinely functional through the UI, which is the user's
+# reported MR/MC/M+ concern.
+# ════════════════════════════════════════════════════════════════════════
+
+def test_click_digit_drives_display_through_ui(calc):
+    # A real click on the "7" key must update the display via EVT_BUTTON.
+    _click(calc, "7")
+    assert calc.get_value() == "7"
+
+
+def test_click_pemdas_through_ui(calc):
+    # Full expression entered by clicking keys: 1 + 2 × 4 = 9.
+    _click_all(calc, "1", "+", "2", "×", "4", "=")
+    assert calc.get_value() == "9"
+
+
+def test_click_memory_add_lights_indicator_through_ui(calc):
+    # CRUX: clicking M+ must add the displayed value into memory AND light the
+    # 'M' indicator on the display — all via the owner-drawn-key UI path.
+    assert calc.memory_active is False
+    assert calc._keypad.display._mem is False
+
+    _click_all(calc, "5", "M+")
+    assert calc.memory_active is True
+    # The display's owner-drawn 'M' indicator flag must actually be lit.
+    assert calc._keypad.display._mem is True
+
+
+def test_click_memory_recall_through_ui(calc):
+    # M+ accumulates, MR recalls the running total — all by clicking keys.
+    _click_all(calc, "5", "M+")          # memory = 5
+    _click(calc, "C")
+    _click_all(calc, "3", "M+")          # memory = 5 + 3 = 8 (accumulate)
+    _click(calc, "C")
+    _click(calc, "MR")                   # recall
+    assert calc.get_value() == "8"
+
+
+def test_click_memory_clear_removes_indicator_through_ui(calc):
+    # MC clicked must clear the register AND hide the 'M' indicator.
+    _click_all(calc, "9", "M+")
+    assert calc.memory_active is True
+    assert calc._keypad.display._mem is True
+
+    _click(calc, "MC")
+    assert calc.memory_active is False
+    assert calc._keypad.display._mem is False
+
+    # And a recall after MC reads 0.
+    _click(calc, "C")
+    _click(calc, "MR")
+    assert calc.get_value() == "0"
+
+
+def test_click_C_keeps_memory_and_indicator_through_ui(calc):
+    # C clears the display but must NOT touch memory or the 'M' indicator.
+    _click_all(calc, "5", "M+")
+    _click(calc, "C")
+    assert calc.get_value() == "0"
+    assert calc.memory_active is True
+    assert calc._keypad.display._mem is True
+
+
+def test_click_sqrt_and_sign_through_ui(calc):
+    _click_all(calc, "9", "√")
+    assert calc.get_value() == "3"
+    _click(calc, "±")
+    assert calc.get_value() == "-3"
+
+
+def test_click_transfer_button_through_ui(calc):
+    # Clicking the owner-drawn Transfer Display bar must fire the callback.
+    received = []
+    calc.set_on_transfer(lambda v: received.append(v))
+    _click_all(calc, "4", "2", "=")
+    btn = calc._keypad.transfer_btn
+    w, h = btn.GetClientSize()
+    pos = wx.Point(max(1, w // 2), max(1, h // 2))
+    down = wx.MouseEvent(wx.wxEVT_LEFT_DOWN); down.SetPosition(pos)
+    up = wx.MouseEvent(wx.wxEVT_LEFT_UP); up.SetPosition(pos)
+    btn.ProcessEvent(down)
+    btn.ProcessEvent(up)
+    wx.Yield()
+    assert received == ["42"]
+
+
+# ── keyboard path (single source of truth; no double-fire) ──────────────
+
+def test_keyboard_digit_no_double_fire(calc):
+    # macOS delivers BOTH EVT_KEY_DOWN and EVT_CHAR for one keystroke; the
+    # display must act exactly once. Regression for the '5'→'55' double-fire.
+    _type(calc, ord("5"))
+    assert calc.get_value() == "5"
+
+
+def test_keyboard_expression_and_enter(calc):
+    # Typing "2 + 3" then Enter must evaluate to 5 (not "55" from double-fire).
+    _type(calc, ord("2"), ord("+"), ord("3"), wx.WXK_RETURN)
+    assert calc.get_value() == "5"
+
+
+def test_keyboard_backspace_does_not_clear(calc):
+    _type(calc, ord("4"), ord("2"))
+    assert calc.get_value() == "42"
+    # Backspace must NOT clear or delete (spec §4.3).
+    _type(calc, wx.WXK_BACK)
+    assert calc.get_value() == "42"
+
+
+# ── fresh-entry after a committed result (real-calculator behavior) ─────
+
+def test_digit_after_equals_starts_fresh(calc):
+    # 2 + 3 = 5, then pressing 7 starts a NEW number (7), not "5.07".
+    _enter(calc, "2", "+", "3", "=")
+    assert calc.get_value() == "5"
+    calc.press("7")
+    assert calc.get_value() == "7"
+
+
+def test_operator_after_equals_chains(calc):
+    # An operator after "=" chains off the result: 2 + 3 = 5, + 4 = 9.
+    _enter(calc, "2", "+", "3", "=", "+", "4", "=")
+    assert calc.get_value() == "9"
+
+
+def test_digit_after_unary_and_memory_starts_fresh(calc):
+    # √, ±, and MR all commit a value; the next digit must start fresh.
+    _enter(calc, "9", "√")          # 3 committed
+    calc.press("2")
+    assert calc.get_value() == "2"
+
+    _enter(calc, "C", "5", "M+", "C", "MR")  # MR recalls 5
+    calc.press("8")
+    assert calc.get_value() == "8"
+
+
+def test_leading_decimal_shows_zero(calc):
+    # A bare leading "." reads "0.5", and a second "." is ignored.
+    _enter(calc, ".", "5")
+    assert calc.get_value() == "0.5"
+    _enter(calc, "C", "1", ".", ".", "5")
+    assert calc.get_value() == "1.5"
+
+
+def test_focus_ring_does_not_recolor_body():
+    # The blue focus cue is a painted ring; it must NOT change the keypad
+    # background colour (that would tint every owner-drawn key's corners).
+    # Regression for the "whole keypad turns blue on focus" bug.
+    app = wx.GetApp() or wx.App(False)
+    f = wx.Frame(None)
+    try:
+        c = CalculatorWidget(f, inline=True)
+        before = c._keypad.GetBackgroundColour().Get()[:3]
+        c._keypad.set_focused(True)
+        after = c._keypad.GetBackgroundColour().Get()[:3]
+        assert after == before          # body fill unchanged
+        assert c._keypad._focused is True
+        c._keypad.set_focused(False)
+        assert c._keypad._focused is False
+    finally:
+        f.Destroy()

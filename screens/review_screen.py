@@ -1,14 +1,18 @@
 """
-Review screen — ETS GRE end-of-section "Review Your Answers" screen.
+Review screen — the ETS "Test Preview Tool" end-of-section "Review" table.
 
-Re-skinned to the official ETS exam-mode chrome (docs/gre_ui_spec_2026_06.md §6):
-a navy header (ETS·GRE lockup + Submit Section) over a white content area with a
-"Review Your Answers" title, a legend line, and a re-skinned ``wx.ListCtrl``
+Re-skinned onto the shared ExamChrome (charcoal header + maroon rule + tool
+ribbon + pink section bar) so its header/section-bar match the rest of the
+in-test screens. Reachable from the End-of-Section page; shows a black-bordered
+white content box with a "Review" title, a legend line, and a ``wx.ListCtrl``
 (LC_REPORT) of one row per question. Columns are **Question Number | Status |
-Marked** — there is deliberately NO correctness / "Score Status" column, because
-the real test never shows correctness mid-section (simulation fidelity). A navy
-footer carries a "Go to Question" numeric jump, a "Return" button, and a
-prominent mauve "Submit Section" button.
+Marked** — there is deliberately NO correctness / score column, because the
+real test never shows correctness mid-section (simulation fidelity).
+
+A content-area footer carries a "Go to Question" numeric jump, a "Return"
+button, and a "Submit Section" button; the chrome ribbon is the minimal
+``[exit, return, continue]`` (Exit Section + Return + Continue), with Exit and
+Continue both ending the section through the confirm dialog.
 
 Public API preserved for ``main_frame``:
     load_review(review_data)        — list of {index, question_id, answered, marked}
@@ -20,6 +24,7 @@ import wx
 
 from widgets import ui_scale
 from widgets.exam_button import ExamButton
+from widgets.exam_chrome import ExamChrome
 from widgets.theme import ExamColor
 
 
@@ -39,11 +44,11 @@ _MARK_GLYPH = "⚑"   # ⚑ flag
 
 
 class ReviewScreen(wx.Panel):
-    """Section review: ETS "Review Your Answers" table with status + marked."""
+    """Section review: ETS "Review" table with status + marked, on ExamChrome."""
 
     def __init__(self, parent):
         super().__init__(parent)
-        self.SetBackgroundColour(ExamColor.CONTENT_BG)
+        self.SetBackgroundColour(ExamColor.PAGE_GRAY)
         self._on_goto = None
         self._on_return = None
         self._on_end_section = None
@@ -53,67 +58,57 @@ class ReviewScreen(wx.Panel):
     # ── UI construction ───────────────────────────────────────────────
 
     def _build_ui(self):
-        main_sizer = wx.BoxSizer(wx.VERTICAL)
+        outer = wx.BoxSizer(wx.VERTICAL)
 
-        # ── Navy header: ETS·GRE lockup (left) + Submit Section (right) ─
-        self.header = wx.Panel(self)
-        self.header.SetBackgroundColour(ExamColor.HEADER_NAVY)
-        header_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        # ── Shared chrome: ribbon = [Exit, Return, Continue] ────────────
+        self.chrome = ExamChrome(self, with_timer=True)
+        self.chrome.set_buttons(["exit", "return", "continue"])
+        self.chrome.set_section_label("Review")
+        self.chrome.set_on("exit", self._on_end_click)
+        self.chrome.set_on("return", self._on_return_click)
+        self.chrome.set_on("continue", self._on_end_click)
+        outer.Add(self.chrome, 0, wx.EXPAND)
 
-        logo = wx.StaticText(self.header, label="ETS")
-        logo.SetForegroundColour(ExamColor.HEADER_NAVY)
-        logo.SetBackgroundColour(ExamColor.TEXT_ON_NAVY)
-        logo.SetFont(ui_scale.exam_sans(ui_scale.EXAM_COUNTER_PT, wx.FONTWEIGHT_BOLD))
-        header_sizer.Add(logo, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, ui_scale.space(3))
+        # ── Black-bordered white content box on the gray page ───────────
+        self.content_border = wx.Panel(self)
+        self.content_border.SetBackgroundColour(ExamColor.CONTENT_BORDER)
+        border_sizer = wx.BoxSizer(wx.VERTICAL)
 
-        gre = wx.StaticText(self.header, label="GRE")
-        gre.SetForegroundColour(ExamColor.TEXT_ON_NAVY)
-        gre.SetFont(ui_scale.exam_sans(ui_scale.EXAM_STEM_PT, wx.FONTWEIGHT_BOLD,
-                                       wx.FONTSTYLE_ITALIC))
-        header_sizer.Add(gre, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, ui_scale.space(3))
+        self.content_box = wx.Panel(self.content_border)
+        self.content_box.SetBackgroundColour(ExamColor.CONTENT_BG)
+        box_sizer = wx.BoxSizer(wx.VERTICAL)
 
-        header_sizer.AddStretchSpacer()
-
-        # Header "Submit Section" mirrors the question screen (ends the section).
-        self.header_submit_btn = ExamButton(self.header, "Submit Section",
-                                            kind="mauve", icon="⬆",
-                                            icon_after=True)
-        self.header_submit_btn.Bind(wx.EVT_BUTTON, self._on_end_click)
-        header_sizer.Add(self.header_submit_btn, 0,
-                         wx.ALIGN_CENTER_VERTICAL | wx.ALL, ui_scale.space(2))
-        self.header.SetSizer(header_sizer)
-        main_sizer.Add(self.header, 0, wx.EXPAND)
-
-        # ── Title (sans bold) on white ─────────────────────────────────
-        self.title_label = wx.StaticText(self, label="Review Your Answers")
+        # ── Title (serif bold) ─────────────────────────────────────────
+        self.title_label = wx.StaticText(self.content_box, label="Review")
         self.title_label.SetForegroundColour(ExamColor.TEXT)
-        self.title_label.SetFont(ui_scale.exam_sans(ui_scale.EXAM_STEM_PT,
-                                                    wx.FONTWEIGHT_BOLD))
-        main_sizer.Add(self.title_label, 0,
-                       wx.LEFT | wx.RIGHT | wx.TOP, ui_scale.space(4))
+        self.title_label.SetFont(ui_scale.exam_serif(ui_scale.BASE_TITLE,
+                                                     wx.FONTWEIGHT_BOLD))
+        box_sizer.Add(self.title_label, 0,
+                      wx.LEFT | wx.RIGHT | wx.TOP, ui_scale.space(4))
 
         # ── Legend / instructions line ─────────────────────────────────
         self.legend_label = wx.StaticText(
-            self,
+            self.content_box,
             label=("Click a question number to return to it, or type a number "
                    "below and choose Go to Question.  " + _MARK_GLYPH +
                    " indicates a question marked for review."),
         )
         self.legend_label.SetForegroundColour(ExamColor.TEXT_MUTED)
         self.legend_label.SetFont(ui_scale.exam_sans(ui_scale.EXAM_DIRECTIONS_PT))
-        main_sizer.Add(self.legend_label, 0,
-                       wx.LEFT | wx.RIGHT | wx.TOP, ui_scale.space(2))
+        box_sizer.Add(self.legend_label, 0,
+                      wx.LEFT | wx.RIGHT | wx.TOP, ui_scale.space(2))
 
-        # Summary counts (kept for at-a-glance answered/marked totals).
-        self.summary_label = wx.StaticText(self, label="")
+        # Summary counts (at-a-glance answered/marked totals).
+        self.summary_label = wx.StaticText(self.content_box, label="")
         self.summary_label.SetForegroundColour(ExamColor.TEXT_MUTED)
         self.summary_label.SetFont(ui_scale.exam_sans(ui_scale.EXAM_DIRECTIONS_PT))
-        main_sizer.Add(self.summary_label, 0,
-                       wx.LEFT | wx.RIGHT | wx.TOP | wx.BOTTOM, ui_scale.space(2))
+        box_sizer.Add(self.summary_label, 0,
+                      wx.LEFT | wx.RIGHT | wx.TOP | wx.BOTTOM, ui_scale.space(2))
 
         # ── Re-skinned table (LC_REPORT) ───────────────────────────────
         # Columns: Question Number | Status | Marked. No correctness column.
-        self.list_ctrl = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
+        self.list_ctrl = wx.ListCtrl(self.content_box,
+                                     style=wx.LC_REPORT | wx.LC_SINGLE_SEL)
         self.list_ctrl.SetBackgroundColour(ExamColor.CONTENT_BG)
         self.list_ctrl.SetForegroundColour(ExamColor.TEXT)
         self.list_ctrl.SetFont(ui_scale.exam_sans(ui_scale.EXAM_COUNTER_PT))
@@ -122,50 +117,54 @@ class ReviewScreen(wx.Panel):
         self.list_ctrl.InsertColumn(1, "Status", width=ui_scale.font_size(200))
         self.list_ctrl.InsertColumn(2, "Marked", width=ui_scale.font_size(120))
         self.list_ctrl.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_item_activated)
-        main_sizer.Add(self.list_ctrl, 1,
-                       wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, ui_scale.space(4))
+        box_sizer.Add(self.list_ctrl, 1,
+                      wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, ui_scale.space(4))
 
-        # ── Navy footer: Go to Question N · Return · Submit Section ─────
-        self.footer = wx.Panel(self)
-        self.footer.SetBackgroundColour(ExamColor.HEADER_NAVY)
+        # ── Content footer: Go to Question N · Return · Submit Section ──
         footer_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
-        goto_lbl = wx.StaticText(self.footer, label="Go to Question:")
-        goto_lbl.SetForegroundColour(ExamColor.TEXT_ON_NAVY)
+        goto_lbl = wx.StaticText(self.content_box, label="Go to Question:")
+        goto_lbl.SetForegroundColour(ExamColor.TEXT)
         goto_lbl.SetFont(ui_scale.exam_sans(ui_scale.EXAM_BTN_PT))
         footer_sizer.Add(goto_lbl, 0,
                          wx.ALIGN_CENTER_VERTICAL | wx.LEFT | wx.RIGHT,
                          ui_scale.space(2))
 
         # 1-based numeric input. min=1; max is bumped per-load_review.
-        self.goto_spin = wx.SpinCtrl(self.footer, min=1, max=1, initial=1,
+        self.goto_spin = wx.SpinCtrl(self.content_box, min=1, max=1, initial=1,
                                      size=(ui_scale.font_size(80), -1))
         self.goto_spin.Bind(wx.EVT_TEXT_ENTER, self._on_goto_number)
         footer_sizer.Add(self.goto_spin, 0,
                          wx.ALIGN_CENTER_VERTICAL | wx.ALL, ui_scale.space(1))
 
-        self.goto_btn = ExamButton(self.footer, "Go to Question", kind="grey")
+        self.goto_btn = ExamButton(self.content_box, "Go to Question", kind="grey")
         self.goto_btn.Bind(wx.EVT_BUTTON, self._on_goto_number)
         footer_sizer.Add(self.goto_btn, 0,
                          wx.ALIGN_CENTER_VERTICAL | wx.ALL, ui_scale.space(1))
 
         footer_sizer.AddStretchSpacer()
 
-        self.return_btn = ExamButton(self.footer, "Return", kind="grey")
+        self.return_btn = ExamButton(self.content_box, "Return", kind="grey")
         self.return_btn.Bind(wx.EVT_BUTTON, self._on_return_click)
         footer_sizer.Add(self.return_btn, 0,
                          wx.ALIGN_CENTER_VERTICAL | wx.ALL, ui_scale.space(1))
 
-        self.end_btn = ExamButton(self.footer, "Submit Section", kind="mauve",
+        self.end_btn = ExamButton(self.content_box, "Submit Section", kind="mauve",
                                   icon="⬆", icon_after=True)
         self.end_btn.Bind(wx.EVT_BUTTON, self._on_end_click)
         footer_sizer.Add(self.end_btn, 0,
                          wx.ALIGN_CENTER_VERTICAL | wx.ALL, ui_scale.space(1))
 
-        self.footer.SetSizer(footer_sizer)
-        main_sizer.Add(self.footer, 0, wx.EXPAND)
+        box_sizer.Add(footer_sizer, 0,
+                      wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, ui_scale.space(3))
 
-        self.SetSizer(main_sizer)
+        self.content_box.SetSizer(box_sizer)
+        border_sizer.Add(self.content_box, 1, wx.EXPAND | wx.ALL,
+                         max(1, ui_scale.font_size(2)))
+        self.content_border.SetSizer(border_sizer)
+        outer.Add(self.content_border, 1, wx.EXPAND | wx.ALL, ui_scale.space(4))
+
+        self.SetSizer(outer)
 
     # ── Public API (preserved) ────────────────────────────────────────
 
@@ -225,6 +224,10 @@ class ReviewScreen(wx.Panel):
         """callback()"""
         self._on_end_section = callback
 
+    def set_section_label(self, text):
+        """Convenience passthrough to the chrome's pink section bar."""
+        self.chrome.set_section_label(text)
+
     # ── Status helpers ────────────────────────────────────────────────
 
     @staticmethod
@@ -266,11 +269,11 @@ class ReviewScreen(wx.Panel):
         if self._on_goto:
             self._on_goto(event.GetIndex())
 
-    def _on_return_click(self, event):
+    def _on_return_click(self, event=None):
         if self._on_return:
             self._on_return()
 
-    def _on_end_click(self, event):
+    def _on_end_click(self, event=None):
         dlg = wx.MessageDialog(
             self,
             "Are you sure you want to submit this section? "

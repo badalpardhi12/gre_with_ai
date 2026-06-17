@@ -152,6 +152,12 @@ class _CalcEngine:
         self._has_memory = False
         self.display = "0"     # rendered LCD string
         self._error = False    # ERROR lock; only C clears
+        # True right after a value is "committed" (=, √, ±, MR, M+). The next
+        # *digit / "." / "("* must start a brand-new entry instead of appending
+        # to the rendered result — matching every real calculator (and the ETS
+        # one): 2 + 3 = 5, then pressing 7 shows 7, not 5.07. A following
+        # *operator*, by contrast, chains off the committed value.
+        self._committed = False
 
     # ── queries ───────────────────────────────────────────────────────
     @property
@@ -188,24 +194,66 @@ class _CalcEngine:
         elif label in self._OP_MAP or label in "+()":
             self._append(self._OP_MAP.get(label, label))
         elif label == ".":
-            self._append(".")
+            self._append_decimal()
         elif label.isdigit():
             self._append_digit(label)
         # anything else is silently ignored
 
     # ── editing ───────────────────────────────────────────────────────
     def _append(self, token):
-        # Starting fresh from a bare "0" with an operator keeps the 0 so the
-        # operator binds to it (e.g. 0 - 5). Digits replace the leading 0.
+        # An operator/paren after a committed result chains off that result:
+        # keep the stored value as the expression head, just clear the commit
+        # latch. A "(" instead starts a fresh expression (you can't multiply
+        # implicitly into a parenthesis on this calculator).
+        if self._committed:
+            self._committed = False
+            if token == "(":
+                self._expr = ""
+                self._value = 0.0
         self._expr += token
         self.display = self._expr_as_display()
 
     def _append_digit(self, digit):
+        # A digit after a committed result starts a brand-new entry rather than
+        # appending to the rendered value (2+3=5 then 7 → 7, not 5.07).
+        if self._committed:
+            self._committed = False
+            self._expr = ""
+            self._value = 0.0
         if self._expr in ("", "0"):
             self._expr = digit
         else:
             self._expr += digit
         self.display = self._expr_as_display()
+
+    def _append_decimal(self):
+        """"." starts a fresh entry after a commit and prints a leading zero.
+
+        A bare leading decimal reads ``0.`` on the LCD (real-calculator look),
+        and a second "." within the same number literal is ignored.
+        """
+        if self._committed:
+            self._committed = False
+            self._expr = ""
+            self._value = 0.0
+        # Reject a second decimal point inside the current number literal.
+        tail = self._current_number_tail()
+        if "." in tail:
+            return
+        if self._expr in ("", "0"):
+            self._expr = "0."
+        else:
+            self._expr += "."
+        self.display = self._expr_as_display()
+
+    def _current_number_tail(self):
+        """The trailing run of the expression that forms the number being typed
+        (everything after the last operator or parenthesis)."""
+        idx = -1
+        for i, ch in enumerate(self._expr):
+            if ch in "+-*/()":
+                idx = i
+        return self._expr[idx + 1:]
 
     def _expr_as_display(self):
         """Show the in-progress expression with ETS glyphs (not eval ops)."""
@@ -226,6 +274,7 @@ class _CalcEngine:
             return
         self._expr = ""
         self._value = 0.0
+        self._committed = False
         self.display = "0"
 
     # ── evaluation ────────────────────────────────────────────────────
@@ -325,12 +374,14 @@ class _CalcEngine:
         # the new expression so a following op (e.g. "+ 1") uses it verbatim.
         # Use an exponent-free token so the eval whitelist accepts it.
         self._expr = _safe_expr_token(value)
+        self._committed = True
         self.display = rendered
 
     def _raise_error(self):
         self._error = True
         self._expr = ""
         self._value = 0.0
+        self._committed = False
         self.display = _ERROR
 
 
@@ -564,12 +615,21 @@ class _CalcKeypad(wx.Panel):
         # owning widget keep the callback even if the keypad is rebuilt).
         self._on_transfer_getter = on_transfer_getter
         self._transfer_enabled = True
+        # When the floating window is active, draw a blue focus *ring* around
+        # the body (spec §4.4 "blue outline on the whole calculator"). This is
+        # a painted border only — the body fill stays grey so the owner-drawn
+        # keys keep painting their corners against the body colour rather than
+        # against a solid blue field.
+        self._focused = False
 
         # ── exam-mode skin ────────────────────────────────────────────
-        body_bg = wx.Colour(0xEC, 0xEC, 0xEC)        # light-grey body [I]
+        self._body_bg = wx.Colour(0xEC, 0xEC, 0xEC)  # light-grey body [I]
+        body_bg = self._body_bg
         lcd_bg = wx.Colour(0xF2, 0xF2, 0xE6)         # light LCD [I]
         digit_fg = ExamColor.TEXT                    # dark digits
         self.SetBackgroundColour(body_bg)
+        # Paint the focus ring ourselves over the sizer's outer margin.
+        self.Bind(wx.EVT_PAINT, self._on_paint)
 
         # ── display (8-digit, right-aligned, monospace, M indicator) ───
         # Owner-drawn so the LCD stays light-field / dark-digit in macOS Dark
@@ -640,7 +700,16 @@ class _CalcKeypad(wx.Panel):
         self._refresh()
 
     def _on_char(self, event):
-        """Keyboard shortcuts (§4.3): 0-9 . + - * / ( ) = and Enter."""
+        """Keyboard shortcuts (§4.3): 0-9 . + - * / ( ) = and Enter.
+
+        This is the single source of truth for keyboard input. ``EVT_CHAR``
+        fires once per printable keystroke on every platform and already
+        carries the resolved character, so digits/operators/Enter are handled
+        *only* here. ``EVT_KEY_DOWN`` deliberately does NOT also act on them
+        (that would double-fire on macOS, turning ``5`` into ``55``); it only
+        swallows backspace/delete and lets everything else through to become a
+        CHAR event.
+        """
         code = event.GetKeyCode()
         if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
             self._press("=")
@@ -660,19 +729,17 @@ class _CalcKeypad(wx.Panel):
         event.Skip()
 
     def _on_key_down(self, event):
-        """Some platforms deliver digits/operators via EVT_KEY_DOWN on a
-        non-text owner-drawn control rather than EVT_CHAR. Route the printable
-        shortcut keys here too, falling back to EVT_CHAR for the rest."""
+        """Pre-pass for the owner-drawn display.
+
+        Only intercepts backspace/delete (so they don't reach the value and
+        never clear — spec §4.3). Printable keys are intentionally passed
+        through with ``Skip()`` so they arrive once as an ``EVT_CHAR`` and are
+        handled solely by :meth:`_on_char`. Handling them here too would
+        double-fire on macOS.
+        """
         code = event.GetKeyCode()
-        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
-            self._press("=")
-            return
-        ch = chr(code) if 0 < code < 256 else ""
-        if ch.isdigit():
-            self._press(ch)
-            return
-        if ch in self._KEY_TO_LABEL:
-            self._press(self._KEY_TO_LABEL[ch])
+        if code in (wx.WXK_BACK, wx.WXK_DELETE):
+            # Swallow: backspace must not clear and must not echo.
             return
         event.Skip()
 
@@ -680,6 +747,35 @@ class _CalcKeypad(wx.Panel):
     def _refresh(self):
         self.display.SetValue(self._engine.display)
         self.display.set_memory(self._engine.memory_active)
+
+    # ── focus ring (blue outline when the floating window is active) ───
+    def set_focused(self, focused):
+        """Show/hide the blue focus ring around the calculator body (§4.4).
+
+        Crucially this does NOT change the body background colour: the
+        owner-drawn keys paint their rounded corners against the parent's
+        background, so a blue body would tint every key. We paint a thin ring
+        in the sizer's outer margin instead.
+        """
+        focused = bool(focused)
+        if focused != self._focused:
+            self._focused = focused
+            self.Refresh()
+
+    def _on_paint(self, event):
+        # Self-contained paint: fill the body grey, then (when focused) draw a
+        # thin blue ring in the sizer's outer margin. We don't call
+        # ``event.Skip()`` so there is never a second PaintDC live at once.
+        dc = wx.PaintDC(self)
+        dc.SetBackground(wx.Brush(self._body_bg))
+        dc.Clear()
+        if not self._focused:
+            return
+        gc = wx.GraphicsContext.Create(dc)
+        w, h = self.GetClientSize()
+        gc.SetBrush(wx.TRANSPARENT_BRUSH)
+        gc.SetPen(wx.Pen(ExamColor.BTN_NEXT_BLUE, 2))
+        gc.DrawRoundedRectangle(1.5, 1.5, w - 3, h - 3, 4)
 
     # ── transfer ──────────────────────────────────────────────────────
     def set_transfer_enabled(self, enabled):
@@ -826,11 +922,13 @@ class CalculatorWidget(wx.Panel):
         self._frame.Hide()
 
     def _on_frame_activate(self, event):
-        # Draw a blue focus outline on the keypad when the window is active.
+        # Draw a thin blue focus ring around the keypad when the window is
+        # active (spec §4.4). We must NOT recolour the keypad background — the
+        # owner-drawn keys paint their rounded corners against the parent's
+        # background, so a blue body would tint every key. ``set_focused``
+        # paints a ring in the outer margin instead.
         try:
-            border = ExamColor.BTN_NEXT_BLUE if event.GetActive() else ExamColor.DIVIDER
-            self._keypad.SetBackgroundColour(border)
-            self._keypad.Refresh()
+            self._keypad.set_focused(bool(event.GetActive()))
         except Exception:
             pass
         event.Skip()

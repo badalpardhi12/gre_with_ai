@@ -382,10 +382,17 @@ class MainFrame(wx.Frame):
     def _sync_exam_mode(self, name):
         """Enter/exit ETS exam mode when crossing into/out of the test flow.
 
-        Exam mode = fullscreen takeover + hidden app sidebar, so the in-test
-        screens present like the real ETS GRE interface. Idempotent; only acts
-        on an actual state change so non-test screen switches don't flicker
-        fullscreen.
+        Exam mode hides the app sidebar and grows the window to fill the
+        display so the in-test screens present like the real ETS GRE interface.
+        Idempotent; only acts on an actual state change so non-test screen
+        switches don't flicker.
+
+        NB: we deliberately do NOT use ``ShowFullScreen(FULLSCREEN_ALL)`` — on
+        macOS it can position the frame with a negative top-left, so the navy
+        header and the left edge get clipped off-screen. Instead we size to the
+        display's *usable client area* (which excludes the menu bar / notch and
+        always has a non-negative origin), which stays fully on-screen, and
+        restore the previous geometry on exit.
         """
         want = name in self._EXAM_MODE_SCREENS
         if want == getattr(self, "_exam_mode_active", False):
@@ -393,12 +400,28 @@ class MainFrame(wx.Frame):
         self._exam_mode_active = want
         try:
             if want:
+                # Remember how to restore the normal window afterwards.
+                self._pre_exam_rect = self.GetScreenRect()
+                self._pre_exam_maximized = self.IsMaximized()
+                # Clear any lingering native fullscreen from an older build.
+                if self.IsFullScreen():
+                    self.ShowFullScreen(False)
                 self.sidebar.Hide()
-                self.ShowFullScreen(True, style=wx.FULLSCREEN_ALL)
+                idx = wx.Display.GetFromWindow(self)
+                disp = wx.Display(idx if idx != wx.NOT_FOUND else 0)
+                area = disp.GetClientArea()  # excludes menu bar; origin >= 0
+                self.SetPosition(area.GetTopLeft())
+                self.SetSize(area)
             else:
-                self.ShowFullScreen(False)
+                if self.IsFullScreen():
+                    self.ShowFullScreen(False)
                 self.sidebar.Show()
+                if getattr(self, "_pre_exam_maximized", False):
+                    self.Maximize(True)
+                elif getattr(self, "_pre_exam_rect", None) is not None:
+                    self.SetSize(self._pre_exam_rect)
             self.GetSizer().Layout()
+            self.Layout()
         except Exception:
             # Fullscreen/sidebar toggling must never crash the test flow.
             import logging

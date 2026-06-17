@@ -42,7 +42,12 @@ class ExamButton(wx.Panel):
 
         self._desired_h = height if height is not None else ui_scale.space(11)
         self._min_w = min_width if min_width is not None else ui_scale.space(24)
-        self.SetMinSize((self._min_w, self._desired_h))
+        # Size to fit the (icon + label) text, never below _min_w, so labels
+        # like "Submit Section ⬆" / "Back to Dashboard" are never clipped.
+        # NB: we SetMinSize to the COMPUTED width — calling SetMinSize with the
+        # bare _min_w would override DoGetBestClientSize and pin every button to
+        # the default width.
+        self.SetMinSize(self._compute_size())
         self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
         self.SetCursor(wx.Cursor(wx.CURSOR_HAND))
 
@@ -53,18 +58,20 @@ class ExamButton(wx.Panel):
         self.Bind(wx.EVT_LEFT_UP, self._on_up)
         self.Bind(wx.EVT_KEY_DOWN, self._on_key)
 
-    def DoGetBestClientSize(self):  # noqa: N802 — wx idiom
-        # Size to the text so labels like "Submit Section ⬆" aren't clipped.
+    def _compute_size(self):
+        """Best (width, height): text + horizontal padding, floored at _min_w."""
         dc = wx.MemoryDC()
         dc.SelectObject(wx.Bitmap(1, 1))
         dc.SetFont(ui_scale.exam_sans(ui_scale.EXAM_BTN_PT, wx.FONTWEIGHT_BOLD))
         lbl = self._label
         if self._icon:
             lbl = f"{lbl}  {self._icon}" if self._icon_after else f"{self._icon}  {lbl}"
-        tw, th = dc.GetTextExtent(lbl)
+        tw, _th = dc.GetTextExtent(lbl)
         dc.SelectObject(wx.NullBitmap)
-        w = max(self._min_w, tw + 2 * ui_scale.space(4))
-        return wx.Size(w, self._desired_h)
+        return wx.Size(max(self._min_w, tw + 2 * ui_scale.space(4)), self._desired_h)
+
+    def DoGetBestClientSize(self):  # noqa: N802 — wx idiom
+        return self._compute_size()
 
     # ── public API ────────────────────────────────────────────────────
 
@@ -72,6 +79,8 @@ class ExamButton(wx.Panel):
         self._label = label
         if icon is not None:
             self._icon = icon
+        self.SetMinSize(self._compute_size())
+        self.InvalidateBestSize()
         self.Refresh()
 
     def set_kind(self, kind):

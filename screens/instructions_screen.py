@@ -140,7 +140,7 @@ class InstructionsScreen(wx.Panel):
         # ── Bottom-aligned button row (Cancel · Continue) ─────────────
         btn_row = wx.BoxSizer(wx.HORIZONTAL)
         self.cancel_btn = ExamButton(self, "Back to Dashboard", kind="grey",
-                                     icon="◀")
+                                     icon="◀", min_width=ui_scale.font_size(190))
         self.cancel_btn.Bind(wx.EVT_BUTTON, self._on_cancel_click)
         btn_row.Add(self.cancel_btn, 0, wx.RIGHT, ui_scale.space(4))
 

@@ -103,6 +103,24 @@ map (one transaction), never option-rows-first / questions-later.** The aggregat
 (`scripts/run_all_audits.py`) and `services/seed_sync.py` invariants are the backstop, but
 the atomic-mirror discipline is the real prevention.
 
+## Update pipeline — how seed changes reach the user (hardened 2026-06)
+
+On launch `init_db()` runs `apply_pending_migrations()` then `seed_sync.reconcile_if_stale()`.
+Staleness is detected by a **content signature** `sha256:<size>:<hex>` of `data/gre_mock.db`
+stored in the user DB's `sync_state` (NOT `(mtime, size)` — a same-size pull with a
+preserved mtime used to false-match and silently skip the reconcile). The reconcile:
+- `question`: UPSERT seed-authored columns on shared qids + INSERT new qids; the
+  per-user columns in `_QUESTION_USER_OWNED_COLS` (pretest*/irt*/created_at/status/
+  provenance_json) are preserved (status/provenance are migration-owned).
+- wipe-and-replace (no inbound user FK): `stimulus`, `questionoption`, `numericanswer`,
+  `lesson`, `vocabroot`.
+- UPSERT-by-PK (have inbound user FKs, can't wipe): `awaprompt` (←awasubmission.prompt_id),
+  `vocabword` (←flashcardreview.word_id) — preserves the user's essays + SRS links.
+- Only columns present in BOTH seed and user tables are synced (schema-drift safe).
+When adding a NEW shippable reference table, classify it: no inbound user-state FK →
+add to `_WIPE_AND_REPLACE_TABLES`; has one → `_UPSERT_BY_PK_TABLES`. Never add a
+user-state/telemetry table. Tests: `tests/test_seed_sync_lifecycle.py`.
+
 ## Documented follow-ups (not shipped)
 
 - Taxonomy backfill: 137 live items (121 Kaplan carry chapter/practice-set labels spanning

@@ -102,7 +102,8 @@ class QuestionScreen(wx.Panel):
         header_sizer.AddStretchSpacer()
 
         self.submit_btn = ExamButton(self.header, "Submit Section", kind="mauve",
-                                     icon="⬆", icon_after=True)
+                                     icon="⬆", icon_after=True,
+                                     min_width=ui_scale.font_size(150))
         self.submit_btn.Bind(wx.EVT_BUTTON, self._on_submit_section)
         header_sizer.Add(self.submit_btn, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL,
                          ui_scale.space(2))
@@ -591,41 +592,37 @@ class QuestionScreen(wx.Panel):
 
     def _add_wrapping_option(self, label_text, control_type, on_change,
                              is_first=False):
-        """Row with a native radio/checkbox (renders as ETS oval/square on
-        macOS) + a wrappable serif text label. Clicking the text activates
-        the control (ETS click-target parity)."""
+        """Row with an owner-drawn ETS oval (radio) / square (checkbox) marker
+        + a wrappable serif text label. Clicking either the marker or the text
+        activates the control (ETS click-target parity). The control exposes a
+        wx-compatible GetValue/SetValue + EVT_RADIOBUTTON/EVT_CHECKBOX surface
+        so response read/restore is unchanged."""
         from widgets.latex_inline_text import latex_inline_to_text
+        from widgets.exam_choice import ExamChoice
         if control_type == "radio":
-            style = wx.RB_GROUP if is_first else 0
-            ctrl = wx.RadioButton(self.answer_panel, label="", style=style)
+            ctrl = ExamChoice(self.answer_panel, shape="oval")
+            if is_first:
+                self._radio_group = []
+            grp = getattr(self, "_radio_group", None)
+            if grp is None:
+                grp = self._radio_group = []
+            grp.append(ctrl)
+            ctrl.set_group(grp)
             ctrl.Bind(wx.EVT_RADIOBUTTON, on_change)
         else:
-            ctrl = wx.CheckBox(self.answer_panel, label="")
+            ctrl = ExamChoice(self.answer_panel, shape="square")
             ctrl.Bind(wx.EVT_CHECKBOX, on_change)
-        ctrl.SetBackgroundColour(ExamColor.CONTENT_BG)
 
         row = wx.BoxSizer(wx.HORIZONTAL)
         row.Add(ctrl, 0, wx.RIGHT | wx.ALIGN_TOP, ui_scale.space(2))
         text = wx.StaticText(self.answer_panel, label=latex_inline_to_text(label_text))
         text.SetForegroundColour(ExamColor.TEXT)
         text.SetFont(ui_scale.exam_serif(ui_scale.EXAM_CHOICE_PT))
-        text.Bind(wx.EVT_LEFT_DOWN, lambda evt, c=ctrl: self._toggle_from_text(c, evt))
+        text.Bind(wx.EVT_LEFT_DOWN, lambda evt, c=ctrl: c.activate())
         row.Add(text, 1, wx.EXPAND)
         self.answer_sizer.Add(row, 0, wx.EXPAND | wx.ALL, ui_scale.space(2))
         self._option_texts.append(text)
         return ctrl
-
-    def _toggle_from_text(self, ctrl, _evt):
-        if isinstance(ctrl, wx.RadioButton):
-            ctrl.SetValue(True)
-            new_evt = wx.PyCommandEvent(wx.EVT_RADIOBUTTON.typeId, ctrl.GetId())
-            new_evt.SetEventObject(ctrl)
-            wx.PostEvent(ctrl, new_evt)
-        elif isinstance(ctrl, wx.CheckBox):
-            ctrl.SetValue(not ctrl.GetValue())
-            new_evt = wx.PyCommandEvent(wx.EVT_CHECKBOX.typeId, ctrl.GetId())
-            new_evt.SetEventObject(ctrl)
-            wx.PostEvent(ctrl, new_evt)
 
     def _on_answer_panel_resize(self, event):
         self._rewrap_options()

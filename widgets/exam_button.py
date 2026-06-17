@@ -54,7 +54,17 @@ class ExamButton(wx.Panel):
         self.Bind(wx.EVT_KEY_DOWN, self._on_key)
 
     def DoGetBestClientSize(self):  # noqa: N802 — wx idiom
-        return wx.Size(self._min_w, self._desired_h)
+        # Size to the text so labels like "Submit Section ⬆" aren't clipped.
+        dc = wx.MemoryDC()
+        dc.SelectObject(wx.Bitmap(1, 1))
+        dc.SetFont(ui_scale.exam_sans(ui_scale.EXAM_BTN_PT, wx.FONTWEIGHT_BOLD))
+        lbl = self._label
+        if self._icon:
+            lbl = f"{lbl}  {self._icon}" if self._icon_after else f"{self._icon}  {lbl}"
+        tw, th = dc.GetTextExtent(lbl)
+        dc.SelectObject(wx.NullBitmap)
+        w = max(self._min_w, tw + 2 * ui_scale.space(4))
+        return wx.Size(w, self._desired_h)
 
     # ── public API ────────────────────────────────────────────────────
 

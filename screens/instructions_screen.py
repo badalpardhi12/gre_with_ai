@@ -1,11 +1,29 @@
 """
-Instructions screen — displayed before each section begins.
+Instructions screen — the ETS GRE section-intro page shown before each
+section begins.
+
+Re-skinned to "exam mode" (docs/gre_ui_spec_2026_06.md §7): a navy header
+strip carrying the "ETS  GRE" lockup over a white, serif content area, with a
+prominent blue "Continue" button and a grey "Back to Dashboard"/"Cancel"
+button bottom-aligned. Distinct from the dark study-app chrome.
+
+Public API consumed by main_frame.py is preserved verbatim:
+``set_section(section_type, section_state=None)``, ``set_on_begin(callback)``,
+``set_on_cancel(callback)`` and the ``display_label`` override path for mixed
+Quick Drills.
 """
 import wx
 
 from models.exam_session import SectionType, SECTION_META
 from widgets import ui_scale
-from widgets.theme import Color
+from widgets.exam_button import ExamButton
+from widgets.theme import ExamColor
+
+
+# Quant section directions carry this caveat on the real test (spec §3.4 /
+# §9). Appended in `set_section` for any Quant section so the SECTION_INSTRUCTIONS
+# body text stays the canonical source for everything else.
+FIGURES_CAVEAT = "Figures are not necessarily drawn to scale."
 
 
 SECTION_INSTRUCTIONS = {
@@ -72,66 +90,95 @@ SECTION_INSTRUCTIONS = {
 }
 
 
+def _is_quant_section(section_type):
+    """True when this section's measure is Quant (needs the figures caveat)."""
+    meta = SECTION_META.get(section_type)
+    return bool(meta) and meta[0] == "quant"
+
+
 class InstructionsScreen(wx.Panel):
-    """Displays section instructions with a Begin button."""
+    """ETS-skinned section-intro page with a Continue affordance."""
+
+    # Wrap width for the serif body — scales with DPI so the prose doesn't
+    # sit in a narrow column on a 4K display.
+    _WRAP_BASE = 760
 
     def __init__(self, parent):
         super().__init__(parent)
-        self.SetBackgroundColour(Color.BG_PAGE)
+        self.SetBackgroundColour(ExamColor.CONTENT_BG)
         self._on_begin = None
         self._on_cancel = None
         self._build_ui()
 
+    # ── construction ──────────────────────────────────────────────────
+
     def _build_ui(self):
         main_sizer = wx.BoxSizer(wx.VERTICAL)
 
-        # Top bar with back button
-        top_bar = wx.BoxSizer(wx.HORIZONTAL)
-        self.back_btn = wx.Button(self, label="← Back to Dashboard")
-        self.back_btn.Bind(wx.EVT_BUTTON, self._on_cancel_click)
-        top_bar.Add(self.back_btn, 0, wx.ALL, 8)
-        top_bar.AddStretchSpacer()
-        main_sizer.Add(top_bar, 0, wx.EXPAND)
-        main_sizer.AddSpacer(20)
+        main_sizer.Add(self._build_header(), 0, wx.EXPAND)
+
+        # ── White content area (serif title + body) ───────────────────
+        content = wx.BoxSizer(wx.VERTICAL)
+        content.AddSpacer(ui_scale.space(8))
 
         self.title_label = wx.StaticText(self, label="Section Instructions")
-        self.title_label.SetFont(wx.Font(22, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
-                                          wx.FONTWEIGHT_BOLD))
-        self.title_label.SetForegroundColour(Color.TEXT_PRIMARY)
-        main_sizer.Add(self.title_label, 0, wx.ALIGN_CENTER | wx.BOTTOM, 20)
+        self.title_label.SetForegroundColour(ExamColor.TEXT)
+        self.title_label.SetFont(
+            ui_scale.exam_serif(ui_scale.BASE_TITLE, wx.FONTWEIGHT_BOLD)
+        )
+        content.Add(self.title_label, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM,
+                    ui_scale.space(5))
 
         self.body_text = wx.StaticText(self, label="")
-        self.body_text.SetFont(wx.Font(13, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
-                                        wx.FONTWEIGHT_NORMAL))
-        self.body_text.SetForegroundColour(Color.TEXT_SECONDARY)
-        # Wrap width scales with DPI so the text doesn't sit in a narrow
-        # column on a 4K display.
-        self.body_text.Wrap(ui_scale.font_size(700))
-        main_sizer.Add(self.body_text, 0, wx.LEFT | wx.RIGHT, 80)
+        self.body_text.SetForegroundColour(ExamColor.TEXT)
+        self.body_text.SetFont(ui_scale.exam_serif(ui_scale.EXAM_CHOICE_PT))
+        self.body_text.Wrap(ui_scale.font_size(self._WRAP_BASE))
+        content.Add(self.body_text, 0, wx.LEFT | wx.RIGHT, ui_scale.space(5))
 
-        main_sizer.AddSpacer(30)
+        main_sizer.Add(content, 1, wx.EXPAND | wx.ALL, ui_scale.space(6))
 
-        # Buttons row
+        # ── Bottom-aligned button row (Cancel · Continue) ─────────────
         btn_row = wx.BoxSizer(wx.HORIZONTAL)
+        self.cancel_btn = ExamButton(self, "Back to Dashboard", kind="grey",
+                                     icon="◀")
+        self.cancel_btn.Bind(wx.EVT_BUTTON, self._on_cancel_click)
+        btn_row.Add(self.cancel_btn, 0, wx.RIGHT, ui_scale.space(4))
+
         btn_row.AddStretchSpacer()
 
-        self.cancel_btn = wx.Button(self, label="  Cancel  ", size=(120, 44))
-        self.cancel_btn.SetFont(wx.Font(13, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
-                                         wx.FONTWEIGHT_NORMAL))
-        self.cancel_btn.Bind(wx.EVT_BUTTON, self._on_cancel_click)
-        btn_row.Add(self.cancel_btn, 0, wx.RIGHT, 20)
-
-        self.begin_btn = wx.Button(self, label="  Begin Section  ", size=(180, 44))
-        self.begin_btn.SetFont(wx.Font(14, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL,
-                                        wx.FONTWEIGHT_BOLD))
-        self.begin_btn.SetBackgroundColour(Color.SUCCESS)
-        self.begin_btn.SetForegroundColour(Color.TEXT_INVERSE)
+        self.begin_btn = ExamButton(self, "Continue", kind="next", icon="▶",
+                                    icon_after=True)
         self.begin_btn.Bind(wx.EVT_BUTTON, self._on_begin_click)
         btn_row.Add(self.begin_btn, 0)
-        btn_row.AddStretchSpacer()
-        main_sizer.Add(btn_row, 0, wx.EXPAND)
+
+        main_sizer.Add(btn_row, 0, wx.EXPAND | wx.ALL, ui_scale.space(6))
 
         self.SetSizer(main_sizer)
+
+    def _build_header(self):
+        """Navy strip with the inline 'ETS  GRE' lockup (matches the
+        question screen header: white 'ETS' on navy + italic white 'GRE')."""
+        self.header = wx.Panel(self)
+        self.header.SetBackgroundColour(ExamColor.HEADER_NAVY)
+        header_sizer = wx.BoxSizer(wx.HORIZONTAL)
+
+        logo = wx.StaticText(self.header, label="ETS")
+        logo.SetForegroundColour(ExamColor.HEADER_NAVY)
+        logo.SetBackgroundColour(ExamColor.TEXT_ON_NAVY)
+        logo.SetFont(ui_scale.exam_sans(ui_scale.EXAM_COUNTER_PT, wx.FONTWEIGHT_BOLD))
+        header_sizer.Add(logo, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, ui_scale.space(3))
+
+        gre = wx.StaticText(self.header, label="GRE")
+        gre.SetForegroundColour(ExamColor.TEXT_ON_NAVY)
+        gre.SetFont(ui_scale.exam_sans(ui_scale.EXAM_STEM_PT, wx.FONTWEIGHT_BOLD,
+                                       wx.FONTSTYLE_ITALIC))
+        header_sizer.Add(gre, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, ui_scale.space(3))
+
+        header_sizer.AddStretchSpacer()
+        self.header.SetSizer(header_sizer)
+        return self.header
+
+    # ── public API (preserved for main_frame.py) ──────────────────────
 
     def set_section(self, section_type, section_state=None):
         """Configure for a specific section.
@@ -140,6 +187,10 @@ class InstructionsScreen(wx.Panel):
         Drill), the screen overrides the canonical title and body so
         the user doesn't see "Verbal Reasoning — Section 1" before a
         drill that actually mixes both measures.
+
+        For Quant sections the "Figures are not necessarily drawn to
+        scale." caveat is appended to the body (it isn't in the
+        SECTION_INSTRUCTIONS text but belongs on the real ETS page).
         """
         info = SECTION_INSTRUCTIONS.get(section_type, {})
         title = info.get("title", "Section")
@@ -159,9 +210,12 @@ class InstructionsScreen(wx.Panel):
                 "You may navigate freely within this drill, mark questions for "
                 "review, and end the drill at any time."
             )
+        elif _is_quant_section(section_type) and FIGURES_CAVEAT not in body:
+            body = body + "\n\n" + FIGURES_CAVEAT
+
         self.title_label.SetLabel(title)
         self.body_text.SetLabel(body)
-        self.body_text.Wrap(ui_scale.font_size(700))
+        self.body_text.Wrap(ui_scale.font_size(self._WRAP_BASE))
         self.Layout()
 
     def set_on_begin(self, callback):
@@ -171,6 +225,8 @@ class InstructionsScreen(wx.Panel):
     def set_on_cancel(self, callback):
         """callback() — called when user clicks Back/Cancel"""
         self._on_cancel = callback
+
+    # ── event plumbing ────────────────────────────────────────────────
 
     def _on_cancel_click(self, event):
         if self._on_cancel:

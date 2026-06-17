@@ -334,6 +334,200 @@ class _CalcEngine:
         self.display = _ERROR
 
 
+# ── exam-mode key fills (light grey-on-light, dark glyphs) ─────────────
+# Native wx.Button ignores SetBackgroundColour on macOS Dark appearance, so
+# the keys are owner-drawn (immune to the OS dark chrome). ETS keys are a light
+# bevel with DARK glyphs; operators sit slightly darker, memory keys faint navy.
+_KEY_BG = wx.Colour(0xEC, 0xEC, 0xEC)       # light-grey digit key [I]
+_KEY_BG_HOVER = wx.Colour(0xF6, 0xF6, 0xF6) # lit-up on hover
+_KEY_BG_PRESS = wx.Colour(0xD8, 0xD8, 0xD8) # pressed-in
+_OP_BG = wx.Colour(0xDC, 0xDC, 0xDC)        # darker bevel for operators
+_OP_BG_HOVER = wx.Colour(0xE6, 0xE6, 0xE6)
+_OP_BG_PRESS = wx.Colour(0xC8, 0xC8, 0xC8)
+_MEM_BG = wx.Colour(0xD2, 0xD8, 0xE2)       # faint-navy memory keys
+_MEM_BG_HOVER = wx.Colour(0xDE, 0xE3, 0xEB)
+_MEM_BG_PRESS = wx.Colour(0xBE, 0xC6, 0xD4)
+_KEY_BORDER = wx.Colour(0xB8, 0xB8, 0xB8)   # bevel outline
+
+
+class _CalcKey(wx.Panel):
+    """Owner-drawn calculator key — a filled rounded rect + centered glyph.
+
+    Native ``wx.Button`` ignores ``SetBackgroundColour`` / ``SetForegroundColour``
+    on macOS Dark appearance, so a digit like ``7`` renders as a light glyph on
+    the OS dark chrome and becomes invisible. This control paints exactly the
+    colours it is given (a light bevel with dark text), so it stays legible in
+    both Light and Dark appearance. Emits :data:`wx.EVT_BUTTON` like the native
+    button it replaces, and exposes ``Enable`` / ``IsEnabled`` so the Transfer
+    Display gating keeps working.
+    """
+
+    def __init__(self, parent, label, fills, text_colour, font, size):
+        super().__init__(parent, size=size, style=wx.WANTS_CHARS)
+        self._label = label
+        self._fill, self._fill_hover, self._fill_press = fills
+        self._text = text_colour
+        self._font = font
+        self._hover = False
+        self._pressed = False
+        self._enabled = True
+
+        self.SetMinSize(size)
+        self.SetBackgroundColour(parent.GetBackgroundColour())
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self.SetCursor(wx.Cursor(wx.CURSOR_HAND))
+
+        self.Bind(wx.EVT_PAINT, self._on_paint)
+        self.Bind(wx.EVT_ENTER_WINDOW, self._on_enter)
+        self.Bind(wx.EVT_LEAVE_WINDOW, self._on_leave)
+        self.Bind(wx.EVT_LEFT_DOWN, self._on_down)
+        self.Bind(wx.EVT_LEFT_UP, self._on_up)
+        self.Bind(wx.EVT_MOUSE_CAPTURE_LOST, self._on_capture_lost)
+
+    # ── enable/disable (mirror the wx.Window surface used by callers) ──
+    def Enable(self, enable=True):  # noqa: N802 — wx idiom
+        self._enabled = bool(enable)
+        self.SetCursor(wx.Cursor(wx.CURSOR_HAND if enable else wx.CURSOR_ARROW))
+        self.Refresh()
+        return super().Enable(enable)
+
+    def Disable(self):  # noqa: N802
+        return self.Enable(False)
+
+    def IsEnabled(self):  # noqa: N802
+        return self._enabled
+
+    def set_fills(self, fills, text_colour):
+        self._fill, self._fill_hover, self._fill_press = fills
+        self._text = text_colour
+        self.Refresh()
+
+    # ── event plumbing (emit wx.EVT_BUTTON, like wx.Button) ───────────
+    def _emit_clicked(self):
+        evt = wx.CommandEvent(wx.wxEVT_BUTTON, self.GetId())
+        evt.SetEventObject(self)
+        wx.PostEvent(self, evt)
+
+    def _on_enter(self, _):
+        if self._enabled:
+            self._hover = True
+            self.Refresh()
+
+    def _on_leave(self, _):
+        self._hover = False
+        self._pressed = False
+        self.Refresh()
+
+    def _on_down(self, _):
+        if not self._enabled:
+            return
+        self._pressed = True
+        if not self.HasCapture():
+            self.CaptureMouse()
+        self.Refresh()
+
+    def _on_up(self, evt):
+        if not self._enabled:
+            return
+        if self.HasCapture():
+            self.ReleaseMouse()
+        was_pressed = self._pressed
+        self._pressed = False
+        self.Refresh()
+        if was_pressed and self.GetClientRect().Contains(evt.GetPosition()):
+            self._emit_clicked()
+
+    def _on_capture_lost(self, _):
+        self._pressed = False
+
+    # ── painting ──────────────────────────────────────────────────────
+    def _on_paint(self, _):
+        dc = wx.AutoBufferedPaintDC(self)
+        gc = wx.GraphicsContext.Create(dc)
+        w, h = self.GetClientSize()
+        # Paint the panel background (parent colour) so the rounded corners read
+        # clean against the calculator body in either appearance.
+        gc.SetBrush(wx.Brush(self.GetParent().GetBackgroundColour()))
+        gc.SetPen(wx.TRANSPARENT_PEN)
+        gc.DrawRectangle(0, 0, w, h)
+
+        if not self._enabled:
+            bg = ExamColor.BTN_DISABLED
+            fg = ExamColor.TEXT_ON_NAVY
+        elif self._pressed:
+            bg, fg = self._fill_press, self._text
+        elif self._hover:
+            bg, fg = self._fill_hover, self._text
+        else:
+            bg, fg = self._fill, self._text
+
+        radius = max(2, ui_scale.font_size(4))
+        gc.SetPen(wx.Pen(_KEY_BORDER, 1))
+        gc.SetBrush(wx.Brush(bg))
+        gc.DrawRoundedRectangle(0.5, 0.5, w - 1, h - 1, radius)
+
+        gc.SetFont(self._font, fg)
+        tw, th = gc.GetTextExtent(self._label)
+        gc.DrawText(self._label, (w - tw) / 2.0, (h - th) / 2.0)
+
+
+class _CalcDisplay(wx.Panel):
+    """Owner-drawn LCD — a light field with dark, right-aligned monospace digits
+    and an ``M`` memory indicator on the left.
+
+    Replaces the former ``wx.TextCtrl``: a read-only ``wx.TextCtrl`` renders with
+    the OS dark chrome on macOS Dark appearance (dark field, faint digits),
+    defeating the light-LCD look. Painting it ourselves keeps it dark-on-light in
+    every appearance. Still accepts keystrokes (it has focus) and forwards them
+    to the keypad's shortcut handler.
+    """
+
+    def __init__(self, parent, lcd_bg, digit_fg, digit_font, mem_font, height):
+        super().__init__(parent, size=(-1, height), style=wx.WANTS_CHARS)
+        self._lcd_bg = lcd_bg
+        self._fg = digit_fg
+        self._digit_font = digit_font
+        self._mem_font = mem_font
+        self._value = "0"
+        self._mem = False
+        self.SetMinSize((-1, height))
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self.Bind(wx.EVT_PAINT, self._on_paint)
+        # Click to focus so keyboard shortcuts land here.
+        self.Bind(wx.EVT_LEFT_DOWN, lambda _e: self.SetFocus())
+
+    def SetValue(self, value):  # noqa: N802 — mirror wx.TextCtrl
+        self._value = value
+        self.Refresh()
+
+    def GetValue(self):  # noqa: N802 — mirror wx.TextCtrl
+        return self._value
+
+    def set_memory(self, active):
+        self._mem = bool(active)
+        self.Refresh()
+
+    def _on_paint(self, _):
+        dc = wx.AutoBufferedPaintDC(self)
+        gc = wx.GraphicsContext.Create(dc)
+        w, h = self.GetClientSize()
+        # Light LCD field with a thin inset border.
+        gc.SetBrush(wx.Brush(self._lcd_bg))
+        gc.SetPen(wx.Pen(_KEY_BORDER, 1))
+        gc.DrawRectangle(0.5, 0.5, w - 1, h - 1)
+
+        pad = max(4, ui_scale.font_size(4))
+        # 'M' indicator on the left.
+        gc.SetFont(self._mem_font, self._fg)
+        if self._mem:
+            gc.DrawText("M", pad, (h - gc.GetTextExtent("M")[1]) / 2.0)
+
+        # Right-aligned monospace value.
+        gc.SetFont(self._digit_font, self._fg)
+        tw, th = gc.GetTextExtent(self._value)
+        gc.DrawText(self._value, max(pad, w - tw - pad), (h - th) / 2.0)
+
+
 class _CalcKeypad(wx.Panel):
     """The visible calculator surface (display + keys + Transfer Display).
 
@@ -375,43 +569,27 @@ class _CalcKeypad(wx.Panel):
         body_bg = wx.Colour(0xEC, 0xEC, 0xEC)        # light-grey body [I]
         lcd_bg = wx.Colour(0xF2, 0xF2, 0xE6)         # light LCD [I]
         digit_fg = ExamColor.TEXT                    # dark digits
-        key_bg = wx.Colour(0xFA, 0xFA, 0xFA)         # light bevel key
-        op_bg = wx.Colour(0xDC, 0xDC, 0xDC)          # darker bevel key
-        mem_bg = wx.Colour(0xD2, 0xD8, 0xE2)         # memory keys, faint navy
-        key_fg = ExamColor.TEXT
         self.SetBackgroundColour(body_bg)
 
         # ── display (8-digit, right-aligned, monospace, M indicator) ───
-        # The M indicator + LCD live inside ``disp_panel`` so they must be
-        # parented to it (a sizer only manages windows whose parent is the
-        # sizer's owning window).
-        disp_row = wx.BoxSizer(wx.HORIZONTAL)
-        disp_panel = wx.Panel(self)
-        disp_panel.SetBackgroundColour(lcd_bg)
-
-        self._mem_indicator = wx.StaticText(disp_panel, label=" ")
-        self._mem_indicator.SetFont(ui_scale.make_font(
-            ui_scale.font_size(14), weight=wx.FONTWEIGHT_BOLD,
-            family=wx.FONTFAMILY_TELETYPE))
-        self._mem_indicator.SetForegroundColour(digit_fg)
-        self._mem_indicator.SetBackgroundColour(lcd_bg)
-
-        self.display = wx.TextCtrl(
-            disp_panel, style=wx.TE_RIGHT | wx.TE_READONLY | wx.BORDER_NONE)
-        self.display.SetFont(ui_scale.make_font(
+        # Owner-drawn so the LCD stays light-field / dark-digit in macOS Dark
+        # appearance (a read-only wx.TextCtrl would render with the OS dark
+        # chrome and the digits would be barely legible).
+        digit_font = ui_scale.make_font(
             ui_scale.font_size(18), weight=wx.FONTWEIGHT_NORMAL,
-            family=wx.FONTFAMILY_TELETYPE))
-        self.display.SetValue("0")
-        self.display.SetBackgroundColour(lcd_bg)
-        self.display.SetForegroundColour(digit_fg)
+            family=wx.FONTFAMILY_TELETYPE)
+        mem_font = ui_scale.make_font(
+            ui_scale.font_size(14), weight=wx.FONTWEIGHT_BOLD,
+            family=wx.FONTFAMILY_TELETYPE)
+        disp_h = ui_scale.font_size(34)
+        self.display = _CalcDisplay(
+            self, lcd_bg, digit_fg, digit_font, mem_font, disp_h)
         # Forward keystrokes typed on the LCD to the shortcut handler.
         self.display.Bind(wx.EVT_CHAR, self._on_char)
+        self.display.Bind(wx.EVT_KEY_DOWN, self._on_key_down)
 
-        dp_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        dp_sizer.Add(self._mem_indicator, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 4)
-        dp_sizer.Add(self.display, 1, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 2)
-        disp_panel.SetSizer(dp_sizer)
-        disp_row.Add(disp_panel, 1, wx.EXPAND)
+        disp_row = wx.BoxSizer(wx.HORIZONTAL)
+        disp_row.Add(self.display, 1, wx.EXPAND)
 
         # ── key grid ──────────────────────────────────────────────────
         grid = wx.GridBagSizer(vgap=3, hgap=3)
@@ -422,18 +600,15 @@ class _CalcKeypad(wx.Panel):
             for c, label in enumerate(row):
                 if label is None:
                     continue
-                btn = wx.Button(self, label=label, size=cell,
-                                style=wx.BU_EXACTFIT)
-                btn.SetFont(btn_font)
                 if label in self._MEM_KEYS:
-                    btn.SetBackgroundColour(mem_bg)
+                    fills = (_MEM_BG, _MEM_BG_HOVER, _MEM_BG_PRESS)
                 elif label in self._OP_KEYS:
-                    btn.SetBackgroundColour(op_bg)
+                    fills = (_OP_BG, _OP_BG_HOVER, _OP_BG_PRESS)
                 else:
-                    btn.SetBackgroundColour(key_bg)
-                btn.SetForegroundColour(key_fg)
+                    fills = (_KEY_BG, _KEY_BG_HOVER, _KEY_BG_PRESS)
+                btn = _CalcKey(self, label, fills, ExamColor.TEXT, btn_font, cell)
                 btn.Bind(wx.EVT_BUTTON, lambda e, l=label: self._press(l))
-                # Keep button focus from stealing the keyboard handler.
+                # Keep keyboard shortcuts working from a focused key too.
                 btn.Bind(wx.EVT_CHAR, self._on_char)
                 grid.Add(btn, pos=(r, c), flag=wx.EXPAND)
                 self._buttons[label] = btn
@@ -441,8 +616,13 @@ class _CalcKeypad(wx.Panel):
             grid.AddGrowableCol(col)
 
         # ── Transfer Display (full-width bottom bar) ──────────────────
-        self.transfer_btn = wx.Button(self, label="Transfer Display")
-        self.transfer_btn.SetFont(btn_font)
+        # Owner-drawn (same theme-proof control) so the bar's fill survives
+        # macOS Dark appearance. Enabled = mid-grey clickable; disabled =
+        # ExamColor.BTN_DISABLED non-clickable.
+        self.transfer_btn = _CalcKey(
+            self, "Transfer Display",
+            (ExamColor.BTN_GREY, ExamColor.BTN_GREY_HOVER, ExamColor.BTN_GREY),
+            ExamColor.BTN_TEXT, btn_font, (-1, ui_scale.font_size(30)))
         self.transfer_btn.Bind(wx.EVT_BUTTON, self._on_transfer)
         self._apply_transfer_style()
 
@@ -473,16 +653,33 @@ class _CalcKeypad(wx.Panel):
             self._press(self._KEY_TO_LABEL[ch])
             return
         # Backspace and everything else: do NOT clear (spec §4.3). Swallow so
-        # the read-only TextCtrl never echoes raw characters.
+        # the read-only display never echoes raw characters.
         if code in (wx.WXK_BACK, wx.WXK_DELETE):
             return
         # Let navigation keys (arrows, tab) through.
         event.Skip()
 
+    def _on_key_down(self, event):
+        """Some platforms deliver digits/operators via EVT_KEY_DOWN on a
+        non-text owner-drawn control rather than EVT_CHAR. Route the printable
+        shortcut keys here too, falling back to EVT_CHAR for the rest."""
+        code = event.GetKeyCode()
+        if code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER):
+            self._press("=")
+            return
+        ch = chr(code) if 0 < code < 256 else ""
+        if ch.isdigit():
+            self._press(ch)
+            return
+        if ch in self._KEY_TO_LABEL:
+            self._press(self._KEY_TO_LABEL[ch])
+            return
+        event.Skip()
+
     # ── view refresh ──────────────────────────────────────────────────
     def _refresh(self):
         self.display.SetValue(self._engine.display)
-        self._mem_indicator.SetLabel("M" if self._engine.memory_active else " ")
+        self.display.set_memory(self._engine.memory_active)
 
     # ── transfer ──────────────────────────────────────────────────────
     def set_transfer_enabled(self, enabled):
@@ -492,12 +689,15 @@ class _CalcKeypad(wx.Panel):
     def _apply_transfer_style(self):
         if self._transfer_enabled:
             self.transfer_btn.Enable(True)
-            self.transfer_btn.SetBackgroundColour(ExamColor.BTN_GREY)
-            self.transfer_btn.SetForegroundColour(ExamColor.BTN_TEXT)
+            self.transfer_btn.set_fills(
+                (ExamColor.BTN_GREY, ExamColor.BTN_GREY_HOVER, ExamColor.BTN_GREY),
+                ExamColor.BTN_TEXT)
         else:
             self.transfer_btn.Enable(False)
-            self.transfer_btn.SetBackgroundColour(ExamColor.BTN_DISABLED)
-            self.transfer_btn.SetForegroundColour(ExamColor.TEXT_ON_NAVY)
+            self.transfer_btn.set_fills(
+                (ExamColor.BTN_DISABLED, ExamColor.BTN_DISABLED,
+                 ExamColor.BTN_DISABLED),
+                ExamColor.TEXT_ON_NAVY)
         self.transfer_btn.Refresh()
 
     def _on_transfer(self, event):

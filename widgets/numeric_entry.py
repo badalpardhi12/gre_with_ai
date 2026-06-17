@@ -136,10 +136,73 @@ class NumericEntry(wx.Panel):
 
     # ── Construction helpers ──────────────────────────────────────────
     def _make_box(self, size, allowed_chars, validator_fn):
-        """Build a white answer box with keystroke filtering."""
-        ctrl = wx.TextCtrl(self, size=size, style=wx.TE_PROCESS_ENTER)
-        ctrl.SetBackgroundColour(ExamColor.CONTENT_BG)
-        ctrl.SetForegroundColour(ExamColor.TEXT)
+        """Build a visibly WHITE answer box with DARK text and keystroke
+        filtering.
+
+        On macOS Dark appearance a bare ``wx.TextCtrl`` ignores
+        ``SetBackgroundColour`` and renders with the OS dark field chrome (a dark
+        rectangle), so the ETS white answer box looks wrong. We can't owner-draw
+        the *editable* text (real typing needs a native ``wx.TextCtrl``), but we
+        CAN owner-draw the field's background: the wrapper ``wx.Panel`` paints
+        its own solid-white rectangle + 1px ``ExamColor.OVAL_BORDER`` frame in an
+        ``EVT_PAINT`` handler, which is the only dark-mode-proof way to guarantee
+        white (``SetBackgroundColour`` alone is ignored by the OS field/panel
+        chrome). The borderless ``wx.TextCtrl`` sits on top of that white field
+        with black text.
+
+        Two failure modes are fixed here:
+
+        * **Collapsed height.** A panel-with-sizer reports its *best* size from
+          its children (the TextCtrl's tiny best height), and the outer layout
+          adds the wrapper with ``proportion 0`` / no ``wx.EXPAND`` — so it
+          adopts that best size, not ``SetMinSize``, and the box renders a few px
+          tall. ``SetInitialSize((w, h))`` pins both the min size AND the
+          effective best size, and we also ``SetSize`` the wrapper and give the
+          inner control an explicit size so the height can't collapse.
+        * **Dark backing.** Even with the control's background forced white, some
+          macOS builds keep a dark backing until the next focus paint. The
+          owner-drawn white wrapper underneath guarantees the field reads white
+          regardless; the TextCtrl is inset so the white frame always shows.
+
+        Returns ``(wrapper_panel, text_ctrl)``: add the wrapper to the layout,
+        but keep the inner ``wx.TextCtrl`` as the public ``*_ctrl`` so the
+        existing API (GetValue/SetValue/GetSelection/…) and tests keep working.
+        """
+        white = wx.Colour(0xFF, 0xFF, 0xFF)
+        black = ExamColor.TEXT
+        w, h = int(size[0]), int(size[1])
+
+        wrap = wx.Panel(self, size=(w, h))
+        wrap.SetBackgroundColour(white)
+        # Pin the wrapper's size at every level the layout might consult: the
+        # initial/best size (so proportion-0 sizers don't shrink to the child's
+        # tiny best height), the min size, and the actual size.
+        wrap.SetInitialSize((w, h))
+        wrap.SetMinSize((w, h))
+        wrap.SetMaxSize((w, h))
+        wrap.SetSize((w, h))
+        # Owner-draw a solid white field + 1px border — dark-mode-proof.
+        wrap.Bind(wx.EVT_PAINT, lambda evt, p=wrap: self._paint_box(evt, p))
+
+        # Inset so the inner control floats on the white field, leaving a visible
+        # white frame on all sides; the control gets an explicit size so its own
+        # best height can't drag the box down.
+        pad = max(2, ui_scale.font_size(3))
+        ctrl_w = max(1, w - 2 * pad)
+        ctrl_h = max(1, h - 2 * pad)
+        ctrl = wx.TextCtrl(
+            wrap, pos=(pad, pad), size=(ctrl_w, ctrl_h),
+            style=wx.TE_PROCESS_ENTER | wx.BORDER_NONE)
+        ctrl.SetInitialSize((ctrl_w, ctrl_h))
+        ctrl.SetMinSize((ctrl_w, ctrl_h))
+        ctrl.SetBackgroundColour(white)
+        ctrl.SetForegroundColour(black)
+        # Default style governs how *typed* text is coloured; without it the OS
+        # can paint new glyphs with the dark-mode default (light-on-dark).
+        try:
+            ctrl.SetDefaultStyle(wx.TextAttr(black, white))
+        except Exception:
+            pass
         try:
             ctrl.SetFont(ui_scale.exam_serif(ui_scale.EXAM_CHOICE_PT))
         except Exception:
@@ -147,7 +210,43 @@ class NumericEntry(wx.Panel):
         ctrl.Bind(wx.EVT_TEXT, self._fire_change)
         ctrl.Bind(wx.EVT_CHAR, lambda evt, c=ctrl, a=allowed_chars,
                   v=validator_fn: self._on_char(evt, c, a, v))
-        return ctrl
+
+        # No sizer on the wrapper: a sizer would recompute the wrapper's best
+        # size from the child and re-collapse it. The control is positioned
+        # absolutely and re-fitted to the white field on resize.
+        wrap.Bind(wx.EVT_SIZE, lambda evt, p=wrap, c=ctrl, pd=pad:
+                  self._fit_ctrl(evt, p, c, pd))
+
+        # Force the white repaint to take immediately (dark-mode controls can
+        # otherwise keep the initial dark backing until the next focus event).
+        try:
+            ctrl.ForceRefresh()
+            wrap.Refresh()
+        except Exception:
+            pass
+
+        return wrap, ctrl
+
+    @staticmethod
+    def _paint_box(event, panel):
+        """Owner-draw the answer box: a solid white fill with a 1px border.
+
+        Painting the background ourselves is the only dark-mode-proof way to
+        guarantee a white field — ``SetBackgroundColour`` on a panel/TextCtrl is
+        silently ignored by the macOS dark chrome.
+        """
+        dc = wx.PaintDC(panel)
+        w, h = panel.GetClientSize()
+        dc.SetBrush(wx.Brush(wx.Colour(0xFF, 0xFF, 0xFF)))
+        dc.SetPen(wx.Pen(ExamColor.OVAL_BORDER, 1))
+        dc.DrawRectangle(0, 0, w, h)
+
+    @staticmethod
+    def _fit_ctrl(event, panel, ctrl, pad):
+        """Keep the inner control inset within the (resized) white field."""
+        event.Skip()
+        w, h = panel.GetClientSize()
+        ctrl.SetSize(pad, pad, max(1, w - 2 * pad), max(1, h - 2 * pad))
 
     def _make_unit_label(self, text):
         lbl = wx.StaticText(self, label=text or "")
@@ -171,15 +270,15 @@ class NumericEntry(wx.Panel):
             pass
 
         self._prefix_label = self._make_unit_label(self._prefix)
-        self.value_ctrl = self._make_box(
-            (ui_scale.font_size(120), -1),
+        self.value_box, self.value_ctrl = self._make_box(
+            (ui_scale.font_size(120), ui_scale.font_size(34)),
             _ALLOWED_DECIMAL, _would_be_valid_decimal)
         self._suffix_label = self._make_unit_label(self._suffix)
 
         pad = ui_scale.space(1)
         sizer.Add(prompt, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, pad)
         sizer.Add(self._prefix_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, pad)
-        sizer.Add(self.value_ctrl, 0, wx.ALIGN_CENTER_VERTICAL)
+        sizer.Add(self.value_box, 0, wx.ALIGN_CENTER_VERTICAL)
         sizer.Add(self._suffix_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, pad)
         self.SetSizer(sizer)
 
@@ -197,18 +296,18 @@ class NumericEntry(wx.Panel):
         self._prefix_label = self._make_unit_label(self._prefix)
 
         # Stacked column: numerator box, fraction bar, denominator box.
-        box_size = (ui_scale.font_size(80), -1)
-        self.num_ctrl = self._make_box(
+        box_size = (ui_scale.font_size(90), ui_scale.font_size(34))
+        self.num_box, self.num_ctrl = self._make_box(
             box_size, _ALLOWED_INTEGER, _would_be_valid_integer)
         self.fraction_bar = _FractionBar(self)
-        self.den_ctrl = self._make_box(
+        self.den_box, self.den_ctrl = self._make_box(
             box_size, _ALLOWED_INTEGER, _would_be_valid_integer)
 
         stack = wx.BoxSizer(wx.VERTICAL)
         gap = max(1, ui_scale.space(1) // 2)
-        stack.Add(self.num_ctrl, 0, wx.ALIGN_CENTER_HORIZONTAL)
+        stack.Add(self.num_box, 0, wx.ALIGN_CENTER_HORIZONTAL)
         stack.Add(self.fraction_bar, 0, wx.EXPAND | wx.TOP | wx.BOTTOM, gap)
-        stack.Add(self.den_ctrl, 0, wx.ALIGN_CENTER_HORIZONTAL)
+        stack.Add(self.den_box, 0, wx.ALIGN_CENTER_HORIZONTAL)
 
         self._suffix_label = self._make_unit_label(self._suffix)
 

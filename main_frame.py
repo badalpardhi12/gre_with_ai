@@ -361,6 +361,9 @@ class MainFrame(wx.Frame):
         active tab still reflects "where the user is conceptually" even
         while taking a test.
         """
+        # ETS exam mode: the in-test flow takes over the whole window
+        # (fullscreen, no app sidebar) to mirror the real test-day UI.
+        self._sync_exam_mode(name)
         for sname, panel in self.screens.items():
             panel.Show(sname == name)
         # Track the active screen name so _on_sidebar_select can detect
@@ -371,6 +374,35 @@ class MainFrame(wx.Frame):
         if target_tab:
             self.sidebar.set_active(target_tab)
         self.panel_container.Layout()
+        self.Layout()
+
+    # Screens that take over the window with the ETS exam chrome.
+    _EXAM_MODE_SCREENS = {"question", "awa", "instructions", "review"}
+
+    def _sync_exam_mode(self, name):
+        """Enter/exit ETS exam mode when crossing into/out of the test flow.
+
+        Exam mode = fullscreen takeover + hidden app sidebar, so the in-test
+        screens present like the real ETS GRE interface. Idempotent; only acts
+        on an actual state change so non-test screen switches don't flicker
+        fullscreen.
+        """
+        want = name in self._EXAM_MODE_SCREENS
+        if want == getattr(self, "_exam_mode_active", False):
+            return
+        self._exam_mode_active = want
+        try:
+            if want:
+                self.sidebar.Hide()
+                self.ShowFullScreen(True, style=wx.FULLSCREEN_ALL)
+            else:
+                self.ShowFullScreen(False)
+                self.sidebar.Show()
+            self.GetSizer().Layout()
+        except Exception:
+            # Fullscreen/sidebar toggling must never crash the test flow.
+            import logging
+            logging.getLogger(__name__).warning("exam-mode toggle failed", exc_info=True)
 
     # Test-flow screens — sidebar nav away from these prompts the user
     # so an accidental click doesn't appear to lose their progress.

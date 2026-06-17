@@ -266,7 +266,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 {katex_auto}
 <style>
 body {{
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: {body_font};
     font-size: {font_size}px;
     line-height: 1.6;
     color: {text_primary};
@@ -281,7 +281,7 @@ body {{
     color: {text_secondary};
 }}
 .prompt {{
-    font-weight: 500;
+    font-weight: {prompt_weight};
     color: {text_primary};
     margin-bottom: 12px;
 }}
@@ -384,7 +384,7 @@ class MathView(wx.Panel if _WX_AVAILABLE else object):
     `super().__init__(parent, size=size)`.
     """
 
-    def __init__(self, parent, size=(-1, -1)):
+    def __init__(self, parent, size=(-1, -1), exam=False):
         if not _WX_AVAILABLE:
             raise RuntimeError(
                 "MathView requires wxPython. Install the wxPython "
@@ -397,6 +397,10 @@ class MathView(wx.Panel if _WX_AVAILABLE else object):
         from widgets.theme import Color, hex_str
 
         super().__init__(parent, size=size)
+        # ``exam`` selects the ETS GRE light/serif content theme (white bg,
+        # black serif body, navy accents) used by the in-test question screen.
+        # Default False keeps the dark study-app theme for dashboard screens.
+        self._exam = exam
 
         self.webview = wx.html2.WebView.New(self)
         sizer = wx.BoxSizer(wx.VERTICAL)
@@ -441,6 +445,30 @@ class MathView(wx.Panel if _WX_AVAILABLE else object):
         Color = self._Color
         hex_str = self._hex_str
         ui_scale = self._ui_scale
+        if getattr(self, "_exam", False):
+            # ETS exam theme: white content, black SERIF body, navy accents.
+            from widgets.theme import ExamColor, EXAM_SERIF_CSS
+            full_html = HTML_TEMPLATE.format(
+                katex_css=KATEX_CSS,
+                katex_js=KATEX_JS,
+                katex_auto=KATEX_AUTO,
+                content=sanitized,
+                font_size=ui_scale.get_dashboard_html_font_pt(),
+                body_font=EXAM_SERIF_CSS,
+                prompt_weight="400",
+                bg_page=hex_str(ExamColor.CONTENT_BG),
+                bg_surface=hex_str(ExamColor.CONTENT_BG_ALT),
+                text_primary=hex_str(ExamColor.TEXT),
+                text_secondary=hex_str(ExamColor.TEXT),
+                border=hex_str(ExamColor.DIVIDER),
+                accent=hex_str(ExamColor.HEADER_NAVY),
+                success=hex_str(ExamColor.HEADER_NAVY),
+                success_bg="#eef3fb",
+                warning_bg=hex_str(ExamColor.SELECT_IN_PASSAGE_HL),
+                warning_text="#000000",
+            )
+            self.webview.SetPage(full_html, PROJECT_BASE_URL)
+            return
         # Pull all colors from the central palette so the WebView matches
         # the native widgets without per-screen overrides.
         full_html = HTML_TEMPLATE.format(
@@ -449,6 +477,8 @@ class MathView(wx.Panel if _WX_AVAILABLE else object):
             katex_auto=KATEX_AUTO,
             content=sanitized,
             font_size=ui_scale.get_dashboard_html_font_pt(),
+            body_font='-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+            prompt_weight="500",
             bg_page=hex_str(Color.BG_PAGE),
             bg_surface=hex_str(Color.BG_SURFACE),
             text_primary=hex_str(Color.TEXT_PRIMARY),

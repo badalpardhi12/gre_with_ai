@@ -175,67 +175,58 @@ def test_mcq_multi_uncheck_removes_from_payload(question_screen):
     assert screen._get_current_response() == {"selected": ["A"]}
 
 
-def test_live_selection_indicator_updates(question_screen):
-    """The 'Your selections: …' readout tracks the checkbox state 1:1."""
+def test_live_selection_payload_tracks_clicks(question_screen):
+    """The submission payload tracks the checkbox state 1:1.
+
+    (The ETS UI has no 'Your selections' readout — fidelity is now
+    guaranteed by reading the payload straight from the same
+    ``_answer_controls`` the scorer sees.)"""
     q = _make_7_option_mcq_multi()
     screen = question_screen
     screen._current_q = q
     screen._section_state = screen._fake_ss_cls(q["id"])
     screen._build_answer_controls(q)
 
-    ind = screen._selection_indicator
-    assert ind is not None, "mcq_multi must render a selection indicator"
-    assert ind.GetLabel() == "Your selections: (none)"
+    assert screen._get_current_response() == {}
 
     _click_checkbox(screen, "A")
-    assert ind.GetLabel() == "Your selections: A"
+    assert screen._get_current_response() == {"selected": ["A"]}
 
     _click_checkbox(screen, "C")
-    assert ind.GetLabel() == "Your selections: A, C"
+    assert screen._get_current_response() == {"selected": ["A", "C"]}
 
     _click_checkbox(screen, "G")
-    assert ind.GetLabel() == "Your selections: A, C, G"
+    assert screen._get_current_response() == {"selected": ["A", "C", "G"]}
 
-    # Uncheck C — indicator should drop it and stay in rendered order.
+    # Uncheck C — payload drops it and stays in rendered order.
     _click_checkbox(screen, "C")
-    assert ind.GetLabel() == "Your selections: A, G"
+    assert screen._get_current_response() == {"selected": ["A", "G"]}
 
-    # Uncheck everything — back to the (none) placeholder.
+    # Uncheck everything — back to empty.
     _click_checkbox(screen, "A")
     _click_checkbox(screen, "G")
-    assert ind.GetLabel() == "Your selections: (none)"
+    assert screen._get_current_response() == {}
 
 
-def test_indicator_matches_submission_payload(question_screen):
-    """The labels in the live readout must match the submission exactly.
-
-    This is the UX-safeguard guarantee: whatever the user sees in the
-    readout is literally what the scorer will receive. If a future
-    refactor ever splits the two code paths, this test fails.
-    """
+def test_payload_order_matches_rendered_order(question_screen):
+    """Whatever is checked is submitted in rendered (A..G) order — the
+    UX-safeguard guarantee that survives the ETS re-skin."""
     q = _make_7_option_mcq_multi()
     screen = question_screen
     screen._current_q = q
     screen._section_state = screen._fake_ss_cls(q["id"])
     screen._build_answer_controls(q)
 
+    _click_checkbox(screen, "G")
     _click_checkbox(screen, "A")
     _click_checkbox(screen, "C")
-    _click_checkbox(screen, "G")
 
-    # Parse labels out of the indicator and compare to the payload.
-    readout = screen._selection_indicator.GetLabel()
-    assert readout.startswith("Your selections: ")
-    indicator_labels = [
-        s.strip() for s in readout[len("Your selections: "):].split(",")
-    ]
-
-    payload = screen._get_current_response()
-    assert payload["selected"] == indicator_labels
+    # Even though clicked G,A,C the payload is in rendered order A,C,G.
+    assert screen._get_current_response() == {"selected": ["A", "C", "G"]}
 
 
-def test_indicator_not_rendered_for_single_select(question_screen):
-    """Radio (single-select) questions don't need the safeguard."""
+def test_single_select_uses_radios(question_screen):
+    """Radio (single-select) questions render no checkboxes."""
     q = {
         "id": 1,
         "subtype": "mcq_single",
@@ -250,29 +241,24 @@ def test_indicator_not_rendered_for_single_select(question_screen):
     screen._current_q = q
     screen._section_state = screen._fake_ss_cls(q["id"])
     screen._build_answer_controls(q)
-    assert screen._selection_indicator is None
+    assert all(ct != "check" for ct, _l, _c in screen._answer_controls)
 
 
-def test_indicator_restored_on_navigation(question_screen):
-    """Simulate navigating back to a partly-answered mcq_multi: the
-    indicator must reflect the restored checks without needing a click.
-    """
+def test_multi_select_restored_on_navigation(question_screen):
+    """Navigating back to a partly-answered mcq_multi restores the checks
+    so the payload reflects them without a click."""
     q = _make_7_option_mcq_multi()
     screen = question_screen
     screen._current_q = q
     screen._section_state = screen._fake_ss_cls(q["id"])
     screen._build_answer_controls(q)
 
-    # Emulate what `_load_question` does after `_build_answer_controls`
     screen._restore_response({"selected": ["A", "C", "G"]})
-    screen._update_selection_indicator()
-
-    assert screen._selection_indicator.GetLabel() == "Your selections: A, C, G"
+    assert screen._get_current_response() == {"selected": ["A", "C", "G"]}
 
 
-def test_se_subtype_also_gets_indicator(question_screen):
-    """Sentence-equivalence is also a multi-select and benefits from
-    the same safeguard (user must pick exactly two)."""
+def test_se_subtype_multi_select(question_screen):
+    """Sentence-equivalence is multi-select (pick exactly two)."""
     q = {
         "id": 2,
         "subtype": "se",
@@ -286,9 +272,8 @@ def test_se_subtype_also_gets_indicator(question_screen):
     screen._current_q = q
     screen._section_state = screen._fake_ss_cls(q["id"])
     screen._build_answer_controls(q)
-    assert screen._selection_indicator is not None
-    assert screen._selection_indicator.GetLabel() == "Your selections: (none)"
+    assert sum(1 for ct, _l, _c in screen._answer_controls if ct == "check") == 6
 
     _click_checkbox(screen, "B")
     _click_checkbox(screen, "D")
-    assert screen._selection_indicator.GetLabel() == "Your selections: B, D"
+    assert screen._get_current_response() == {"selected": ["B", "D"]}

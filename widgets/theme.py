@@ -110,6 +110,40 @@ class ExamColor:
     TIMER_WARN         = _c("#ffd24d")   # [I] <= 5:00
     TIMER_CRITICAL     = _c("#ff6b6b")   # [I] <= 1:00
 
+    # ── ETS "Test Preview Tool" scheme (2026-06 revision, from official
+    #    POWERPREP/Test-Preview screenshots) ────────────────────────────
+    # The real test UI is a CHARCOAL header with a maroon hairline and a
+    # top-right tool ribbon, a light-PINK section bar carrying the timer, and a
+    # black-bordered white content box floating on a GRAY page.
+    PAGE_GRAY          = _c("#b9b9b9")   # [A] gray margin behind the content box
+    HEADER_CHARCOAL    = _c("#3b393b")   # [A] top header bar
+    HEADER_RULE_MAROON = _c("#6f2233")   # [A] thin maroon line under the header
+    SECTION_BAR_PINK   = _c("#f3e2e6")   # [A] section/question + timer bar
+    SECTION_BAR_TEXT   = _c("#2a2a2a")   # [A] text on the pink bar
+    CONTENT_BORDER     = _c("#000000")   # [A] black frame around the content box
+
+    # Tool-ribbon buttons (label above a small icon, raised bevel).
+    TOOL_BTN_FACE      = _c("#dcdcdc")   # [A] gray tool button (Calc/Mark/Review/Help)
+    TOOL_BTN_FACE_HOVER= _c("#e8e8e8")   # [I]
+    TOOL_BTN_BEVEL_HI  = _c("#fcfcfc")   # [I] top/left bevel highlight
+    TOOL_BTN_BEVEL_LO  = _c("#9a9a9a")   # [I] bottom/right bevel shadow
+    TOOL_BTN_TEXT      = _c("#1a1a1a")   # [A] dark label/icon on gray
+    TOOL_BTN_TEXT_ON_HEADER = _c("#ffffff")  # [A] the label sits above the button on charcoal
+    EXIT_PLUM          = _c("#7c4d66")   # [A] Exit Section button (muted plum)
+    EXIT_PLUM_HOVER    = _c("#8c5d76")   # [I]
+    NAV_BLUE           = _c("#2f6ea5")   # [A] active Back/Next/Continue/Return
+    NAV_BLUE_HOVER     = _c("#3a7eb8")   # [I]
+    NAV_BLUE_DISABLED  = _c("#3d4a59")   # [A] disabled Back/Next (dark desaturated)
+    NAV_BTN_TEXT       = _c("#ffffff")   # [A] white label on blue/plum
+
+    # Content-area accents.
+    DIRECTIONS_PILL    = _c("#cfcfcf")   # [A] gray directions pill (bottom-center)
+    DIRECTIONS_PILL_TEXT = _c("#1a1a1a") # [A]
+    PASSAGE_TITLE_BAR  = _c("#1f3fb0")   # [A] blue "Questions N..M are based on..." bar
+    PASSAGE_TITLE_TEXT = _c("#ffffff")   # [A]
+    TRANSITION_RULE    = _c("#9a9a9a")   # [I] hairline under transition-screen titles
+
+
 
 # Web-safe serif stack for the WebView (item content). The face being serif is
 # confirmed for the GRE; Georgia is the on-screen-legible default.

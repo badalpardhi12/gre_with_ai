@@ -2,7 +2,7 @@
 Headless tests for the ETS section timer (widgets/timer.py, spec §3.7).
 
 Covers the new behavior added on top of the legacy countdown:
-  * H:MM:SS down-counting format (leading "0:" hour for sub-hour values).
+  * HH:MM:SS down-counting format (leading "00:" hour for sub-hour values).
   * set_hidden() hides the digits but the clock keeps counting.
   * At 5:00 remaining the timer force-reappears, warns (amber), and can no
     longer be re-hidden.
@@ -80,21 +80,21 @@ def _drive_to(timer, remaining_seconds):
 
 def test_format_hmmss_sub_hour(frame):
     t = _make_timer(frame, 11 * 60 + 42)   # 0:11:42
-    assert t.format_remaining() == "0:11:42"
-    assert t.display.GetLabel() == "0:11:42"
+    assert t.format_remaining() == "00:11:42"
+    assert t.display.GetLabel() == "00:11:42"
 
 
 def test_format_hmmss_over_hour(frame):
     t = _make_timer(frame, 3600 + 5 * 60 + 9)   # 1:05:09
-    assert t.format_remaining() == "1:05:09"
+    assert t.format_remaining() == "01:05:09"
 
 
 def test_format_counts_down(frame):
     t = _make_timer(frame, 30 * 60)   # 0:30:00
-    assert t.display.GetLabel() == "0:30:00"
+    assert t.display.GetLabel() == "00:30:00"
     _drive_to(t, 18 * 60 + 7)
     assert t.get_remaining() == 18 * 60 + 7
-    assert t.display.GetLabel() == "0:18:07"
+    assert t.display.GetLabel() == "00:18:07"
 
 
 # ── Hide / Show keeps counting ──────────────────────────────────────────
@@ -117,7 +117,7 @@ def test_set_hidden_hides_digits_but_keeps_counting(frame):
     # Show again reveals the (now smaller) real time.
     t.set_hidden(False)
     assert t.is_hidden() is False
-    assert t.display.GetLabel() == "0:12:30"
+    assert t.display.GetLabel() == "00:12:30"
 
 
 def test_toggle_hidden(frame):
@@ -138,7 +138,7 @@ def test_five_minute_forces_reappear_and_warn_color(frame):
 
     # Forced visible despite having been hidden.
     assert t.is_hidden() is False
-    assert t.display.GetLabel() == "0:05:00"
+    assert t.display.GetLabel() == "00:05:00"
     # Amber warning color, legible on navy.
     assert t.display.GetForegroundColour() == ExamColor.TIMER_WARN
 
@@ -173,11 +173,11 @@ def test_can_hide_above_five_minutes(frame):
 def test_one_minute_critical_color(frame):
     t = _make_timer(frame, 20 * 60)
     _drive_to(t, 60)
-    assert t.display.GetLabel() == "0:01:00"
+    assert t.display.GetLabel() == "00:01:00"
     assert t.display.GetForegroundColour() == ExamColor.TIMER_CRITICAL
 
     _drive_to(t, 12)
-    assert t.display.GetLabel() == "0:00:12"
+    assert t.display.GetLabel() == "00:00:12"
     assert t.display.GetForegroundColour() == ExamColor.TIMER_CRITICAL
 
 

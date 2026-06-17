@@ -32,6 +32,11 @@ REAPPEAR_THRESHOLD = TIMER_WARNING_SECONDS   # 300 (5:00)
 CRITICAL_THRESHOLD = 60                       # 1:00
 
 
+def _c_warn_on_pink():
+    """Amber is illegible on the pink section bar; use a darker amber there."""
+    return wx.Colour(0xb8, 0x6a, 0x00)
+
+
 class TimerWidget(wx.Panel):
     """
     Section countdown timer. Shows ``H:MM:SS`` and changes color at warning
@@ -96,6 +101,7 @@ class TimerWidget(wx.Panel):
         sizer.Add(self.display, 0, wx.ALIGN_CENTER)
         sizer.Add(self.toggle_btn, 0, wx.ALIGN_CENTER | wx.TOP, 2)
         self.SetSizer(sizer)
+        self._compact = False
 
         # Timer (1 second interval — display refresh, NOT the source of truth)
         self.timer = wx.Timer(self)
@@ -208,8 +214,8 @@ class TimerWidget(wx.Panel):
 
     def _sync_toggle_button(self):
         """Keep the toggle button's label/enabled state in sync."""
-        self.toggle_btn.SetLabel(
-            self.SHOW_LABEL if self._hidden else self.HIDE_LABEL)
+        base = self.SHOW_LABEL if self._hidden else self.HIDE_LABEL
+        self.toggle_btn.SetLabel(("⊖ " + base) if self._compact else base)
         # Once locked visible, the toggle can't hide anymore — disable it.
         self.toggle_btn.Enable(not self._hide_locked)
 
@@ -260,28 +266,56 @@ class TimerWidget(wx.Panel):
             if self._on_expire:
                 self._on_expire()
 
+    def set_compact_bar_style(self):
+        """Restyle for the pink ETS section bar: a single inline row
+        ``HH:MM:SS  ⊖ Hide Time`` with DARK text (no "Time Remaining"
+        label, no stacked navy layout). Idempotent."""
+        self._compact = True
+        self.SetBackgroundColour(ExamColor.SECTION_BAR_PINK)
+        self.label.Hide()
+        self.display.SetForegroundColour(ExamColor.SECTION_BAR_TEXT)
+        self.display.SetFont(ui_scale.exam_sans(ui_scale.EXAM_DIRECTIONS_PT,
+                                                weight=wx.FONTWEIGHT_BOLD))
+        self.toggle_btn.SetLabel("⊖ " + self.HIDE_LABEL)
+        # Rebuild the sizer as a horizontal inline row. Detach the widgets from
+        # the old vertical sizer first (wx forbids adding a window that's still
+        # held by another sizer).
+        old = self.GetSizer()
+        if old is not None:
+            old.Clear(delete_windows=False)
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        row.Add(self.display, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, ui_scale.space(2))
+        row.Add(self.toggle_btn, 0, wx.ALIGN_CENTER_VERTICAL)
+        self.SetSizer(row, deleteOld=True)
+        self._update_display()
+        self.Layout()
+
     def _update_display(self):
         if self._hidden:
             self.display.SetLabel(self.HIDDEN_PLACEHOLDER)
         else:
             self.display.SetLabel(self._format_time())
 
-        # Color coding — legible on the navy footer (spec §1/§3.7).
+        # Color coding — legible on the navy footer (spec §1/§3.7), or dark
+        # on the pink section bar in compact mode.
         if self.remaining <= CRITICAL_THRESHOLD:
             self.display.SetForegroundColour(ExamColor.TIMER_CRITICAL)
         elif self.remaining <= REAPPEAR_THRESHOLD:
-            self.display.SetForegroundColour(ExamColor.TIMER_WARN)
+            self.display.SetForegroundColour(
+                _c_warn_on_pink() if self._compact else ExamColor.TIMER_WARN)
         else:
-            self.display.SetForegroundColour(ExamColor.TIMER_NORMAL)
+            self.display.SetForegroundColour(
+                ExamColor.SECTION_BAR_TEXT if self._compact else ExamColor.TIMER_NORMAL)
 
         self.display.Refresh()
 
     def _format_time(self):
-        """Render the remaining time as ``H:MM:SS`` (e.g. ``0:11:42``)."""
+        """Render the remaining time as ``HH:MM:SS`` (e.g. ``00:19:46``),
+        matching the ETS section-bar clock."""
         total = max(0, self.remaining)
         hours, rem = divmod(total, 3600)
         mins, secs = divmod(rem, 60)
-        return f"{hours:d}:{mins:02d}:{secs:02d}"
+        return f"{hours:02d}:{mins:02d}:{secs:02d}"
 
     # ── Accessors ──────────────────────────────────────────────────────
 

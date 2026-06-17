@@ -325,6 +325,57 @@ def build_data_interp():
     )
 
 
+def build_mcq_table():
+    """A quant MC whose stimulus is a DATA TABLE (reported clipped/single-col)."""
+    table = (
+        "<p><b>Top Six Finishers, 2024 City Marathon</b></p>"
+        "<table>"
+        "<tr><th>Place</th><th>Runner</th><th>Country</th>"
+        "<th>Time (hours)</th><th>Age</th></tr>"
+        "<tr><td>1</td><td>A. Lopez</td><td>Mexico</td><td>2.14</td><td>26</td></tr>"
+        "<tr><td>2</td><td>B. Kim</td><td>South Korea</td><td>2.16</td><td>24</td></tr>"
+        "<tr><td>3</td><td>C. Smith</td><td>USA</td><td>2.18</td><td>31</td></tr>"
+        "<tr><td>4</td><td>D. Patel</td><td>India</td><td>2.22</td><td>28</td></tr>"
+        "<tr><td>5</td><td>E. Cho</td><td>South Korea</td><td>2.25</td><td>29</td></tr>"
+        "<tr><td>6</td><td>F. Diaz</td><td>Mexico</td><td>2.30</td><td>34</td></tr>"
+        "</table>"
+    )
+    return _q(
+        "mcq_single",
+        prompt=('<div class="prompt">What is the average (arithmetic mean) '
+                'age of the top six finishers?</div>'),
+        measure="quant",
+        stimulus={"content": table, "type": "table"},
+        options=[
+            {"label": "A", "text": "28.0", "is_correct": False},
+            {"label": "B", "text": "29.0", "is_correct": False},
+            {"label": "C", "text": "30.7", "is_correct": True},
+            {"label": "D", "text": "30.0", "is_correct": False},
+            {"label": "E", "text": "31.0", "is_correct": False},
+        ],
+    )
+
+
+def build_mcq_chart():
+    """A quant question whose stimulus is a DATA CHART image (reported tiny).
+    Uses a real chart stimulus exported from the seed when available."""
+    import os
+    chart = "<p>(chart unavailable)</p>"
+    p = "/tmp/_chart_stim.html"
+    if os.path.exists(p):
+        chart = open(p).read()
+    return _q(
+        "numeric_entry",
+        prompt=('<div class="prompt">The data for City X in 2024 shows '
+                'temperature readings across all 12 months. By how many degrees '
+                'Celsius does the average temperature of the four coldest months '
+                'fall short of the four warmest months?</div>'),
+        measure="quant",
+        stimulus={"content": chart, "type": "graph"},
+        numeric_answer={"mode": "decimal"},
+    )
+
+
 # Ordered so the deterministic gallery reads header→footer through the types.
 BUILDERS = {
     "qc": build_qc,
@@ -336,6 +387,8 @@ BUILDERS = {
     "rc_single": build_rc_single,
     "rc_select_passage": build_rc_select_passage,
     "data_interp": build_data_interp,
+    "mcq_table": build_mcq_table,
+    "mcq_chart": build_mcq_chart,
 }
 
 

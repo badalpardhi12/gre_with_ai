@@ -317,6 +317,14 @@ img {{
     display: block;
     margin: 8px auto;
 }}
+/* Data-presentation figures shown in the left stimulus pane should FILL the
+ * pane width (a small-intrinsic chart PNG would otherwise render tiny). The
+ * pane wraps such content in `.datafig`. */
+.datafig img {{
+    width: 100%;
+    max-width: 640px;
+    max-height: 80vh;
+}}
 .answer-correct {{
     background: {success_bg};
     border-left: 3px solid {success};

@@ -51,8 +51,39 @@ _BOTTOM_PILL = {
     "rc_select_passage": "Select a sentence in the passage.",
 }
 
-# Subtypes that use the split passage/stimulus pane.
+# Subtypes that ALWAYS use the split passage/stimulus pane.
 _SPLIT_SUBTYPES = {"rc_single", "rc_multi", "rc_select_passage", "data_interp"}
+
+
+def _is_data_presentation(q):
+    """True when the question's stimulus is a DATA presentation (a table or a
+    data chart) — Data-Interpretation-style content that belongs in the left
+    pane at full size, NOT a small geometry figure (which stays inline with the
+    stem). Geometry is identified by an ``svg_geometry`` render_spec."""
+    stim = q.get("stimulus") or {}
+    content = (stim.get("content") or "").lower()
+    if not content:
+        return False
+    if "svg_geometry" in (stim.get("render_spec") or ""):
+        return False  # geometry figure → inline, not a data pane
+    if "<table" in content:
+        return True
+    stype = stim.get("type")
+    if stype in ("graph", "table", "chart") and "<img" in content:
+        return True
+    return False
+
+
+def _should_split(q):
+    """Whether to use the two-pane (stimulus left / question right) layout.
+    RC + DI always split; other quant subtypes split only when they carry a
+    data table/chart. QC never splits (it uses its own inline two-column)."""
+    subtype = q["subtype"]
+    if subtype == "qc":
+        return False
+    if subtype in _SPLIT_SUBTYPES:
+        return True
+    return _is_data_presentation(q)
 
 
 class QuestionScreen(wx.Panel):
@@ -299,7 +330,8 @@ class QuestionScreen(wx.Panel):
         self._set_directions(q)
 
         # Stimulus / passage layout.
-        self._show_passage(q)
+        split = _should_split(q)
+        self._show_passage(q, split)
 
         # Prompt. QC builds the figure + common-info + two-column quantities.
         if subtype == "qc":
@@ -307,14 +339,16 @@ class QuestionScreen(wx.Panel):
         else:
             stim_inline = ""
             stim = q.get("stimulus") or {}
-            if subtype not in _SPLIT_SUBTYPES and stim.get("content"):
+            # Inline the stimulus ONLY when it isn't shown in the left pane
+            # (i.e. small geometry figures); data tables/charts go to the pane.
+            if not split and stim.get("content"):
                 stim_inline = (f'<div style="text-align:center;">'
                                f'{stim["content"]}</div>')
             prompt_html = stim_inline + f'<div class="prompt">{q["prompt"]}</div>'
         self.prompt_view.set_content_auto_height(prompt_html, min_h=60, max_h=360)
 
-        # Single-column subtypes are vertically centered; split panes top-align.
-        center = subtype not in _SPLIT_SUBTYPES
+        # Single-column content is vertically centered; split panes top-align.
+        center = not split
         self._top_spacer.SetProportion(1 if center else 0)
         self._bottom_spacer.SetProportion(2 if center else 0)
 
@@ -357,17 +391,17 @@ class QuestionScreen(wx.Panel):
         except Exception:
             return 1
 
-    def _show_passage(self, q):
+    def _show_passage(self, q, split):
         subtype = q["subtype"]
         stim = q.get("stimulus") or {}
         content = stim.get("content") or ""
-        if subtype not in _SPLIT_SUBTYPES:
+        if not split:
             if self.content_splitter.IsSplit():
                 self.content_splitter.Unsplit(self.passage_panel)
             self.passage_panel.Hide()
             return
 
-        # Blue passage title bar text.
+        # Blue passage/data title bar text.
         self.passage_title.SetLabel(self._passage_title_text(q))
         if subtype == "rc_select_passage":
             self.passage_view.Hide()
@@ -375,7 +409,10 @@ class QuestionScreen(wx.Panel):
         else:
             self.sip_panel.Hide()
             self.passage_view.Show()
-            self.passage_view.set_content(content)
+            # Data tables/charts shown at full pane width (.datafig makes a
+            # small-intrinsic chart image fill the pane instead of rendering
+            # tiny). Centered, with the data title already in the blue bar.
+            self.passage_view.set_content(f'<div class="datafig">{content}</div>')
         self.passage_panel.Show()
         if not self.content_splitter.IsSplit():
             self.content_splitter.SplitVertically(
@@ -384,8 +421,8 @@ class QuestionScreen(wx.Panel):
 
     def _passage_title_text(self, q):
         subtype = q["subtype"]
-        if subtype == "data_interp":
-            return "Questions are based on the following data."
+        if subtype == "data_interp" or _is_data_presentation(q):
+            return "Question(s) based on the following data."
         return "Question is based on this passage."
 
     def _center_sash(self):

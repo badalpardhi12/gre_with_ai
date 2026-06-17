@@ -146,6 +146,39 @@ def make_font(size, weight=wx.FONTWEIGHT_NORMAL,
     return wx.Font(size, family, style, weight)
 
 
+# ── ETS exam-mode fonts ─────────────────────────────────────────────
+# The GRE renders item content (stems, choices, quantities, passages) in a
+# serif face and all UI chrome in sans. Centralize that so exam screens never
+# hardcode a face. Sizes route through font_size() so DPI auto-scale and the
+# Cmd-+/-/0 zoom still apply.
+
+def exam_serif(base, weight=wx.FONTWEIGHT_NORMAL, style=wx.FONTSTYLE_NORMAL):
+    """Serif font for exam item content (Georgia, falling back to platform
+    serif). ``base`` is an unscaled base point size."""
+    from widgets.theme import EXAM_SERIF_FACE
+    f = wx.Font(font_size(base), wx.FONTFAMILY_ROMAN, style, weight)
+    try:
+        f.SetFaceName(EXAM_SERIF_FACE)   # falls back to platform serif if absent
+    except Exception:
+        pass
+    return f
+
+
+def exam_sans(base, weight=wx.FONTWEIGHT_NORMAL, style=wx.FONTSTYLE_NORMAL):
+    """Sans font for exam UI chrome (labels, buttons, directions, navigator)."""
+    return wx.Font(font_size(base), wx.FONTFAMILY_DEFAULT, style, weight)
+
+
+# Base sizes for exam content (spec §2; tune against POWERPREP screenshots).
+EXAM_STEM_PT = 16          # question stem (serif)
+EXAM_CHOICE_PT = 15        # answer choices (serif)
+EXAM_COUNTER_PT = 13       # "Section X of Y" / "Question N of M" (sans bold)
+EXAM_DIRECTIONS_PT = 12    # directions band (sans)
+EXAM_NAV_PT = 10           # navigator circle numbers (sans)
+EXAM_TIMER_PT = 14         # footer timer (sans)
+EXAM_BTN_PT = 13           # Mark/Back/Next labels (sans)
+
+
 def get_dashboard_html_font_pt():
     """Font size in points for the MathView HTML rendering (for prompts/lessons).
 

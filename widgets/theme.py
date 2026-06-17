@@ -50,6 +50,75 @@ class Color:
     ]
 
 
+def _c(hexstr):
+    """`#rrggbb` -> wx.Colour."""
+    h = hexstr.lstrip("#")
+    return wx.Colour(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+class ExamColor:
+    """ETS GRE 'exam mode' light palette (docs/gre_ui_spec_2026_06.md §1).
+
+    A faithful replica of the official ETS GRE test-taking UI: a navy
+    header/footer 'sandwich' around a white, serif content area. Distinct from
+    the dark study-app ``Color`` palette. Hexes tagged [A]=approx-from-official-
+    screenshot, [I]=inferred design language; structure/behavior is confirmed.
+    """
+
+    # ── Chrome surfaces ───────────────────────────────────────────────
+    HEADER_NAVY        = _c("#16284d")   # [A] header + footer bars
+    HEADER_NAVY_HOVER  = _c("#1f3463")   # [I]
+    CONTENT_BG         = _c("#ffffff")   # [C] white content area
+    CONTENT_BG_ALT     = _c("#f7f7f7")   # [I] passage pane / zebra
+    DIRECTIONS_BAND    = _c("#e6e6e6")   # [A] full-width directions band
+    DIRECTIONS_TEXT    = _c("#1a1a1a")   # [I]
+    DIVIDER            = _c("#cccccc")   # [I] hairline rules
+
+    # ── Text ──────────────────────────────────────────────────────────
+    TEXT               = _c("#000000")   # [C] body text on white
+    TEXT_MUTED         = _c("#444444")   # [I]
+    TEXT_ON_NAVY       = _c("#ffffff")   # [A] glyphs on navy chrome
+
+    # ── Buttons ───────────────────────────────────────────────────────
+    BTN_NEXT_BLUE      = _c("#2d8cff")   # [A] primary Next
+    BTN_NEXT_BLUE_HOVER= _c("#1f78e6")   # [I]
+    BTN_GREY           = _c("#5a5a5a")   # [A] Mark / Back
+    BTN_GREY_HOVER     = _c("#6e6e6e")   # [I]
+    BTN_TEXT           = _c("#ffffff")   # [I]
+    BTN_DISABLED       = _c("#9a9a9a")   # [I] disabled (e.g. Transfer Display off)
+    SUBMIT_MAUVE       = _c("#9b8aa3")   # [A] Submit Section
+    SUBMIT_MAUVE_HOVER = _c("#ab9bb3")   # [I]
+
+    # ── Answer controls ───────────────────────────────────────────────
+    OVAL_BORDER        = _c("#555555")   # [I] radio outline
+    OVAL_FILL_SELECTED = _c("#16284d")   # [I] radio selected
+    CHECK_BORDER       = _c("#555555")   # [I] checkbox outline
+    CHECK_FILL_SELECTED= _c("#16284d")   # [I] checkbox checked
+    TC_HIGHLIGHT       = _c("#cfe2ff")   # [I] Text-Completion selected choice
+    SELECT_IN_PASSAGE_HL = _c("#fff3b0") # [I] select-in-passage sentence
+    ROW_HOVER          = _c("#eef3fb")   # [I]
+    ROW_SELECTED       = _c("#dde9fb")   # [I]
+
+    # ── Navigator circle states (footer 1..N) ─────────────────────────
+    NAV_CURRENT        = _c("#2d8cff")   # [I] current-question ring
+    NAV_ANSWERED       = _c("#16284d")   # [I] answered = filled navy
+    NAV_UNANSWERED_BORDER = _c("#aab4c8")# [I] open circle outline (on navy)
+    NAV_MARKED_BADGE   = _c("#d98b00")   # [I] marked flag/badge (amber)
+
+    # ── Timer warning (legible on navy footer) ────────────────────────
+    TIMER_NORMAL       = _c("#ffffff")   # [I]
+    TIMER_WARN         = _c("#ffd24d")   # [I] <= 5:00
+    TIMER_CRITICAL     = _c("#ff6b6b")   # [I] <= 1:00
+
+
+# Web-safe serif stack for the WebView (item content). The face being serif is
+# confirmed for the GRE; Georgia is the on-screen-legible default.
+EXAM_SERIF_CSS = 'Georgia, "Times New Roman", Times, serif'
+EXAM_SANS_CSS = '-apple-system, "Helvetica Neue", Arial, sans-serif'
+# Preferred native serif face name (falls back to platform serif if absent).
+EXAM_SERIF_FACE = "Georgia"
+
+
 def mastery_color(score: float, attempts: int) -> wx.Colour:
     """Heatmap cell color for a mastery score in [0, 1]."""
     if attempts == 0:
@@ -72,4 +141,5 @@ def hex_str(c: wx.Colour) -> str:
     return f"#{c.Red():02x}{c.Green():02x}{c.Blue():02x}"
 
 
-__all__ = ["Color", "mastery_color", "hex_str"]
+__all__ = ["Color", "ExamColor", "mastery_color", "hex_str",
+           "EXAM_SERIF_CSS", "EXAM_SANS_CSS", "EXAM_SERIF_FACE"]

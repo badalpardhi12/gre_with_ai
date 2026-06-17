@@ -1,5 +1,19 @@
 # GRE Exam-Mode UI Replication Spec — 2026-06
 
+> **⚠️ PARTIALLY SUPERSEDED (2026-06-17).** This was the FIRST UI spec and
+> describes a navy header / footer-navigator "sandwich". The app was later
+> reworked to the real ETS **"Test Preview Tool"** scheme (charcoal header +
+> maroon rule + top-right tool ribbon + pink section bar + black-bordered white
+> box on a gray page; **no** bottom numbered navigator). For the CURRENT chrome,
+> palette, and layout, read the implementation: `widgets/exam_chrome.py`,
+> `widgets/exam_tool_button.py`, `widgets/theme.ExamColor` (the `# ETS "Test
+> Preview Tool" scheme` block), `screens/question_screen.py`, plus
+> `docs/PROJECT_STATUS.md`. The SUBSTANCE below is still valid and in use:
+> per-question-type directions strings, control shapes (oval/square), the
+> calculator key set + behaviors + Transfer Display, numeric-entry fraction box,
+> figures-not-to-scale rules, and "exam mode for all sessions, fullscreen". Treat
+> the navy/footer-navigator/colors sections as historical.
+
 Implementation-grade spec for a faithful ETS GRE General Test (post-Sept-2023 / POWERPREP) test-taking interface inside the wxPython app at this repo. This describes a dedicated **"exam mode"** skin for the in-test screens (`QuestionScreen`, `ReviewScreen`, `InstructionsScreen`, calculator, timer, navigator) — distinct from the dark study-app chrome used everywhere else.
 
 **Confidence legend** used throughout:

@@ -47,8 +47,8 @@ class ExamToolButton(wx.Panel):
         self._hover = False
         self._pressed = False
         self._enabled = True
-        self._h = ui_scale.font_size(46)
-        self._min_w = min_width if min_width is not None else ui_scale.font_size(58)
+        self._h = ui_scale.font_size(50)
+        self._min_w = min_width if min_width is not None else ui_scale.font_size(62)
         self.SetMinSize(self._compute_size())
         self.SetBackgroundColour(ExamColor.HEADER_CHARCOAL)
         self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
@@ -155,18 +155,32 @@ class ExamToolButton(wx.Panel):
             gc.StrokeLine(bx + 1, by + bh - 1, bx + bw - 1, by + bh - 1)
             gc.StrokeLine(bx + bw - 1, by + 1, bx + bw - 1, by + bh - 1)
 
-        # label (top) + icon (below)
+        # label (top) + icon (below), as one block vertically centered in the
+        # button face so the glyph never spills past the bevel.
         font = ui_scale.exam_sans(ui_scale.EXAM_DIRECTIONS_PT - 1, wx.FONTWEIGHT_BOLD)
         gc.SetFont(font, ink)
         tw, th = gc.GetTextExtent(self._label)
-        ty = by + ui_scale.space(1)
-        gc.DrawText(self._label, bx + (bw - tw) / 2, ty)
-        icon_cy = ty + th + ui_scale.space(2)
-        self._draw_icon(gc, bx + bw / 2, icon_cy, ui_scale.font_size(14), ink)
+        icon_s = ui_scale.font_size(13)
+        gap = ui_scale.space(1)
+        block_h = th + gap + icon_s
+        inner_top = by + ui_scale.space(1)
+        inner_bot = by + bh - ui_scale.space(1)
+        start_y = inner_top + max(0, ((inner_bot - inner_top) - block_h) / 2)
+        gc.DrawText(self._label, bx + (bw - tw) / 2, start_y)
+        icon_top = start_y + th + gap
+        # Clamp so the glyph's bottom stays inside the button face.
+        icon_top = min(icon_top, inner_bot - icon_s)
+        # ``bg`` is the button face; ``ink`` the label/glyph color. The help
+        # mark needs a glyph drawn IN the contrasting face color, so pass both.
+        self._draw_icon(gc, bx + bw / 2, icon_top, icon_s, ink, bg)
 
-    def _draw_icon(self, gc, cx, top, size, color):
+    def _draw_icon(self, gc, cx, top, size, color, face=None):
         """Draw a tiny vector glyph named ``self._icon`` centered at x=cx,
-        starting at y=top, fitting in ``size`` px."""
+        starting at y=top, fitting in ``size`` px. ``color`` is the ink;
+        ``face`` (the button background) is used where a glyph needs a
+        contrasting mark cut out of a filled shape (the help ``?``)."""
+        if face is None:
+            face = ExamColor.CONTENT_BG
         s = size
         x0 = cx - s / 2
         pen = wx.Pen(color, max(2, int(s * 0.14)))
@@ -211,12 +225,13 @@ class ExamToolButton(wx.Panel):
             p.CloseSubpath()
             gc.SetBrush(wx.Brush(color)); gc.SetPen(wx.TRANSPARENT_PEN)
             gc.FillPath(p)
-        elif name == "help":    # circle with ?
+        elif name == "help":    # filled circle with a contrasting "?"
             gc.SetBrush(wx.Brush(color)); gc.SetPen(wx.TRANSPARENT_PEN)
             gc.DrawEllipse(x0, top, s, s)
-            f = ui_scale.exam_sans(max(8, int(s * 0.8)), wx.FONTWEIGHT_BOLD)
-            inkc = ExamColor.HEADER_CHARCOAL if self._kind == "gray" else ExamColor.NAV_BLUE
-            gc.SetFont(f, inkc)
+            # Draw the "?" in the button-face color so it reads as cut out of
+            # the disc (the previous charcoal-on-dark glyph was invisible).
+            f = ui_scale.exam_sans(max(9, int(s * 0.78)), wx.FONTWEIGHT_BOLD)
+            gc.SetFont(f, face)
             qw, qh = gc.GetTextExtent("?")
             gc.DrawText("?", cx - qw / 2, top + (s - qh) / 2)
         elif name == "exit":    # door with arrow

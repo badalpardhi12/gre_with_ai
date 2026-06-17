@@ -351,6 +351,39 @@ img {{
 .katex {{
     color: inherit;
 }}
+/* Quantitative Comparison layout. Inline ``style`` attributes are stripped
+ * by the HTML sanitizer (bleach empties them without a css_sanitizer), so the
+ * QC figure / common-info / two-quantity columns are driven by these classes
+ * instead — the only reliable way to make the table span the full content
+ * width and center each quantity under its underlined header. */
+.qc-fig {{
+    text-align: center;
+    margin: 4px auto 10px auto;
+}}
+.qc-common {{
+    text-align: center;
+    margin: 0 auto 8px auto;
+}}
+.qc-table {{
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+    margin: 16px 0 6px 0;
+}}
+.qc-table td, .qc-table th {{
+    width: 50%;
+    border: none;
+    text-align: center;
+    vertical-align: middle;
+    padding: 8px 12px;
+}}
+.qc-head {{
+    font-weight: 600;
+    padding-bottom: 10px;
+}}
+.qc-quantity {{
+    font-size: 1.08em;
+}}
 </style>
 </head>
 <body>

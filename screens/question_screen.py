@@ -148,7 +148,10 @@ class QuestionScreen(wx.Panel):
         self.passage_title.SetForegroundColour(ExamColor.PASSAGE_TITLE_TEXT)
         self.passage_title.SetFont(ui_scale.exam_sans(ui_scale.EXAM_DIRECTIONS_PT - 1,
                                                       wx.FONTWEIGHT_BOLD))
-        ptb.Add(self.passage_title, 1, wx.ALL, ui_scale.space(1))
+        # Indent the title text from the bar edges so it doesn't crowd the
+        # left border (the ETS "Question is based on…" bar has clear padding).
+        ptb.Add(self.passage_title, 1,
+                wx.LEFT | wx.RIGHT | wx.TOP | wx.BOTTOM, ui_scale.space(2))
         self.passage_title_bar.SetSizer(ptb)
         psz.Add(self.passage_title_bar, 0, wx.EXPAND)
         self.passage_view = MathView(self.passage_panel, exam=True)
@@ -406,10 +409,14 @@ class QuestionScreen(wx.Panel):
 
     def _qc_prompt_html(self, q):
         """Figure (if any) + common info centered + two-column underlined
-        Quantity A/B, parsed from the QC prompt HTML."""
+        Quantity A/B, parsed from the QC prompt HTML.
+
+        Layout is driven by CSS classes (``qc-*`` in the MathView template),
+        not inline ``style`` — the sanitizer empties inline styles, which used
+        to collapse the table to content width and shove it left of center."""
         prompt = q["prompt"]
         stim = q.get("stimulus") or {}
-        fig = (f'<div style="text-align:center;">{stim["content"]}</div>'
+        fig = (f'<div class="qc-fig">{stim["content"]}</div>'
                if stim.get("content") else "")
         a = re.search(r"Quantity\s*A\s*[:\-]\s*(.*?)(?=<p>\s*Quantity\s*B|$)",
                       prompt, re.IGNORECASE | re.DOTALL)
@@ -421,19 +428,20 @@ class QuestionScreen(wx.Panel):
         def _clean(s):
             return re.sub(r"</?p>", "", s).strip()
 
-        common = re.sub(r"<p>\s*</p>", "", prompt[:a.start()]).strip()
+        # Strip any stray <p>/</p> from the common-info slice so it doesn't
+        # leak an unbalanced tag into the centered div.
+        common = _clean(re.sub(r"<p>\s*</p>", "", prompt[:a.start()]))
         qa, qb = _clean(a.group(1)), _clean(b.group(1))
-        common_html = (f'<div style="text-align:center; color:#555;">{common}</div>'
+        common_html = (f'<div class="qc-common">{common}</div>'
                        if common else "")
         return (
             f'{fig}{common_html}'
-            f'<table style="width:100%; border-collapse:collapse; border:none; '
-            f'margin-top:14px;"><tr>'
-            f'<td style="border:none; text-align:center; width:50%;"><u>Quantity A</u></td>'
-            f'<td style="border:none; text-align:center; width:50%;"><u>Quantity B</u></td>'
+            f'<table class="qc-table"><tr>'
+            f'<td class="qc-head"><u>Quantity A</u></td>'
+            f'<td class="qc-head"><u>Quantity B</u></td>'
             f'</tr><tr>'
-            f'<td style="border:none; text-align:center;">{qa}</td>'
-            f'<td style="border:none; text-align:center;">{qb}</td>'
+            f'<td class="qc-quantity">{qa}</td>'
+            f'<td class="qc-quantity">{qb}</td>'
             f'</tr></table>'
         )
 

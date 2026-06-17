@@ -218,6 +218,13 @@ class TimerWidget(wx.Panel):
         self.toggle_btn.SetLabel(("⊖ " + base) if self._compact else base)
         # Once locked visible, the toggle can't hide anymore — disable it.
         self.toggle_btn.Enable(not self._hide_locked)
+        # In compact mode re-fit so the swapped label ("⊖ Show Time" is a hair
+        # wider than "⊖ Hide Time") is never clipped at the bar's right edge.
+        if self._compact:
+            self.toggle_btn.SetMinSize(self.toggle_btn.GetBestSize())
+            sizer = self.GetSizer()
+            if sizer is not None:
+                sizer.Layout()
 
     def _enforce_reappear(self):
         """Force the clock visible + lock re-hiding once <= 5:00 remaining.
@@ -276,7 +283,16 @@ class TimerWidget(wx.Panel):
         self.display.SetForegroundColour(ExamColor.SECTION_BAR_TEXT)
         self.display.SetFont(ui_scale.exam_sans(ui_scale.EXAM_DIRECTIONS_PT,
                                                 weight=wx.FONTWEIGHT_BOLD))
+        # The Hide/Show toggle is a native wx.Button; on macOS it defaults to a
+        # system foreground that reads as washed-out light text on the pink bar.
+        # Pin it to the dark section-bar ink and the pink face so the label is
+        # legible, then re-fit its best size so the "⊖ Hide Time" label (with
+        # the wide ⊖ glyph) is never truncated.
+        self.toggle_btn.SetBackgroundColour(ExamColor.SECTION_BAR_PINK)
+        self.toggle_btn.SetForegroundColour(ExamColor.SECTION_BAR_TEXT)
         self.toggle_btn.SetLabel("⊖ " + self.HIDE_LABEL)
+        self.toggle_btn.SetFont(ui_scale.exam_sans(ui_scale.EXAM_TIMER_PT - 2))
+        self.toggle_btn.SetMinSize(self.toggle_btn.GetBestSize())
         # Rebuild the sizer as a horizontal inline row. Detach the widgets from
         # the old vertical sizer first (wx forbids adding a window that's still
         # held by another sizer).

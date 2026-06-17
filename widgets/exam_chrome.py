@@ -99,7 +99,11 @@ class ExamChrome(wx.Panel):
         if self._with_timer:
             self.timer = TimerWidget(self.section_bar)
             self.timer.set_compact_bar_style()  # restyle for the pink bar
-            ss.Add(self.timer, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, ui_scale.space(5))
+            # Generous right margin so the full "HH:MM:SS  ⊖ Hide Time" (and the
+            # slightly wider "⊖ Show Time" after toggling) clears the window
+            # edge without truncation.
+            ss.Add(self.timer, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
+                   ui_scale.space(6))
         self.section_bar.SetSizer(ss)
         outer.Add(self.section_bar, 0, wx.EXPAND)
 

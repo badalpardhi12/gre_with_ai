@@ -37,3 +37,12 @@ def test_gre_shape_faithfulness():
     from scripts.run_all_audits import _gate_faithfulness
     count, detail = _gate_faithfulness(SEED)
     assert count == 0, f"GRE shape violations: {detail}"
+
+
+def test_difficulty_spread_satisfiable():
+    """Balancing fix #1 depends on the live bank carrying enough spread in
+    every coarse difficulty band per measure; if it drifts to a single band
+    the adaptive easy/medium/hard forms stop feeling different."""
+    from scripts.run_all_audits import _gate_difficulty_spread
+    count, detail = _gate_difficulty_spread(SEED)
+    assert count == 0, f"difficulty bands too thin for spread: {detail}"

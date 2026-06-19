@@ -38,34 +38,65 @@ def compute_theta(user_id: str = "local", window: int = 40) -> float:
 
 
 # ── Scaled Score Lookup (approximation) ───────────────────────────────
-# Maps (raw_correct, difficulty_band) -> (estimated_low, estimated_high)
-# Based on publicly available ETS percentile data and score ranges 130-170.
-# This is an approximation — the real ETS formula is not public.
+# Maps (measure, difficulty_band, raw_correct) -> (estimated_low, high)
+# on the 130-170 scale. This is an APPROXIMATION — ETS does not publish
+# its raw→scaled equating tables or its section-routing cutoffs.
+#
+# Real-GRE section-level forms set BOTH a ceiling AND a floor: only a HARD
+# second-section form can reach 170, and being routed to a hard form also
+# guarantees a minimum score (the "safety net" floor — you can't be routed
+# to hard without already proving enough in section 1). An EASY form caps
+# well below 170 no matter how many you then answer correctly. The legacy
+# table modeled only the cap, letting a hard-routed taker sink toward 130
+# and under-rewarding strong medium performers.
+#
+# The per-form [floor, ceiling] bands below are reverse-engineered from
+# Magoosh's GRE score-calculator and Manhattan Prep's floor/ceiling
+# description. They are TUNABLE — keep them here so future calibration data
+# can shift them without touching the curve logic.
+SCALED_SCORE_BANDS = {
+    "quant":  {"easy": (130, 151), "medium": (136, 158), "hard": (146, 170)},
+    "verbal": {"easy": (130, 155), "medium": (141, 164), "hard": (149, 170)},
+}
+
+# Within-band growth exponent applied to the normalized raw fraction. An
+# exponent > 1 makes a given raw map to a LOWER point inside its band, so
+# Quant is curved slightly harder than Verbal (matching the real GRE, where
+# the same number-correct yields a marginally lower Quant scaled score).
+SCALED_CURVE_GAMMA = {"verbal": 1.0, "quant": 1.2}
+
+# Max raw across S1 (12) + S2 (15) for one measure.
+RAW_MAX = 27
+
+# Default measure used when a caller omits it (keeps the legacy
+# single-argument ``estimate_scaled_score`` calls self-consistent).
+_DEFAULT_MEASURE = "verbal"
+
 
 def _build_score_table():
-    """Build lookup tables for Verbal and Quant scaled score estimation."""
-    # Raw scores for S1 (12 questions) + S2 (15 questions) = 27 max
-    # This maps total_correct -> (low_estimate, high_estimate) for each difficulty band
+    """Build ``tables[measure][band][raw] -> (low, high)`` clamped into each
+    form's [floor, ceiling] band.
 
+    For raw 0..RAW_MAX we place a center score on a monotonic curve inside
+    the band, then emit a ±1 range clamped to the band so the FLOOR and the
+    CEILING are both honored (a hard form never reports below its floor; an
+    easy form never reports above its cap).
+    """
     tables = {}
-    for band in ("easy", "medium", "hard"):
-        table = {}
-        for raw in range(28):  # 0 to 27
-            pct = raw / 27.0
-            if band == "easy":
-                # Easy S2: scores capped lower
-                base = 130 + pct * 25  # max ~155
-            elif band == "hard":
-                # Hard S2: scores reach higher
-                base = 140 + pct * 30  # max 170
-            else:
-                # Medium S2: balanced
-                base = 135 + pct * 30  # max ~165
-
-            low = max(130, min(170, int(math.floor(base)) - 2))
-            high = max(130, min(170, int(math.ceil(base)) + 2))
-            table[raw] = (low, high)
-        tables[band] = table
+    for measure, bands in SCALED_SCORE_BANDS.items():
+        gamma = SCALED_CURVE_GAMMA.get(measure, 1.0)
+        tables[measure] = {}
+        for band, (floor, ceiling) in bands.items():
+            span = ceiling - floor
+            table = {}
+            for raw in range(RAW_MAX + 1):
+                pct = raw / float(RAW_MAX)
+                base = floor + span * (pct ** gamma)
+                center = int(round(base))
+                low = max(floor, min(ceiling, center - 1))
+                high = max(floor, min(ceiling, center + 1))
+                table[raw] = (low, high)
+            tables[measure][band] = table
     return tables
 
 
@@ -317,18 +348,24 @@ class ScoringEngine:
     # ── Scaled Score Estimation ───────────────────────────────────────
 
     @staticmethod
-    def estimate_scaled_score(raw_correct, difficulty_band="medium"):
+    def estimate_scaled_score(raw_correct, difficulty_band="medium",
+                              measure=_DEFAULT_MEASURE):
         """
         Estimate a GRE scaled score range from raw correct count.
+
+        ``measure`` selects the per-measure band table (Verbal is curved
+        slightly easier than Quant). An unknown band falls back to
+        ``medium``; an unknown measure falls back to the default measure.
 
         Returns:
             (low, high) tuple of estimated scaled scores (130-170).
         """
         try:
-            raw = max(0, min(27, int(raw_correct)))
+            raw = max(0, min(RAW_MAX, int(raw_correct)))
         except (TypeError, ValueError):
             return (130, 135)
-        table = SCORE_TABLES.get(difficulty_band, SCORE_TABLES["medium"])
+        measure_tables = SCORE_TABLES.get(measure, SCORE_TABLES[_DEFAULT_MEASURE])
+        table = measure_tables.get(difficulty_band, measure_tables["medium"])
         return table.get(raw, (130, 135))
 
     @staticmethod
@@ -339,8 +376,10 @@ class ScoringEngine:
 
         Returns dict with raw and estimated scores.
         """
-        v_low, v_high = ScoringEngine.estimate_scaled_score(verbal_raw, verbal_band)
-        q_low, q_high = ScoringEngine.estimate_scaled_score(quant_raw, quant_band)
+        v_low, v_high = ScoringEngine.estimate_scaled_score(
+            verbal_raw, verbal_band, measure="verbal")
+        q_low, q_high = ScoringEngine.estimate_scaled_score(
+            quant_raw, quant_band, measure="quant")
         return {
             "verbal_raw": verbal_raw,
             "quant_raw": quant_raw,

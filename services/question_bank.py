@@ -2,7 +2,7 @@
 Question bank service — loads, filters, and selects questions from the database.
 """
 import random
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 
 from peewee import fn, OperationalError
@@ -312,6 +312,103 @@ def _quant_figure_floor(count, pool_size=None):
 RC_ANCHOR_MIN_SIZE = 2
 RC_ANCHOR_PREFER_SIZE = 3  # prefer 3+ Q passages for the primary anchor
 
+# Subtype that conventionally OPENS each measure's section on the real
+# GRE: Verbal sections open with a Text Completion, Quant sections open
+# with a Quantitative Comparison. APPROXIMATE — this is a prep-source
+# convention (Magoosh "GRE format" breakdown), not an ETS-published rule.
+# Used by ``_cluster_aware_shuffle`` to pin the FIRST singleton block when
+# a section's measure is known. Only a SINGLETON of this subtype is used
+# as the opener (TC/QC are never clustered), so cluster atomicity is
+# untouched.
+SECTION_OPENING_SUBTYPE = {"verbal": "tc", "quant": "qc"}
+
+# Cluster blocks (RC passages, DI charts) are biased into this fractional
+# band of a section's non-opener blocks so a Data-Interpretation set lands
+# mid-to-late rather than first or dead-last (matches real GRE placement).
+_CLUSTER_BIAS_LO = 0.45
+_CLUSTER_BIAS_HI = 0.90
+
+
+# ── Per-section difficulty SPREAD (balancing fix #1) ───────────────────
+# Every real-GRE section is a band-CENTERED MIX, never a single-difficulty
+# monolith. Two orthogonal axes: the section's BAND (set adaptively) slides
+# the whole spread up/down, while a SPREAD of item difficulties always
+# remains within it. We enforce a coarse 3-bucket (lo = bands 1-2,
+# mid = band 3, hi = bands 4-5) quota per section so a routed "hard" S2
+# visibly contains more hard items than a "medium" one, and S1 has real
+# easy/hard tails instead of a flat medium pull.
+#
+# Keyed by routing_tier (S2) or difficulty_band (S1 = "medium"). All
+# fractions are APPROXIMATE — reverse-engineered from prep-source within-
+# section descriptions (Magoosh / Manhattan / Princeton), NOT ETS-published.
+# Tunable: change here without touching the rebalance logic.
+SECTION_DIFFICULTY_SPREAD = {
+    "easy":   {"lo": 0.58, "mid": 0.30, "hi": 0.12},
+    "medium": {"lo": 0.25, "mid": 0.50, "hi": 0.25},
+    "hard":   {"lo": 0.13, "mid": 0.34, "hi": 0.53},
+}
+
+
+def _coarse_band(difficulty_target):
+    """Map an item's 1-5 ``difficulty_target`` to a coarse bucket:
+    ``lo`` (1-2), ``mid`` (3), ``hi`` (4-5). Matches the legacy
+    easy/medium/hard band gate (easy<=2, hard>=4)."""
+    d = difficulty_target or 3
+    if d <= 2:
+        return "lo"
+    if d == 3:
+        return "mid"
+    return "hi"
+
+
+def _quota_from_fractions(fractions, total):
+    """Largest-remainder integer allocation of ``total`` across keys by
+    their ``fractions`` (need not sum to 1 — they're normalized)."""
+    keys = list(fractions)
+    s = sum(fractions.values()) or 1.0
+    raw = {k: (fractions[k] / s) * total for k in keys}
+    quota = {k: int(raw[k]) for k in keys}
+    rem = total - sum(quota.values())
+    for k in sorted(keys, key=lambda k: -(raw[k] - quota[k]))[:max(0, rem)]:
+        quota[k] += 1
+    return quota
+
+
+def _section_bucket(measure, subtype):
+    """Collapse a subtype to a type-mix bucket. Verbal RC subtypes fold to
+    one ``rc`` bucket; Quant ``data_interp`` folds into ``mcq_single``
+    (real DI members ship as mcq_single / numeric_entry)."""
+    if measure == "verbal":
+        if subtype in CLUSTERED_VERBAL_SUBTYPES:
+            return "rc"
+        return subtype  # tc, se
+    if subtype == "data_interp":
+        return "mcq_single"
+    return subtype  # qc, mcq_single, mcq_multi, numeric_entry
+
+
+# Concrete subtype pulled from the swap pool to RAISE a type-mix bucket.
+# (Verbal ``rc`` items live in passage clusters and are not in the
+# singleton swap pool, so ``rc`` is effectively anchor-managed — see
+# ``_select_rc_passage_anchor`` — and never raised by a singleton swap.)
+def _bucket_swap_in_subtype(measure, bucket):
+    if measure == "verbal" and bucket == "rc":
+        return "rc_single"
+    return bucket
+
+
+def _section_type_targets(measure, count):
+    """Rounded per-bucket type-mix targets for a section of ``count`` items.
+    Independent ``round(fraction*count)`` per bucket (a ±1 tolerance band,
+    not an exact partition) so the repair only corrects genuine drift."""
+    if measure == "verbal":
+        fr = {"rc": 0.50, "tc": 0.25, "se": 0.25}
+    else:
+        # data_interp folded into mcq_single (its members ship as mcq/ne).
+        fr = {"qc": 0.33, "mcq_single": 0.48,
+              "mcq_multi": 0.09, "numeric_entry": 0.09}
+    return {b: int(round(f * count)) for b, f in fr.items()}
+
 
 def _log_served(qids, user_id: str = "local", session_id=None):
     """R3 — bulk-insert a ServedLog row per qid at pick time.
@@ -471,8 +568,9 @@ def _cluster_group(q):
     return ("q", q.id)
 
 
-def _cluster_aware_shuffle(qids):
-    """Shuffle qids while keeping cluster siblings adjacent.
+def _cluster_aware_shuffle(qids, measure=None):
+    """Shuffle qids while keeping cluster siblings adjacent, optionally
+    anchoring the real-GRE opening item and biasing clusters mid-to-late.
 
     Real GRE interleaves item subtypes within a section; only multi-question
     clusters (RC passages, DI charts) stay grouped because the stimulus is
@@ -483,12 +581,24 @@ def _cluster_aware_shuffle(qids):
 
     The fix groups consecutive qids by ``_cluster_group`` so any run of
     sibling questions sharing a stimulus stays together (RC passage, DI
-    chart), then ``random.shuffle`` reorders the BLOCKS — not the items
-    inside them. Singletons each form their own one-item block, so they
-    interleave freely. The order within a block is preserved exactly.
+    chart), then reorders the BLOCKS — not the items inside them. Singletons
+    each form their own one-item block, so they interleave freely. The order
+    within a block is preserved exactly.
 
-    Relies on ``random.shuffle`` for determinism — callers seeding
-    ``random`` get reproducible orderings, which the test framework needs.
+    Ordering anchors (balancing fix #2) — only when ``measure`` is given:
+      * The section OPENS with one singleton of ``SECTION_OPENING_SUBTYPE``
+        for the measure (TC for verbal, QC for quant), matching the real
+        GRE's recognizable section opener. If no such singleton was
+        selected, the opener anchor is simply skipped.
+      * Cluster blocks (RC passages / DI charts) are biased into the
+        middle-to-late region (``_CLUSTER_BIAS_LO``..``_CLUSTER_BIAS_HI``)
+        so a Data-Interpretation set never opens the section and rarely
+        ends it — singletons can still land anywhere.
+      * When ``measure`` is ``None`` (default), the legacy pure-block
+        shuffle runs unchanged — backwards compatible with direct callers.
+
+    Relies on ``random`` for determinism — callers seeding ``random`` get
+    reproducible orderings, which the test framework needs.
 
     Edge cases:
         * Empty list → empty list (no DB hit).
@@ -509,7 +619,7 @@ def _cluster_aware_shuffle(qids):
     # adjacent runs) so all siblings of a stimulus join one block even if the
     # selection order left them non-adjacent — a DI chart's questions can never
     # be split. Block order follows first appearance; within-block order is the
-    # selected order; ``random.shuffle`` then reorders the BLOCKS only.
+    # selected order.
     blocks_by_key = {}
     order = []
     for qid in qids:
@@ -523,10 +633,56 @@ def _cluster_aware_shuffle(qids):
 
     random.shuffle(blocks)
 
+    opening_subtype = SECTION_OPENING_SUBTYPE.get(measure) if measure else None
+    if opening_subtype is not None:
+        blocks = _anchor_blocks(blocks, by_id, opening_subtype)
+
     flat = []
     for block in blocks:
         flat.extend(block)
     return flat
+
+
+def _anchor_blocks(blocks, by_id, opening_subtype):
+    """Reorder already-shuffled blocks so the section opens with a single
+    ``opening_subtype`` singleton and cluster blocks sit mid-to-late.
+
+    ``blocks`` is a list of qid-lists (each a cluster or a singleton); the
+    within-block order is preserved. Returns a new block list.
+    """
+    def _is_cluster(block):
+        if len(block) > 1:
+            return True
+        r = by_id.get(block[0])
+        return r is not None and getattr(r, "stimulus_id", None) is not None
+
+    def _singleton_subtype(block):
+        if len(block) != 1:
+            return None
+        r = by_id.get(block[0])
+        return getattr(r, "subtype", None) if r is not None else None
+
+    remaining = list(blocks)
+    opener = None
+    for i, b in enumerate(remaining):
+        if _singleton_subtype(b) == opening_subtype:
+            opener = remaining.pop(i)
+            break
+
+    # Weight remaining blocks: clusters into the mid-to-late band, singletons
+    # anywhere. Sort ascending by weight so low weights lead.
+    weighted = []
+    for b in remaining:
+        if _is_cluster(b):
+            w = _CLUSTER_BIAS_LO + (_CLUSTER_BIAS_HI - _CLUSTER_BIAS_LO) * random.random()
+        else:
+            w = random.random()
+        weighted.append((w, b))
+    weighted.sort(key=lambda pair: pair[0])
+
+    ordered = ([opener] if opener is not None else [])
+    ordered.extend(b for _w, b in weighted)
+    return ordered
 
 
 def _user_recent_seen(user_id: str = "local",
@@ -845,7 +1001,10 @@ class QuestionBankService:
         and keeping RC/DI clusters atomic.
 
         Verbal: 35% rc_single, 10% rc_multi, 5% rc_select_passage, 25% tc, 25% se
-        Quant: 30% qc, 40% mcq_single, 5% mcq_multi, 5% numeric_entry, 20% data_interp
+        Quant: 33% qc, 37% mcq_single, 9% mcq_multi, 9% numeric_entry, 11% data_interp
+        (see ``VERBAL_COMPOSITION`` / ``QUANT_COMPOSITION``). After the
+        cluster-aware fill, ``_rebalance_section`` repairs the realized
+        per-section subtype quotas and difficulty spread within tolerance.
 
         Cluster-aware: when a selected RC/DI question shares a ``stimulus_id``
         with siblings, every sibling is pulled in together. If the full cluster
@@ -1299,6 +1458,20 @@ class QuestionBankService:
                 measure, deficit,
             )
 
+        # Balancing fixes #1 (difficulty spread/quota) + #3 (type-mix):
+        # repair the shipped slice toward the real-GRE per-section subtype
+        # quotas and the tier's coarse difficulty spread, swapping only
+        # stimulus-less singletons so RC/DI clusters stay atomic.
+        section_ids = self._rebalance_section(
+            measure=measure,
+            section_ids=selected_ids[:count],
+            count=count,
+            exclude=exclude,
+            routing_tier=routing_tier,
+            difficulty_band=difficulty_band,
+            target_theta=target_theta,
+        )
+
         # Real GRE interleaves item subtypes within a section; only multi-
         # question clusters (RC passages, DI charts) stay grouped because
         # the stimulus is rendered once at the top. Pre-fix the per-subtype
@@ -1306,8 +1479,9 @@ class QuestionBankService:
         # — visibly subtype-batched and unlike a real test. ``_cluster_
         # aware_shuffle`` reorders BLOCKS (cluster-runs and singletons) but
         # preserves within-block order, so passage/chart siblings stay
-        # adjacent for one-time stimulus rendering.
-        final_picks = _cluster_aware_shuffle(selected_ids[:count])
+        # adjacent for one-time stimulus rendering, and (measure-aware) pins
+        # the TC/QC opener and biases the DI/long-RC cluster mid-to-late.
+        final_picks = _cluster_aware_shuffle(section_ids, measure=measure)
 
         # R3 — ServedLog write-through. Record every qid we're about to
         # hand to the caller so future selections (even from fresh-launch
@@ -1352,6 +1526,197 @@ class QuestionBankService:
             return {r.duplicate_group_id for r in rows}
         except Exception:
             return set()
+
+    def _singleton_swap_pool(self, measure, exclude):
+        """Live, stimulus-less candidate items for ``measure``, grouped by
+        ``(subtype, coarse_band)`` and theta-ordered within each cell.
+
+        Only stimulus-less items are eligible so a swap can never split an
+        RC/DI cluster. Respects the synthetic toggle and duplicate-group
+        dedup (against the already-used ``exclude`` set and within the pool).
+        """
+        q = (Question
+             .select(Question.id, Question.subtype,
+                     Question.difficulty_target, Question.duplicate_group_id)
+             .where((Question.measure == measure) &
+                    (Question.status == "live") &
+                    (Question.stimulus.is_null(True))))
+        if exclude:
+            q = q.where(Question.id.not_in(list(exclude)))
+        clause = _exclude_synthetic_clause()
+        if clause is not None:
+            q = q.where(clause)
+
+        seen_groups = self._groups_for(exclude)
+        cells = defaultdict(list)
+        for r in q:
+            g = (getattr(r, "duplicate_group_id", "") or "")
+            if g:
+                if g in seen_groups:
+                    continue
+                seen_groups.add(g)
+            cells[(r.subtype, _coarse_band(r.difficulty_target))].append(r.id)
+        for key in list(cells.keys()):
+            cells[key] = _randomesque_pick(cells[key])
+        return cells
+
+    def _rebalance_section(self, measure, section_ids, count, exclude,
+                           routing_tier=None, difficulty_band="medium",
+                           target_theta=None):
+        """Post-assembly repair pass (balancing fixes #1 + #3).
+
+        Nudges the shipped section toward (a) its real-GRE subtype quotas
+        and (b) its tier's coarse difficulty spread, swapping ONLY
+        stimulus-less singletons so RC/DI clusters stay atomic. Returns a
+        new id list of the same length (a permutation of ``section_ids``
+        with some singletons replaced by pool items).
+
+        Phase 1 (type-mix) runs first; Phase 2 (difficulty) is
+        subtype-preserving so it can never undo Phase 1.
+
+        The difficulty spread is enforced for the ADAPTIVE forms (a
+        ``routing_tier`` is set) and for the S1 / plain ``medium`` section
+        (a medium-centered spread, fixing the formerly flat S1). A direct
+        ``difficulty_band='easy'/'hard'`` call WITHOUT a ``routing_tier``
+        keeps its legacy monolithic hard-WHERE contract (targeted drills),
+        and the pure theta-CAT path (``routing_tier=None`` + active
+        ``target_theta``) is left to Fisher-info ranking.
+        """
+        if not section_ids:
+            return section_ids
+        section_ids = list(section_ids)
+
+        rows = {r.id: r for r in Question
+                .select(Question.id, Question.subtype,
+                        Question.difficulty_target, Question.stimulus)
+                .where(Question.id.in_(section_ids))}
+
+        # Running counters over the WHOLE section (clusters included) plus a
+        # registry of swappable singletons -> (subtype, coarse_band).
+        bucket_count = Counter()
+        band_count = Counter()
+        swappable = {}
+        default_subtype = "rc_single" if measure == "verbal" else "mcq_single"
+        for qid in section_ids:
+            r = rows.get(qid)
+            st = r.subtype if r is not None else default_subtype
+            bd = _coarse_band(getattr(r, "difficulty_target", 3) if r else 3)
+            bucket_count[_section_bucket(measure, st)] += 1
+            band_count[bd] += 1
+            if r is not None and getattr(r, "stimulus_id", None) is None:
+                swappable[qid] = (st, bd)
+
+        used = set(section_ids) | set(exclude or [])
+        pool = self._singleton_swap_pool(measure, used)
+
+        def _pop(subtype, band):
+            cell = pool.get((subtype, band))
+            while cell:
+                qid = cell.pop(0)
+                if qid not in used:
+                    return qid
+            return None
+
+        def _pop_any_band(subtype):
+            for band in ("mid", "lo", "hi"):  # prefer neutral mid
+                qid = _pop(subtype, band)
+                if qid is not None:
+                    return qid, band
+            return None, None
+
+        def _swap(out_qid, in_qid, in_subtype, in_band):
+            idx = section_ids.index(out_qid)
+            section_ids[idx] = in_qid
+            out_st, out_bd = swappable.pop(out_qid)
+            bucket_count[_section_bucket(measure, out_st)] -= 1
+            band_count[out_bd] -= 1
+            bucket_count[_section_bucket(measure, in_subtype)] += 1
+            band_count[in_band] += 1
+            swappable[in_qid] = (in_subtype, in_band)
+            used.add(in_qid)  # out_qid stays in ``used`` (don't re-pick it)
+
+        # ── Phase 1: type-mix (bucket) repair ──
+        type_targets = _section_type_targets(measure, count)
+        for _ in range(count):
+            under = sorted(
+                (b for b in type_targets
+                 if type_targets[b] - bucket_count[b] >= 1),
+                key=lambda b: -(type_targets[b] - bucket_count[b]))
+            if not under:
+                break
+            over = {b for b in bucket_count
+                    if bucket_count[b] - type_targets.get(b, 0) >= 1}
+            if not over:
+                break
+            progressed = False
+            for ub in under:
+                in_subtype = _bucket_swap_in_subtype(measure, ub)
+                in_qid, in_band = _pop_any_band(in_subtype)
+                if in_qid is None:
+                    continue
+                out_qid = next(
+                    (q for q, (st, _bd) in swappable.items()
+                     if _section_bucket(measure, st) in over
+                     and _section_bucket(measure, st) != ub),
+                    None)
+                if out_qid is None:
+                    # No swappable donor — return the candidate to its cell.
+                    pool[(in_subtype, in_band)].insert(0, in_qid)
+                    continue
+                _swap(out_qid, in_qid, in_subtype, in_band)
+                progressed = True
+                break
+            if not progressed:
+                break
+
+        # ── Phase 2: difficulty (coarse band) repair, subtype-preserving ──
+        # Enforce the within-section spread for the ADAPTIVE forms (a
+        # routing_tier is set → full per-tier spread) and for the S1 / plain
+        # "medium" section (medium-centered 25/50/25 spread, the fix for a
+        # flat S1). A direct difficulty_band='easy'/'hard' call WITHOUT a
+        # routing_tier keeps its legacy monolithic hard-WHERE contract
+        # (targeted drills), and the pure theta-CAT path (routing_tier=None +
+        # active target_theta) is left to Fisher-info ranking.
+        if routing_tier in SECTION_DIFFICULTY_SPREAD:
+            spread_key = routing_tier
+        elif target_theta is None and difficulty_band == "medium":
+            spread_key = "medium"
+        else:
+            spread_key = None
+        if spread_key is not None:
+            spread = SECTION_DIFFICULTY_SPREAD[spread_key]
+            band_targets = _quota_from_fractions(spread, count)
+            for _ in range(count):
+                over = sorted(
+                    (b for b in ("lo", "mid", "hi")
+                     if band_count[b] - band_targets.get(b, 0) >= 1),
+                    key=lambda b: -(band_count[b] - band_targets.get(b, 0)))
+                under = sorted(
+                    (b for b in ("lo", "mid", "hi")
+                     if band_targets.get(b, 0) - band_count[b] >= 1),
+                    key=lambda b: -(band_targets.get(b, 0) - band_count[b]))
+                if not over or not under:
+                    break
+                progressed = False
+                for ob in over:
+                    outs = [q for q, (_st, bd) in swappable.items() if bd == ob]
+                    random.shuffle(outs)
+                    for out_qid in outs:
+                        st = swappable[out_qid][0]
+                        for ub in under:
+                            in_qid = _pop(st, ub)
+                            if in_qid is not None:
+                                _swap(out_qid, in_qid, st, ub)
+                                progressed = True
+                                break
+                        if progressed:
+                            break
+                    if progressed:
+                        break
+                if not progressed:
+                    break
+
+        return section_ids
 
     def _take_cluster_aware(self, measure, subtype, target, difficulty_band,
                              exclude, target_theta=None, routing_tier=None):

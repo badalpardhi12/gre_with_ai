@@ -78,6 +78,43 @@ def _gate_faithfulness(db):
     return total, {k: len(v) for k, v in viol.items() if v}
 
 
+# Minimum live items each measure must carry in EACH coarse difficulty band
+# (lo = bands 1-2, mid = band 3, hi = bands 4-5) so the per-section
+# difficulty SPREAD (balancing fix #1) is satisfiable — a routed easy/medium/
+# hard section, or the medium-centered S1, can be filled from the right band
+# without forcing heavy reuse. If the bank ever drifts toward a single band
+# (e.g. everything at the band-3 default), the spread enforcement silently
+# no-ops and the adaptive forms stop feeling different — this gate catches
+# that. Floor is conservative: one 15-item section can be ~8 from any band.
+_DIFFICULTY_BAND_FLOOR = 15
+
+
+def _coarse_band_of(d):
+    d = d or 3
+    return "lo" if d <= 2 else ("mid" if d == 3 else "hi")
+
+
+def _gate_difficulty_spread(db):
+    """Each measure must have >= _DIFFICULTY_BAND_FLOOR live items in every
+    coarse band so the section difficulty spread is satisfiable."""
+    conn = sqlite3.connect(db)
+    rows = conn.execute(
+        "SELECT measure, difficulty_target FROM question "
+        "WHERE status='live' AND measure IN ('verbal','quant')"
+    ).fetchall()
+    conn.close()
+    counts = {}
+    for measure, diff in rows:
+        counts.setdefault(measure, {"lo": 0, "mid": 0, "hi": 0})
+        counts[measure][_coarse_band_of(diff)] += 1
+    thin = {}
+    for measure, bands in counts.items():
+        for band, n in bands.items():
+            if n < _DIFFICULTY_BAND_FLOOR:
+                thin[f"{measure}/{band}"] = n
+    return len(thin), thin
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -92,6 +129,7 @@ def main():
         ("phantom_figures (live)", _gate_figures),
         ("exact_dupes_relived", _gate_exact_dupes_retired),
         ("gre_shape_faithfulness", _gate_faithfulness),
+        ("difficulty_spread_satisfiable", _gate_difficulty_spread),
     ]
     print(f"Production-readiness gate on {args.db}\n")
     failed = 0

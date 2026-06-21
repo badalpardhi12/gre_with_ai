@@ -46,3 +46,12 @@ def test_difficulty_spread_satisfiable():
     from scripts.run_all_audits import _gate_difficulty_spread
     count, detail = _gate_difficulty_spread(SEED)
     assert count == 0, f"difficulty bands too thin for spread: {detail}"
+
+
+def test_no_judge_failed_item_is_live():
+    """No live item may carry a stored judge_result that failed an
+    answer-correctness / stem-clarity criterion (root cause of the q5420
+    report — generated-then-judged-FAIL items shipping live)."""
+    from scripts.run_all_audits import _gate_judge_failed_live
+    count, detail = _gate_judge_failed_live(SEED)
+    assert count == 0, f"judge-failed items are live: {detail}"

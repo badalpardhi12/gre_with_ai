@@ -3078,6 +3078,151 @@ def _044_user_reported_fixes_2026_06_09():
             seed.close()
 
 
+def _045_retire_unanswerable_di_2026_06_21():
+    """Retire DI items whose marked answer is NOT mathematically derivable
+    from the chart (user report on q5420 + the same cohort).
+
+    Root cause: these ``ai_synthetic_v2`` Data-Interpretation items were
+    generated, then their OWN stored ``provenance_json.judge_result`` — an
+    independent chart-reading judge — marked the "marked answer is
+    mathematically derivable" criterion as FAILED (confidence 5), yet the
+    items shipped ``status='live'`` anyway. The ``audit_answer_key_drift``
+    sweep (migration 036) could not catch them: it asks "which OPTION does
+    the explanation conclude?" and these explanations conclude a value that
+    is **not among the options at all** (e.g. q5420: true mean 137/6≈22.83;
+    options are 22.5/23.0/23.5/24.0/21.5 — 22.83 is absent and the marked
+    key C=23.5 is wrong), so the drift judge returned null → skip.
+
+    Each is a baked-PNG chart with no ``render_spec``, so the answer cannot
+    be reliably reconstructed offline — we RETIRE rather than guess
+    (matching the q5400 precedent in migration 044). q5412 is retired for an
+    ambiguous stem (sum-vs-average comparison) the judge flagged as not
+    well-posed. The correct-but-trivial judge-fails (q5404/q5407, difficulty
+    only) are intentionally LEFT LIVE — easy items are needed for S1/easy
+    forms.
+
+    Dual-writes seed + user DB (seed only when GRE_BUILD_SEED=1). Idempotent.
+    """
+    db = _get_db()
+    import json as _json
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+
+    MIG_NAME = "045_retire_unanswerable_di_2026_06_21"
+
+    # qid -> reason (verbatim-summarized from each item's own judge_result).
+    RETIRE = {
+        5420: ("user report: average of wins = 137/6 ≈ 22.83 is not among the "
+               "options (22.5/23.0/23.5/24.0/21.5); marked key C=23.5 is not "
+               "chart-derivable. Stored judge_result: derivability FAIL "
+               "(confidence 5). Baked-PNG chart, no render_spec → retire."),
+        5418: ("temperature-difference DI: cold avg 5.75, warm avg 24 → diff "
+               "18.25, but marked numeric answer is 19.5. Stored judge_result: "
+               "derivability FAIL (confidence 5). No render_spec → retire."),
+        5415: ("electricity-mix DI: marked answer C=304 is the ORIGINAL value "
+               "(38% of 800), not the post-change value the stem asks for "
+               "(~271). Stored judge_result: derivability FAIL (confidence 5). "
+               "Options do not contain the correct value → retire."),
+        5412: ("ridership DI: ambiguous stem compares a SUM (weekend total) to "
+               "an AVERAGE (daily mean) — an invalid like-for-like comparison. "
+               "Stored judge_result: stem-clarity + derivability FAIL → retire."),
+    }
+
+    def _retire(ex, qid, reason):
+        row = ex("SELECT status, provenance_json FROM question WHERE id=?",
+                 (qid,)).fetchone()
+        if row is None or row[0] == "retired":
+            return
+        try:
+            prov = _json.loads(row[1]) if row[1] else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        prov["retired_reason"] = reason
+        prov["retired_by_migration"] = MIG_NAME
+        ex("UPDATE question SET status='retired', provenance_json=? "
+           "WHERE id=? AND status != 'retired'", (_json.dumps(prov), qid))
+
+    def _apply(conn, raw_sql=False):
+        ex = (conn.execute if raw_sql else conn.execute_sql)
+        for qid, reason in RETIRE.items():
+            _retire(ex, qid, reason)
+
+    _apply(db)
+    if SEED_WRITES_ENABLED and SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            _apply(seed, raw_sql=True)
+            seed.commit()
+        finally:
+            seed.close()
+
+
+def _046_repair_q3116_option_2026_06_21():
+    """Repair q3116 (manhattan mcq_single): the marked-correct option E was
+    truncated to ``bcf + bde`` — which is only the DENOMINATOR of the correct
+    answer. The full simplification of (a/b)/(c/d + e/f) is
+    ``adf/(bcf + bde)`` (verified symbolically with sympy: it equals
+    a*d*f/(b*(c*f + d*e)) and matches none of the other options). Restore the
+    dropped numerator so the correct option text is the full fraction.
+
+    Surfaced by the 2026-06-21 quant answer-key re-validation sweep (the same
+    "answer not among the options" class as the q5420 user report). A repair
+    (not a retire) because the correction is unambiguous and the question is
+    otherwise a sound algebra item.
+
+    Dual-writes seed + user DB (seed only when GRE_BUILD_SEED=1). Idempotent.
+    """
+    db = _get_db()
+    import json as _json
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+
+    MIG_NAME = "046_repair_q3116_option_2026_06_21"
+    CORRECT_E = r"\(\dfrac{adf}{bcf + bde}\)"
+
+    def _apply(conn, raw_sql=False):
+        ex = (conn.execute if raw_sql else conn.execute_sql)
+        q = ex("SELECT provenance_json FROM question WHERE id=3116").fetchone()
+        if q is None:
+            return
+        # Idempotent: only act while E is still the truncated denominator.
+        e_opt = ex("SELECT option_text FROM questionoption "
+                   "WHERE question_id=3116 AND option_label='E'").fetchone()
+        if e_opt is None:
+            return
+        if "dfrac{adf}" in (e_opt[0] or ""):
+            return  # already repaired
+        ex("UPDATE questionoption SET option_text=? "
+           "WHERE question_id=3116 AND option_label='E'", (CORRECT_E,))
+        # Ensure E is the sole correct option (it was already marked correct).
+        ex("UPDATE questionoption SET is_correct=0 WHERE question_id=3116")
+        ex("UPDATE questionoption SET is_correct=1 "
+           "WHERE question_id=3116 AND option_label='E'")
+        try:
+            prov = _json.loads(q[0]) if q[0] else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        prov["option_repair"] = {
+            "by_migration": MIG_NAME,
+            "change": "option E 'bcf+bde' -> 'adf/(bcf+bde)' (restored dropped "
+                      "numerator; sympy-verified correct simplification)"}
+        ex("UPDATE question SET provenance_json=? WHERE id=3116",
+           (_json.dumps(prov),))
+
+    _apply(db)
+    if SEED_WRITES_ENABLED and SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            _apply(seed, raw_sql=True)
+            seed.commit()
+        finally:
+            seed.close()
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -3157,6 +3302,10 @@ MIGRATIONS = [
      _043_data_quality_cleanup_2026_06_01),
     ("044_user_reported_fixes_2026_06_09",
      _044_user_reported_fixes_2026_06_09),
+    ("045_retire_unanswerable_di_2026_06_21",
+     _045_retire_unanswerable_di_2026_06_21),
+    ("046_repair_q3116_option_2026_06_21",
+     _046_repair_q3116_option_2026_06_21),
 ]
 
 

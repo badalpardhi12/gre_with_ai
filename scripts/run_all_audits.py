@@ -78,6 +78,41 @@ def _gate_faithfulness(db):
     return total, {k: len(v) for k, v in viol.items() if v}
 
 
+def _gate_judge_failed_live(db):
+    """No LIVE item may carry a stored ``provenance_json.judge_result`` whose
+    'marked answer is mathematically derivable' (or equivalent) criterion
+    FAILED. This is the root cause of the q5420 report: generated items were
+    judged FAIL at build time but shipped live anyway. The drift audit can't
+    catch the "answer not among the options" sub-class, so we gate on the
+    item's own judge trail instead. Items the judge failed only on
+    DIFFICULTY ("trivial"/difficulty 1) are NOT flagged — those answers are
+    correct, just easy, and are intentionally kept live.
+    """
+    import json as _json
+    conn = sqlite3.connect(db)
+    rows = conn.execute(
+        "SELECT id, provenance_json FROM question WHERE status='live' "
+        "AND provenance_json IS NOT NULL AND provenance_json != ''"
+    ).fetchall()
+    conn.close()
+    bad = []
+    for qid, pj in rows:
+        try:
+            jr = (_json.loads(pj) or {}).get("judge_result") or {}
+        except (ValueError, TypeError):
+            continue
+        for v in jr.get("verdicts", []):
+            if v.get("pass") is False:
+                crit = (v.get("criterion") or "").lower()
+                # Only answer-correctness failures are gated; difficulty-only
+                # ("trivial"/"difficulty") fails are acceptable.
+                if ("deriv" in crit or "marked answer" in crit
+                        or "unambiguous" in crit or "stem" in crit):
+                    bad.append(qid)
+                    break
+    return len(bad), sorted(bad)
+
+
 # Minimum live items each measure must carry in EACH coarse difficulty band
 # (lo = bands 1-2, mid = band 3, hi = bands 4-5) so the per-section
 # difficulty SPREAD (balancing fix #1) is satisfiable — a routed easy/medium/
@@ -129,6 +164,7 @@ def main():
         ("phantom_figures (live)", _gate_figures),
         ("exact_dupes_relived", _gate_exact_dupes_retired),
         ("gre_shape_faithfulness", _gate_faithfulness),
+        ("judge_failed_live", _gate_judge_failed_live),
         ("difficulty_spread_satisfiable", _gate_difficulty_spread),
     ]
     print(f"Production-readiness gate on {args.db}\n")

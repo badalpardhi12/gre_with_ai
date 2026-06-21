@@ -3223,6 +3223,73 @@ def _046_repair_q3116_option_2026_06_21():
             seed.close()
 
 
+def _047_fix_q5395_explanation_2026_06_21():
+    """Fix q5395's broken explanation (user report #49). The ANSWER KEY IS
+    CORRECT — for a rectangle of perimeter 40 (l+w=20), area = l(20-l) ranges
+    over (0, 100], so areas 25/51/75/96/100 are all achievable and 104/110 are
+    not; key {A,B,C,F,G} is right (sympy-verified). But the shipped explanation
+    was a confused ai_synthetic_v2 ramble with arithmetic errors ("25 = 5x15",
+    "51 ~ 3.14x16.86", a self-contradictory "75 = 5x15? No:"). This rewrites
+    the explanation to be correct and to teach the exact trap the reporter hit:
+    the sides need NOT be integers, so area 25 (sides 10 +/- 5*sqrt(3)) counts.
+    Options and is_correct flags are unchanged.
+
+    Dual-writes seed + user DB (seed only when GRE_BUILD_SEED=1). Idempotent.
+    """
+    db = _get_db()
+    import json as _json
+    import sqlite3 as _sqlite3
+    from config import SEED_DB_PATH
+
+    MIG_NAME = "047_fix_q5395_explanation_2026_06_21"
+    NEW_EXPL = (
+        "The perimeter is 40, so l + w = 20 and Area = l(20 - l). As l ranges "
+        "over (0, 20) this is a downward-opening parabola maximized at l = 10 "
+        "(a 10x10 square), so the area can be ANY value in the interval "
+        "(0, 100] - the sides need not be integers. So every option that is "
+        "greater than 0 and at most 100 is achievable, and any option above "
+        "100 is not:\n"
+        "- 25: achievable, sides 10 +/- 5(sqrt 3) ~ 1.34 and 18.66 "
+        "(non-integer, but a valid rectangle).\n"
+        "- 51: achievable, sides 3 and 17 (3 x 17 = 51).\n"
+        "- 75: achievable, sides 5 and 15 (5 x 15 = 75).\n"
+        "- 96: achievable, sides 8 and 12 (8 x 12 = 96).\n"
+        "- 100: achievable, sides 10 and 10 (the maximum possible area).\n"
+        "- 104 and 110: NOT achievable - both exceed the maximum area of 100.\n"
+        "Correct answer: A, B, C, F, G (96, 75, 100, 51, 25). A common error is "
+        "to assume the sides must be whole numbers and reject 25; but the "
+        "dimensions can be any positive reals summing to 20, so 25 is valid."
+    )
+
+    def _apply(conn, raw_sql=False):
+        ex = (conn.execute if raw_sql else conn.execute_sql)
+        row = ex("SELECT provenance_json FROM question WHERE id=5395").fetchone()
+        if row is None:
+            return
+        try:
+            prov = _json.loads(row[0]) if row[0] else {}
+            if not isinstance(prov, dict):
+                prov = {}
+        except (ValueError, TypeError):
+            prov = {}
+        prov["explanation_fix"] = {
+            "by_migration": MIG_NAME, "issue": "#49",
+            "change": "rewrote broken explanation; key {A,B,C,F,G} unchanged "
+                      "and sympy-verified (areas in (0,100]).",
+        }
+        ex("UPDATE question SET explanation=?, provenance_json=? WHERE id=5395",
+           (NEW_EXPL, _json.dumps(prov)))
+
+    _apply(db)
+    if SEED_WRITES_ENABLED and SEED_DB_PATH.exists() and SEED_DB_PATH.stat().st_size > 1024:
+        seed = _sqlite3.connect(str(SEED_DB_PATH))
+        try:
+            _apply(seed, raw_sql=True)
+            seed.commit()
+        finally:
+            seed.close()
+
+
 MIGRATIONS = [
     ("001_numeric_answer_mode", _001_numeric_answer_mode),
     ("002_numeric_answer_default_tolerance", _002_numeric_answer_default_tolerance),
@@ -3306,6 +3373,8 @@ MIGRATIONS = [
      _045_retire_unanswerable_di_2026_06_21),
     ("046_repair_q3116_option_2026_06_21",
      _046_repair_q3116_option_2026_06_21),
+    ("047_fix_q5395_explanation_2026_06_21",
+     _047_fix_q5395_explanation_2026_06_21),
 ]
 
 

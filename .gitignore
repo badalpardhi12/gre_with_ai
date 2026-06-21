@@ -90,6 +90,7 @@ tests/test_figure_captions.py
 # Internal data-QC / forensic changelog — not a user-facing release
 # doc; lives locally next to the audits it references.
 CHANGES.md
+data/synthetic/
 data/audits/
 
 # Seed bootstrap helper — the shipped data/gre_mock.db already contains
@@ -140,3 +141,16 @@ tests/benchmarks/current_snapshot.json
 # Local Playwright MCP traces + OCR scratch — never commit
 .playwright-mcp/
 tmp_ocr/
+
+# Synthetic-generation driver scripts — local-only, like services/synthetic/.
+# The public repo ships the application + the pre-seeded DB, never the
+# pipelines that built it. (services/synthetic/ + tests/synthetic/ are
+# already ignored above; these are their CLI drivers.)
+scripts/run_synthetic_phase1.py
+scripts/render_synthetic_sample.py
+scripts/calibrate_synthetic_rubric.py
+scripts/generate_floodgate_batch.py
+scripts/synth_smoke.py
+scripts/build_golden_anchors.py
+scripts/run_synth_bulk.py
+scripts/promote_synthetic_to_seed.py

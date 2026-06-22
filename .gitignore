@@ -153,4 +153,5 @@ scripts/generate_floodgate_batch.py
 scripts/synth_smoke.py
 scripts/build_golden_anchors.py
 scripts/run_synth_bulk.py
+scripts/run_scarce_burst.py
 scripts/promote_synthetic_to_seed.py
